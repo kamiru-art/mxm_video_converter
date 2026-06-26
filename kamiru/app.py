@@ -20,6 +20,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
+from PIL import Image
+
 from . import __app_name__, __version__, config, core, fonts as fontmod
 from . import paper
 from .ffmpeg_utils import VideoInfo, extract_frames, find_ffmpeg, probe
@@ -29,6 +31,28 @@ VIDEO_TYPES = [
     ("Videos", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv *.flv *.mts *.m2ts"),
     ("Todos los archivos", "*.*"),
 ]
+
+
+def _preview_max_position(per_page, include_text, exclude_text, hard_cap=1500):
+    """Mayor posición de fotograma (1-based) necesaria para llenar la primera
+    hoja aplicando incluir/excluir. Acota cuántos fotogramas extraer en la
+    vista previa para que sea rápida.
+    """
+    inc = core.parse_ranges(include_text)
+    exc = core.parse_ranges(exclude_text)
+    inc_max = max(inc) if inc else None
+    selected = 0
+    pos = 0
+    while selected < per_page and pos < hard_cap:
+        pos += 1
+        if inc and pos not in inc:
+            if inc_max is not None and pos >= inc_max:
+                break
+            continue
+        if pos in exc:
+            continue
+        selected += 1
+    return max(1, min(hard_cap, pos))
 
 
 class App(tk.Tk):
@@ -76,6 +100,9 @@ class App(tk.Tk):
         v.var_fps = tk.DoubleVar(value=2.0)
         v.var_cols = tk.IntVar(value=4)
         v.var_rows = tk.IntVar(value=5)
+        # Selección de fotogramas (incluir / excluir por posición, p. ej. "1, 3-5")
+        v.var_include = tk.StringVar(value="")
+        v.var_exclude = tk.StringVar(value="")
         # Hoja
         v.var_paper = tk.StringVar(value="A4")
         v.var_orientation = tk.StringVar(value=core.ORIENTATIONS[0])
@@ -95,11 +122,14 @@ class App(tk.Tk):
         v.var_font_size = tk.DoubleVar(value=9.0)
         v.var_label_gap = tk.DoubleVar(value=1.5)
         v.var_label_color = tk.StringVar(value="#000000")
+        # Nombre automático a partir del nombre del video.
+        v.var_autoname = tk.BooleanVar(value=True)
         # Numeración de hoja
         v.var_pagenum_on = tk.BooleanVar(value=True)
         v.var_pagenum_corner = tk.StringVar(value=core.CORNERS[0])
         v.var_pagenum_prefix = tk.StringVar(value="")
         v.var_pagenum_start = tk.IntVar(value=1)
+        v.var_pagenum_zeros = tk.IntVar(value=1)
         v.var_pagenum_size = tk.DoubleVar(value=11.0)
         v.var_pagenum_color = tk.StringVar(value="#000000")
         # Salida
@@ -112,7 +142,8 @@ class App(tk.Tk):
 
         # Recalcular estimación cuando cambien los valores clave.
         for var in (v.var_fps, v.var_cols, v.var_rows, v.var_start, v.var_end,
-                    v.var_range_mode, v.var_extract_mode):
+                    v.var_range_mode, v.var_extract_mode, v.var_include,
+                    v.var_exclude):
             var.trace_add("write", lambda *_: self._update_estimate())
 
     def _build_ui(self):
@@ -150,6 +181,9 @@ class App(tk.Tk):
         self.cancel_btn = ttk.Button(btns, text="Cancelar", command=self._on_cancel,
                                      state="disabled")
         self.cancel_btn.pack(side="right", padx=(0, PAD))
+        self.preview_btn = ttk.Button(btns, text="👁  Vista previa",
+                                      command=self._on_preview)
+        self.preview_btn.pack(side="right", padx=(0, PAD))
         ttk.Button(btns, text="Ayuda", command=self._show_help).pack(side="left")
 
     def _section(self, parent, title):
@@ -209,14 +243,32 @@ class App(tk.Tk):
         self._sync_extract()
 
         sec = self._section(tab, "Imágenes por hoja (cuadrícula)")
-        ttk.Label(sec, text="Columnas:").grid(row=0, column=0, sticky="w")
-        ttk.Spinbox(sec, from_=1, to=50, width=6, textvariable=self.var_cols).grid(
+        # Columnas y filas van juntas en un sub-marco para que NO se separen
+        # cuando la ventana se maximiza (la columna 1 de la sección se estira).
+        grid_box = ttk.Frame(sec)
+        grid_box.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(grid_box, text="Columnas:").grid(row=0, column=0, sticky="w")
+        ttk.Spinbox(grid_box, from_=1, to=50, width=6, textvariable=self.var_cols).grid(
             row=0, column=1, sticky="w", padx=(4, PAD * 2))
-        ttk.Label(sec, text="Filas:").grid(row=0, column=2, sticky="w")
-        ttk.Spinbox(sec, from_=1, to=50, width=6, textvariable=self.var_rows).grid(
+        ttk.Label(grid_box, text="Filas:").grid(row=0, column=2, sticky="w")
+        ttk.Spinbox(grid_box, from_=1, to=50, width=6, textvariable=self.var_rows).grid(
             row=0, column=3, sticky="w", padx=4)
         self.perpage_lbl = ttk.Label(sec, text="", style="Sub.TLabel")
-        self.perpage_lbl.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.perpage_lbl.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        sec = self._section(tab, "Elegir qué fotogramas salen (opcional)")
+        gb = ttk.Frame(sec)
+        gb.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(gb, text="Incluir solo:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(gb, textvariable=self.var_include, width=22).grid(
+            row=0, column=1, sticky="w", padx=4)
+        ttk.Label(gb, text="Excluir:").grid(row=0, column=2, sticky="w", padx=(PAD, 0))
+        ttk.Entry(gb, textvariable=self.var_exclude, width=22).grid(
+            row=0, column=3, sticky="w", padx=4)
+        ttk.Label(sec, text='Por posición, p. ej. "1, 3-5" (vacío = todos). '
+                            'Excluir tiene prioridad.',
+                  style="Sub.TLabel").grid(row=1, column=0, columnspan=2,
+                                           sticky="w", pady=(6, 0))
 
         sec = self._section(tab, "Espaciado entre frames")
         ttk.Label(sec, text="Separación entre imágenes (mm):").grid(row=0, column=0, sticky="w")
@@ -287,6 +339,10 @@ class App(tk.Tk):
             var.trace_add("write", lambda *_: self._update_name_preview())
         self.name_preview = ttk.Label(sec, text="", style="Info.TLabel")
         self.name_preview.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(
+            sec, text="Usar el nombre del video automáticamente (nombre base y archivos)",
+            variable=self.var_autoname, command=self._apply_autoname).grid(
+            row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         sec = self._section(tab, "Tipografía de los nombres")
         ttk.Label(sec, text="Fuente:").grid(row=0, column=0, sticky="w")
@@ -321,6 +377,11 @@ class App(tk.Tk):
         ttk.Label(sec, text="Empezar en:").grid(row=3, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(sec, from_=0, to=999999, width=8,
                     textvariable=self.var_pagenum_start).grid(row=3, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Dígitos (ceros a la izq.):").grid(
+            row=3, column=2, sticky="w", padx=(PAD, 0), pady=(6, 0))
+        ttk.Spinbox(sec, from_=1, to=8, width=6,
+                    textvariable=self.var_pagenum_zeros).grid(
+            row=3, column=3, sticky="w", padx=4, pady=(6, 0))
         ttk.Label(sec, text="Tamaño de fuente (pt):").grid(row=4, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(sec, from_=4, to=72, increment=0.5, width=8,
                     textvariable=self.var_pagenum_size).grid(row=4, column=1, sticky="w", padx=4, pady=(6, 0))
@@ -411,11 +472,25 @@ class App(tk.Tk):
         if not path:
             return
         self.var_video.set(path)
-        if not self.var_out_name.get() or self.var_out_name.get() == "contact_sheet":
-            self.var_out_name.set(Path(path).stem)
+        stem = Path(path).stem
+        if self.var_autoname.get():
+            # Nombre base y nombre de archivo = nombre del video (+ sufijos).
+            self.var_out_name.set(stem)
+            self.var_base.set(stem)
+        elif not self.var_out_name.get() or self.var_out_name.get() == "contact_sheet":
+            self.var_out_name.set(stem)
         if not self.var_out_dir.get():
             self.var_out_dir.set(str(Path(path).parent / "contact_sheets"))
         self._probe_async(path)
+        self._update_name_preview()
+
+    def _apply_autoname(self):
+        """Si el nombre automático está activo y hay video, rellena los nombres."""
+        if self.var_autoname.get() and self.var_video.get():
+            stem = Path(self.var_video.get()).stem
+            self.var_out_name.set(stem)
+            self.var_base.set(stem)
+            self._update_name_preview()
 
     def _probe_async(self, path):
         self.video_info_lbl.configure(text="Leyendo el video…")
@@ -519,9 +594,18 @@ class App(tk.Tk):
             if end is not None and self.video_info.fps:
                 frames = max(1, int(round((end - start) * self.video_info.fps)))
         if frames:
+            sel_txt = ""
+            inc = core.parse_ranges(self.var_include.get(), frames)
+            exc = core.parse_ranges(self.var_exclude.get(), frames)
+            if inc or exc:
+                kept = sum(1 for i in range(1, frames + 1)
+                           if (not inc or i in inc) and i not in exc)
+                sel_txt = f" (de {frames} extraídos)"
+                frames = max(0, kept)
             pages = core.estimate_pages(frames, per_page)
             self.estimate_lbl.configure(
-                text=f"≈ {frames} fotogramas  →  {pages} hoja(s)  ({per_page} por hoja)")
+                text=f"≈ {frames} fotogramas{sel_txt}  →  {pages} hoja(s)  "
+                     f"({per_page} por hoja)")
         else:
             self.estimate_lbl.configure(
                 text=f"{per_page} imágenes por hoja  ·  carga un video para estimar el total")
@@ -547,6 +631,7 @@ class App(tk.Tk):
             page_num_corner=self.var_pagenum_corner.get(),
             page_num_prefix=self.var_pagenum_prefix.get(),
             page_num_start=self._int(self.var_pagenum_start, 1),
+            page_num_zeros=self._int(self.var_pagenum_zeros, 1),
             page_num_size_pt=self._float(self.var_pagenum_size, 11),
             page_num_color=self.var_pagenum_color.get(),
             out_dir=self.var_out_dir.get(), out_name=self.var_out_name.get() or "contact_sheet",
@@ -573,19 +658,19 @@ class App(tk.Tk):
             return
         start, end = self._selected_range()
         fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
+        inc, exc = self.var_include.get(), self.var_exclude.get()
 
         self._cancel = False
-        self.run_btn.configure(state="disabled")
-        self.cancel_btn.configure(state="normal")
+        self._set_busy(True)
         self.progress.configure(value=0, maximum=100)
         self._set_status("Preparando…")
 
         self.worker = threading.Thread(
-            target=self._work, args=(s, start, end, fps), daemon=True)
+            target=self._work, args=(s, start, end, fps, inc, exc), daemon=True)
         self.worker.start()
         self.after(100, self._poll_queue)
 
-    def _work(self, settings, start, end, fps):
+    def _work(self, settings, start, end, fps, inc, exc):
         tmp = None
         try:
             ff = find_ffmpeg()
@@ -601,15 +686,80 @@ class App(tk.Tk):
                 start=start, end=end, fps=fps,
                 progress_cb=ext_progress, cancel_check=lambda: self._cancel,
             )
-            self.queue.put(("status", f"{len(frames)} fotogramas extraídos. Componiendo hojas…"))
+            sel = core.select_frames(frames, inc, exc)
+            if not sel:
+                raise ValueError(
+                    "La selección de «Incluir/Excluir» (pestaña 2) no deja "
+                    "ningún fotograma. Revisa esos campos.")
+            if len(sel) != len(frames):
+                self.queue.put(("status",
+                                f"{len(sel)} de {len(frames)} fotogramas seleccionados. "
+                                "Componiendo hojas…"))
+            else:
+                self.queue.put(("status",
+                                f"{len(sel)} fotogramas. Componiendo hojas…"))
 
             def comp_progress(done, total):
                 self.queue.put(("compose", done, total))
 
             result = core.generate(
-                settings, frames, progress_cb=comp_progress,
+                settings, sel, progress_cb=comp_progress,
                 cancel_check=lambda: self._cancel)
             self.queue.put(("done", result))
+        except Exception as e:
+            if self._cancel:
+                self.queue.put(("cancelled", None))
+            else:
+                self.queue.put(("error", str(e)))
+        finally:
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    # ----------------------------------------------------------- vista previa
+    def _on_preview(self):
+        if not self.var_video.get() or not Path(self.var_video.get()).exists():
+            messagebox.showwarning("Falta algo", "Elige primero un archivo de video válido.")
+            return
+        if self.var_extract_mode.get() == "fps" and self._float(self.var_fps, 0) <= 0:
+            messagebox.showwarning("Falta algo", "El valor de fps debe ser mayor que 0.")
+            return
+        s = self._collect_settings()
+        start, end = self._selected_range()
+        fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
+        inc, exc = self.var_include.get(), self.var_exclude.get()
+
+        self._cancel = False
+        self._set_busy(True)
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(12)
+        self._set_status("Preparando vista previa…")
+
+        self.worker = threading.Thread(
+            target=self._work_preview, args=(s, start, end, fps, inc, exc), daemon=True)
+        self.worker.start()
+        self.after(100, self._poll_queue)
+
+    def _work_preview(self, settings, start, end, fps, inc, exc):
+        tmp = None
+        try:
+            ff = find_ffmpeg()
+            tmp = tempfile.mkdtemp(prefix="kamiru_pv_")
+            # Solo necesitamos los fotogramas que caen en la primera hoja.
+            per_page = settings.per_page
+            max_pos = _preview_max_position(per_page, inc, exc)
+            frames = extract_frames(
+                ff, self.var_video.get(), tmp,
+                start=start, end=end, fps=fps, max_frames=max_pos,
+                cancel_check=lambda: self._cancel,
+            )
+            sel = core.select_frames(frames, inc, exc)
+            if not sel:
+                raise ValueError(
+                    "La selección de «Incluir/Excluir» no deja ningún fotograma "
+                    "para previsualizar.")
+            img, num_pages = core.render_preview(settings, sel, 0)
+            # La imagen ya está en memoria; podemos borrar los temporales.
+            self.queue.put(("preview", (img, num_pages, len(sel))))
         except Exception as e:
             if self._cancel:
                 self.queue.put(("cancelled", None))
@@ -660,6 +810,11 @@ class App(tk.Tk):
             self.progress.stop()
             self.progress.configure(maximum=max(1, total), value=done)
             self._set_status(f"Componiendo hojas…  {done}/{total}")
+        elif kind == "preview":
+            img, num_pages, nsel = msg[1]
+            self._reset_run()
+            self._set_status(f"Vista previa lista (hoja 1 de {num_pages}).")
+            self._show_preview_window(img, num_pages, nsel)
         elif kind == "done":
             self._finish_ok(msg[1])
         elif kind == "cancelled":
@@ -692,10 +847,48 @@ class App(tk.Tk):
                 "¿Abrir la carpeta de salida?"):
             self._open_folder(self.var_out_dir.get())
 
+    def _set_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        self.run_btn.configure(state=state)
+        self.preview_btn.configure(state=state)
+        self.cancel_btn.configure(state="normal" if busy else "disabled")
+
     def _reset_run(self):
-        self.run_btn.configure(state="normal")
-        self.cancel_btn.configure(state="disabled")
+        self._set_busy(False)
+        try:
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
+        except tk.TclError:
+            pass
         self.worker = None
+
+    def _show_preview_window(self, img, num_pages, nsel):
+        try:
+            from PIL import ImageTk
+        except Exception:
+            # Sin ImageTk: guardamos la vista previa como PNG y la abrimos.
+            p = Path(tempfile.mkdtemp(prefix="kamiru_pv_")) / "vista_previa.png"
+            img.save(p)
+            messagebox.showinfo("Vista previa",
+                                f"Se guardó la vista previa en:\n{p}")
+            self._open_folder(str(p.parent))
+            return
+        win = tk.Toplevel(self)
+        win.title("Vista previa — hoja 1")
+        win.transient(self)
+        max_w, max_h = 1000, 720
+        w, h = img.size
+        scale = min(max_w / w, max_h / h, 1.0)
+        disp = (img.resize((max(1, int(w * scale)), max(1, int(h * scale))),
+                           Image.LANCZOS) if scale < 1 else img)
+        photo = ImageTk.PhotoImage(disp)
+        lbl = ttk.Label(win, image=photo)
+        lbl.image = photo  # mantener referencia para que no la borre el GC
+        lbl.pack(padx=10, pady=10)
+        note = (f"Hoja 1 de {num_pages}  ·  {nsel} fotograma(s) en la selección  ·  "
+                "vista a baja resolución (las hojas finales serán nítidas)")
+        ttk.Label(win, text=note, style="Sub.TLabel").pack(pady=(0, 6))
+        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=(0, 10))
 
     def _set_status(self, text):
         self.status_lbl.configure(text=text)
@@ -720,14 +913,16 @@ class App(tk.Tk):
         messagebox.showinfo(
             "Cómo usar Kamiru",
             "1) Pestaña 1: elige el video y el rango (todo o inicio/fin en segundos).\n"
-            "2) Pestaña 2: cuántos fotogramas extraer (fps o todos) y la cuadrícula "
-            "(columnas × filas = imágenes por hoja).\n"
+            "2) Pestaña 2: cuántos fotogramas extraer (fps o todos), la cuadrícula "
+            "(columnas × filas = imágenes por hoja) y, si quieres, qué fotogramas "
+            "incluir o excluir (p. ej. «1, 3-5»).\n"
             "3) Pestaña 3: tamaño de hoja (A4 u otros), orientación "
             "(vertical, horizontal o mejor ajuste automático), DPI y márgenes.\n"
             "4) Pestaña 4: nombre base, separador y ceros para los nombres "
             "(abc_001, abc_002, …) y la fuente/tamaño.\n"
             "5) Pestaña 5: numerador de hoja en la esquina.\n"
             "6) Pestaña 6: carpeta, nombre de archivo y formatos (PNG/PDF/TIFF).\n\n"
+            "Usa «👁 Vista previa» para ver la primera hoja antes de generar todo.\n"
             "Pulsa «Generar contact sheets». Las imágenes se extraen en PNG sin "
             "pérdida y sin alterar el color.")
 

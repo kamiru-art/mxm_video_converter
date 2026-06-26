@@ -8,6 +8,7 @@ No se aplica ninguna corrección de color: las imágenes se pegan tal cual.
 
 from __future__ import annotations
 
+import copy
 import math
 import shutil
 from pathlib import Path
@@ -76,6 +77,7 @@ class Settings:
         self.page_num_corner = kw.get("page_num_corner", "Inferior derecha")
         self.page_num_prefix = kw.get("page_num_prefix", "")
         self.page_num_start = int(kw.get("page_num_start", 1))
+        self.page_num_zeros = int(kw.get("page_num_zeros", 1))  # ceros a la izq.
         self.page_num_size_pt = float(kw.get("page_num_size_pt", 11.0))
         self.page_num_color = kw.get("page_num_color", "#000000")
 
@@ -101,6 +103,14 @@ class Settings:
         if self.base_name:
             return f"{self.base_name}{self.separator}{num_str}"
         return num_str
+
+    def page_label_for(self, page_idx: int) -> str:
+        """Número de hoja (con prefijo y ceros a la izquierda) para page_idx 0-based."""
+        num = self.page_num_start + page_idx
+        num_str = str(num)
+        if self.page_num_zeros > 1:
+            num_str = num_str.zfill(self.page_num_zeros)
+        return f"{self.page_num_prefix}{num_str}"
 
 
 def _load_font(path, size_px: int):
@@ -142,6 +152,61 @@ def estimate_pages(num_frames: int, per_page: int) -> int:
     if num_frames <= 0:
         return 0
     return math.ceil(num_frames / max(1, per_page))
+
+
+def parse_ranges(text, max_n=None):
+    """Convierte un texto tipo '1, 3-5, 8' en un conjunto de enteros 1-based.
+
+    Acepta comas o punto y coma como separadores y rangos con guion ('3-5').
+    Los tokens inválidos se ignoran. Si max_n se indica, se descartan los
+    números fuera de [1, max_n].
+    """
+    result = set()
+    if not text:
+        return result
+    for tok in str(text).replace(";", ",").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" in tok.lstrip("-"):  # rango (evita confundir un negativo suelto)
+            a_str, _, b_str = tok.partition("-")
+            try:
+                a, b = int(a_str.strip()), int(b_str.strip())
+            except ValueError:
+                continue
+            if a > b:
+                a, b = b, a
+            for n in range(a, b + 1):
+                if n >= 1 and (max_n is None or n <= max_n):
+                    result.add(n)
+        else:
+            try:
+                n = int(tok)
+            except ValueError:
+                continue
+            if n >= 1 and (max_n is None or n <= max_n):
+                result.add(n)
+    return result
+
+
+def select_frames(frame_paths, include_text="", exclude_text=""):
+    """Filtra los fotogramas por su posición 1-based.
+
+    - include_text vacío  -> se toman todos (salvo los excluidos).
+    - include_text con datos -> solo se conservan esas posiciones.
+    - exclude_text -> esas posiciones se quitan (tiene prioridad sobre include).
+    """
+    n = len(frame_paths)
+    inc = parse_ranges(include_text, n)
+    exc = parse_ranges(exclude_text, n)
+    out = []
+    for i, fp in enumerate(frame_paths, start=1):
+        if inc and i not in inc:
+            continue
+        if i in exc:
+            continue
+        out.append(fp)
+    return out
 
 
 def _frame_fit_area(s, landscape, src_w, src_h, label_h, label_gap) -> float:
@@ -201,15 +266,18 @@ def resolve_landscape(s, frame_paths, label_h=0, label_gap=0) -> bool:
     return area_landscape > area_portrait
 
 
-def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=None):
-    """Construye y guarda los contact sheets.
+class _Layout:
+    """Geometría calculada de una hoja (tamaño, celdas, fuentes…)."""
+    __slots__ = (
+        "dpi", "margin", "gutter", "label_gap", "label_font", "label_h",
+        "page_font", "landscape", "page_w", "page_h", "cell_w", "cell_h",
+        "label_area", "img_area_h",
+    )
 
-    Devuelve un dict con las rutas generadas: {'pages': [...], 'pdf': str|None,
-    'frames_dir': str|None}.
-    """
-    s = settings
+
+def _build_layout(s: Settings) -> _Layout:
+    """Calcula tamaño de hoja, celdas y fuentes a partir de los ajustes."""
     dpi = s.dpi
-
     margin = paper.mm_to_px(s.margin_mm, dpi)
     gutter = paper.mm_to_px(s.gutter_mm, dpi)
     label_gap = paper.mm_to_px(s.label_gap_mm, dpi) if s.labels_on else 0
@@ -220,7 +288,6 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
     if s.labels_on:
         fpx = paper.pt_to_px(s.font_size_pt, dpi)
         label_font = _load_font(s.font_path, fpx)
-        # altura nominal de una línea de texto
         tmp = Image.new("RGB", (10, 10))
         _, label_h = _text_size(ImageDraw.Draw(tmp), "Ay1", label_font)
     page_font = None
@@ -228,15 +295,13 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
         ppx = paper.pt_to_px(s.page_num_size_pt, dpi)
         page_font = _load_font(s.font_path, ppx)
 
-    # Orientación de la hoja: vertical, horizontal o "mejor ajuste" (la que
-    # hace los fotogramas más grandes). Los nombres y el numerador de hoja se
-    # colocan respecto a la hoja final, así que se acomodan solos.
+    # Orientación: vertical, horizontal o "mejor ajuste".
+    frame_paths = getattr(s, "_frame_paths", None) or []
     landscape = resolve_landscape(s, frame_paths, label_h, label_gap)
     page_w, page_h = paper.page_size_px(
         s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm
     )
 
-    # Geometría de la cuadrícula
     content_w = page_w - 2 * margin
     content_h = page_h - 2 * margin
     if content_w <= 0 or content_h <= 0:
@@ -252,18 +317,122 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
             "los márgenes, el espaciado o sube el tamaño de hoja/DPI."
         )
 
+    L = _Layout()
+    L.dpi, L.margin, L.gutter, L.label_gap = dpi, margin, gutter, label_gap
+    L.label_font, L.label_h, L.page_font = label_font, label_h, page_font
+    L.landscape, L.page_w, L.page_h = landscape, page_w, page_h
+    L.cell_w, L.cell_h = cell_w, cell_h
+    L.label_area, L.img_area_h = label_area, img_area_h
+    return L
+
+
+def _render_page(s: Settings, L: _Layout, chunk, page_idx: int) -> "Image.Image":
+    """Dibuja una sola hoja y devuelve la imagen (no la guarda en disco)."""
+    canvas = Image.new("RGB", (L.page_w, L.page_h), s.bg_color)
+    draw = ImageDraw.Draw(canvas)
+    start = page_idx * s.per_page
+
+    for cell_idx, fpath in enumerate(chunk):
+        global_idx = start + cell_idx
+        row = cell_idx // s.cols
+        col = cell_idx % s.cols
+        cell_x = L.margin + col * (L.cell_w + L.gutter)
+        cell_y = L.margin + row * (L.cell_h + L.gutter)
+
+        try:
+            with Image.open(fpath) as im:
+                im = im.convert("RGB") if im.mode not in ("RGB", "L") else im
+                src_w, src_h = im.size
+                scale = min(L.cell_w / src_w, L.img_area_h / src_h)
+                new_w = max(1, int(round(src_w * scale)))
+                new_h = max(1, int(round(src_h * scale)))
+                resized = im.resize((new_w, new_h), _RESAMPLE)
+        except Exception:
+            continue
+
+        # Bloque imagen+etiqueta centrado en la celda; etiqueta pegada bajo la
+        # imagen para que se vea ordenado aunque el frame no llene la celda.
+        block_h = new_h + (L.label_area if s.labels_on else 0)
+        block_top = cell_y + (L.cell_h - block_h) / 2
+        px = int(round(cell_x + (L.cell_w - new_w) / 2))
+        py = int(round(block_top))
+        canvas.paste(resized, (px, py))
+
+        if s.labels_on and L.label_font is not None:
+            text = s.label_for(global_idx)
+            tw, th = _text_size(draw, text, L.label_font)
+            tx = int(round(cell_x + (L.cell_w - tw) / 2))
+            ty = int(round(py + new_h + L.label_gap))
+            draw.text((tx, ty), text, fill=s.label_color, font=L.label_font)
+
+    # Numerador de hoja en la esquina (con prefijo y ceros a la izquierda).
+    if s.page_num_on and L.page_font is not None:
+        pno = s.page_label_for(page_idx)
+        tw, th = _text_size(draw, pno, L.page_font)
+        pad = max(L.margin // 3, paper.mm_to_px(3, L.dpi))
+        corner = s.page_num_corner
+        if corner == "Inferior derecha":
+            pos = (L.page_w - pad - tw, L.page_h - pad - th)
+        elif corner == "Inferior izquierda":
+            pos = (pad, L.page_h - pad - th)
+        elif corner == "Superior derecha":
+            pos = (L.page_w - pad - tw, pad)
+        else:  # Superior izquierda
+            pos = (pad, pad)
+        draw.text(pos, pno, fill=s.page_num_color, font=L.page_font)
+
+    return canvas
+
+
+def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
+                   max_dpi: int = 150):
+    """Genera (en memoria) UNA hoja de muestra para previsualizar.
+
+    Usa un DPI reducido (proporcional, así que es representativo) para que sea
+    rápido. Devuelve (imagen_PIL, num_paginas_totales).
+    """
+    s = copy.copy(settings)
+    s.dpi = min(int(settings.dpi), int(max_dpi))
+    s._frame_paths = frame_paths  # para que resolve_landscape use estos frames
+    L = _build_layout(s)
+    per_page = s.per_page
+    num_pages = estimate_pages(len(frame_paths), per_page)
+    page_idx = max(0, min(page_idx, max(0, num_pages - 1)))
+    chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
+    return _render_page(s, L, chunk, page_idx), num_pages
+
+
+def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=None):
+    """Construye y guarda los contact sheets.
+
+    Devuelve un dict con las rutas generadas: {'pages': [...], 'pdf': str|None,
+    'frames_dir': str|None, ...}.
+    """
+    s = settings
+    s._frame_paths = frame_paths  # para resolve_landscape ("mejor ajuste")
+    L = _build_layout(s)
+    dpi = L.dpi
+
     out_dir = Path(s.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Exportar fotogramas individuales a máxima calidad (opcional)
+    # Exportar fotogramas individuales a máxima calidad (opcional).
     frames_dir = None
     if s.export_frames:
         frames_dir = out_dir / f"{s.out_name}_frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
+        for gidx, fpath in enumerate(frame_paths):
+            label_name = s.label_for(gidx) if s.labels_on else f"{gidx + 1}"
+            try:
+                shutil.copyfile(fpath, frames_dir / f"{label_name}.png")
+            except Exception:
+                pass
 
     per_page = s.per_page
-    total = len(frame_paths)
-    num_pages = estimate_pages(total, per_page)
+    num_pages = estimate_pages(len(frame_paths), per_page)
+    # Ceros en el nombre de archivo: respeta page_num_zeros pero garantiza que
+    # las hojas se ordenen bien aunque haya muchas.
+    file_digits = max(s.page_num_zeros, len(str(max(1, num_pages))))
     page_paths = []
     page_images_for_pdf = []
 
@@ -271,74 +440,10 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
         if cancel_check and cancel_check():
             raise _Cancelled()
 
-        canvas = Image.new("RGB", (page_w, page_h), s.bg_color)
-        draw = ImageDraw.Draw(canvas)
+        chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
+        canvas = _render_page(s, L, chunk, page_idx)
 
-        start = page_idx * per_page
-        chunk = frame_paths[start:start + per_page]
-
-        for cell_idx, fpath in enumerate(chunk):
-            global_idx = start + cell_idx
-            row = cell_idx // s.cols
-            col = cell_idx % s.cols
-            cell_x = margin + col * (cell_w + gutter)
-            cell_y = margin + row * (cell_h + gutter)
-
-            try:
-                with Image.open(fpath) as im:
-                    im = im.convert("RGB") if im.mode not in ("RGB", "L") else im
-                    src_w, src_h = im.size
-                    scale = min(cell_w / src_w, img_area_h / src_h)
-                    new_w = max(1, int(round(src_w * scale)))
-                    new_h = max(1, int(round(src_h * scale)))
-                    resized = im.resize((new_w, new_h), _RESAMPLE)
-            except Exception:
-                continue
-
-            # El bloque imagen+etiqueta se centra verticalmente dentro de la
-            # celda, y la etiqueta queda pegada justo debajo de la imagen (no al
-            # fondo de la celda), para que se vea ordenado aunque el frame no
-            # llene todo el alto disponible.
-            block_h = new_h + (label_area if s.labels_on else 0)
-            block_top = cell_y + (cell_h - block_h) / 2
-            px = int(round(cell_x + (cell_w - new_w) / 2))
-            py = int(round(block_top))
-            canvas.paste(resized, (px, py))
-
-            # Exportar el frame individual con su nombre (máxima calidad).
-            if frames_dir is not None:
-                label_name = s.label_for(global_idx) if s.labels_on else f"{global_idx + 1}"
-                try:
-                    shutil.copyfile(fpath, frames_dir / f"{label_name}.png")
-                except Exception:
-                    pass
-
-            # Etiqueta de nombre justo debajo del frame.
-            if s.labels_on and label_font is not None:
-                text = s.label_for(global_idx)
-                tw, th = _text_size(draw, text, label_font)
-                tx = int(round(cell_x + (cell_w - tw) / 2))
-                ty = int(round(py + new_h + label_gap))
-                draw.text((tx, ty), text, fill=s.label_color, font=label_font)
-
-        # Numerador de hoja en la esquina.
-        if s.page_num_on and page_font is not None:
-            pno = f"{s.page_num_prefix}{s.page_num_start + page_idx}"
-            tw, th = _text_size(draw, pno, page_font)
-            pad = max(margin // 3, paper.mm_to_px(3, dpi))
-            corner = s.page_num_corner
-            if corner == "Inferior derecha":
-                pos = (page_w - pad - tw, page_h - pad - th)
-            elif corner == "Inferior izquierda":
-                pos = (pad, page_h - pad - th)
-            elif corner == "Superior derecha":
-                pos = (page_w - pad - tw, pad)
-            else:  # Superior izquierda
-                pos = (pad, pad)
-            draw.text(pos, pno, fill=s.page_num_color, font=page_font)
-
-        # Guardar página.
-        page_base = f"{s.out_name}_p{page_idx + 1:03d}"
+        page_base = f"{s.out_name}_p{str(page_idx + 1).zfill(file_digits)}"
         if s.fmt_png:
             ppath = out_dir / f"{page_base}.png"
             canvas.save(ppath, "PNG", dpi=(dpi, dpi), compress_level=6)
@@ -348,7 +453,7 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
             canvas.save(tpath, "TIFF", dpi=(dpi, dpi), compression="tiff_lzw")
             page_paths.append(str(tpath))
         if s.fmt_pdf:
-            page_images_for_pdf.append(canvas.copy())
+            page_images_for_pdf.append(canvas)
 
         if progress_cb:
             progress_cb(page_idx + 1, num_pages)
@@ -368,8 +473,8 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
         "pdf": pdf_path,
         "frames_dir": str(frames_dir) if frames_dir else None,
         "num_pages": num_pages,
-        "landscape": landscape,
-        "orientation": "Horizontal" if landscape else "Vertical",
+        "landscape": L.landscape,
+        "orientation": "Horizontal" if L.landscape else "Vertical",
     }
 
 

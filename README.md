@@ -16,6 +16,10 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
   (p. ej. `0.5` = 1 fotograma cada 2 segundos), o **extraer TODOS los fotogramas**
   (ideal para *mixed media*).
 - Elegir **cuántas imágenes por hoja** (columnas × filas).
+- **Vista previa** 👁 de la primera hoja antes de generar todo, para ver cómo
+  quedará (respeta orientación, nombres, selección de fotogramas, etc.).
+- **Elegir qué fotogramas salen**: un campo para **incluir solo** ciertas
+  posiciones y otro para **excluir**, con sintaxis de rangos (p. ej. `1, 3-5`).
 - **Espaciado entre frames** dentro de la hoja, ajustable en milímetros.
 - Tamaño de hoja **A4** por defecto, y también **A3, A5, A6, B4, B5, Carta,
   Oficio, Tabloide** o uno **personalizado** (ancho × alto en mm).
@@ -29,8 +33,11 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
   - el **separador** entre el nombre y el número (`_`, `-`, espacio, lo que sea),
   - la cantidad de **ceros a la izquierda** (para tener `1` o `001`),
   - desde qué **número empezar**.
+  - Por defecto el **nombre base es el del video** (+ sufijos); puedes
+    desactivarlo para escribir el tuyo.
 - **Numerador de hoja** opcional en cualquier **esquina**, para organizarte
-  fácil (con texto antes del número, p. ej. `Hoja 1`).
+  fácil (con texto antes del número, p. ej. `Hoja 1`), y con **ceros a la
+  izquierda** configurables (`Hoja 001`) para que las hojas se ordenen bien.
 - Elegir la **fuente**, el **tamaño de fuente** y el **margen entre el frame y
   su nombre** para las etiquetas.
 - Guarda en **PNG** (sin pérdida), **PDF** combinado (perfecto para imprimir) y/o
@@ -76,16 +83,20 @@ La ventana tiene pestañas numeradas:
 
 1. **Video y rango** — elige el archivo de video y si quieres *todo el video* o un
    *inicio/fin en segundos*.
-2. **Extracción y cuadrícula** — cuántos fotogramas extraer (fps o todos) y la
-   cuadrícula (columnas × filas = imágenes por hoja) y el espaciado entre frames.
+2. **Extracción y cuadrícula** — cuántos fotogramas extraer (fps o todos), la
+   cuadrícula (columnas × filas = imágenes por hoja), **qué fotogramas incluir o
+   excluir** (p. ej. `1, 3-5`) y el espaciado entre frames.
 3. **Hoja** — tamaño (A4 u otro), **orientación** (vertical, horizontal o mejor
    ajuste automático), DPI (300 = calidad de impresión), margen y color de fondo.
-4. **Nombres de frames** — nombre base, separador, ceros a la izquierda, número
-   inicial, fuente, tamaño y margen entre el frame y su nombre.
-5. **Numerador de hoja** — muestra el número de hoja en la esquina que elijas.
+4. **Nombres de frames** — nombre base (por defecto el del video), separador,
+   ceros a la izquierda, número inicial, fuente, tamaño y margen entre el frame y
+   su nombre.
+5. **Numerador de hoja** — número de hoja en la esquina que elijas, con ceros a
+   la izquierda configurables.
 6. **Salida** — carpeta, nombre de archivo y formatos (PNG / PDF / TIFF).
 
-Luego pulsa **«Generar contact sheets»**. Abajo verás una estimación de cuántos
+Usa **«👁 Vista previa»** para ver la primera hoja antes de generar todo. Luego
+pulsa **«Generar contact sheets»**. Abajo verás una estimación de cuántos
 fotogramas y hojas saldrán, y una barra de progreso.
 
 ---
