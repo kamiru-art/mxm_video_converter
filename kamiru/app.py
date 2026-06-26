@@ -495,6 +495,11 @@ class App(tk.Tk):
         return 0.0, (self.video_info.duration or None)
 
     def _update_estimate(self, *_):
+        # Puede invocarse mientras se construyen las pestañas (p. ej. desde
+        # _sync_range), antes de que existan las etiquetas de la barra inferior.
+        # En ese caso no hay nada que actualizar todavía.
+        if not hasattr(self, "estimate_lbl"):
+            return
         per_page = max(1, self._int(self.var_cols, 1) * self._int(self.var_rows, 1))
         if hasattr(self, "perpage_lbl"):
             self.perpage_lbl.configure(text=f"= {per_page} imágenes por hoja")
