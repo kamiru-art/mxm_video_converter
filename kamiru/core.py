@@ -101,8 +101,16 @@ def _load_font(path, size_px: int):
             return ImageFont.truetype(p, size_px)
         except Exception:
             pass
+    # Fallback: fuente por defecto de Pillow. En versiones recientes (>=10.1)
+    # admite un tamaño, así que la respetamos para que el texto sea legible a
+    # alta resolución; en versiones antiguas se usa el bitmap pequeño.
     try:
-        return ImageFont.load_default()
+        return ImageFont.load_default(size=size_px)
+    except TypeError:
+        try:
+            return ImageFont.load_default()
+        except Exception:
+            return None
     except Exception:
         return None
 
@@ -213,9 +221,14 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
             except Exception:
                 continue
 
-            # Centrado horizontal; la imagen se ancla arriba de la celda.
+            # El bloque imagen+etiqueta se centra verticalmente dentro de la
+            # celda, y la etiqueta queda pegada justo debajo de la imagen (no al
+            # fondo de la celda), para que se vea ordenado aunque el frame no
+            # llene todo el alto disponible.
+            block_h = new_h + (label_area if s.labels_on else 0)
+            block_top = cell_y + (cell_h - block_h) / 2
             px = int(round(cell_x + (cell_w - new_w) / 2))
-            py = int(round(cell_y + (img_area_h - new_h) / 2))
+            py = int(round(block_top))
             canvas.paste(resized, (px, py))
 
             # Exportar el frame individual con su nombre (máxima calidad).
@@ -226,12 +239,12 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
                 except Exception:
                     pass
 
-            # Etiqueta de nombre debajo del frame.
+            # Etiqueta de nombre justo debajo del frame.
             if s.labels_on and label_font is not None:
                 text = s.label_for(global_idx)
                 tw, th = _text_size(draw, text, label_font)
                 tx = int(round(cell_x + (cell_w - tw) / 2))
-                ty = int(round(cell_y + img_area_h + label_gap))
+                ty = int(round(py + new_h + label_gap))
                 draw.text((tx, ty), text, fill=s.label_color, font=label_font)
 
         # Numerador de hoja en la esquina.
