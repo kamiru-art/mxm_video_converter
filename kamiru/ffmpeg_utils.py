@@ -118,6 +118,7 @@ def extract_frames(
     fps=None,
     progress_cb=None,
     cancel_check=None,
+    max_frames=None,
 ):
     """Extrae fotogramas a PNG (sin pérdida) en out_dir.
 
@@ -127,6 +128,8 @@ def extract_frames(
                    fotogramas del rango (un PNG por cada cuadro del video).
       progress_cb: callback(frames_procesados, total_estimado) para la barra.
       cancel_check: callable que devuelve True si se debe abortar.
+      max_frames : si se indica, detiene la extracción tras ese número de
+                   fotogramas (útil para una vista previa rápida).
 
     Devuelve la lista ordenada de rutas PNG generadas.
     """
@@ -169,6 +172,7 @@ def extract_frames(
         **_no_window_kwargs(),
     )
 
+    reached_max = False
     try:
         for line in proc.stdout:
             if cancel_check and cancel_check():
@@ -177,14 +181,22 @@ def extract_frames(
             line = line.strip()
             if line.startswith("frame="):
                 m = _FRAME_RE.search(line)
-                if m and progress_cb:
-                    progress_cb(int(m.group(1)), total_est)
+                if m:
+                    done = int(m.group(1))
+                    if progress_cb:
+                        progress_cb(done, total_est)
+                    if max_frames and done >= max_frames:
+                        reached_max = True
+                        proc.terminate()
+                        break
         proc.wait()
     finally:
         if proc.poll() is None:
             proc.terminate()
 
-    if proc.returncode not in (0, None):
+    # Si paramos a propósito por max_frames, el código de salida no es 0 y es
+    # esperado; no se trata como error.
+    if not reached_max and proc.returncode not in (0, None):
         err = ""
         try:
             err = (proc.stderr.read() or "")[-1500:]
@@ -193,6 +205,8 @@ def extract_frames(
         raise FFmpegError(f"ffmpeg terminó con error (código {proc.returncode}).\n{err}")
 
     frames = sorted(str(p) for p in out.glob("frame_*.png"))
+    if max_frames:
+        frames = frames[:max_frames]
     if not frames:
         raise FFmpegError(
             "No se extrajo ningún fotograma. Revisa el rango de tiempo y el "
