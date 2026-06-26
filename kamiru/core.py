@@ -24,6 +24,14 @@ CORNERS = [
     "Superior izquierda",
 ]
 
+# Orientación de la hoja. "Mejor ajuste" elige automáticamente la orientación
+# (vertical u horizontal) que hace los fotogramas más grandes.
+ORIENTATIONS = [
+    "Mejor ajuste (automático)",
+    "Vertical",
+    "Horizontal",
+]
+
 try:
     _RESAMPLE = Image.Resampling.LANCZOS  # Pillow >= 9.1
 except AttributeError:  # Pillow antiguo
@@ -36,7 +44,11 @@ class Settings:
     def __init__(self, **kw):
         # Hoja
         self.paper = kw.get("paper", "A4")
-        self.landscape = kw.get("landscape", False)
+        # Orientación: "Vertical", "Horizontal" o "Mejor ajuste (automático)".
+        # Se acepta el antiguo `landscape` (bool) por compatibilidad.
+        self.orientation = kw.get("orientation")
+        if self.orientation is None:
+            self.orientation = "Horizontal" if kw.get("landscape") else "Vertical"
         self.dpi = int(kw.get("dpi", 300))
         self.custom_w_mm = float(kw.get("custom_w_mm", 210.0))
         self.custom_h_mm = float(kw.get("custom_h_mm", 297.0))
@@ -101,8 +113,16 @@ def _load_font(path, size_px: int):
             return ImageFont.truetype(p, size_px)
         except Exception:
             pass
+    # Fallback: fuente por defecto de Pillow. En versiones recientes (>=10.1)
+    # admite un tamaño, así que la respetamos para que el texto sea legible a
+    # alta resolución; en versiones antiguas se usa el bitmap pequeño.
     try:
-        return ImageFont.load_default()
+        return ImageFont.load_default(size=size_px)
+    except TypeError:
+        try:
+            return ImageFont.load_default()
+        except Exception:
+            return None
     except Exception:
         return None
 
@@ -124,6 +144,63 @@ def estimate_pages(num_frames: int, per_page: int) -> int:
     return math.ceil(num_frames / max(1, per_page))
 
 
+def _frame_fit_area(s, landscape, src_w, src_h, label_h, label_gap) -> float:
+    """Área (en px²) que ocuparía un fotograma de tamaño (src_w, src_h) dentro
+    de una celda para la orientación dada. Sirve para decidir el "mejor ajuste":
+    se compara esta área en vertical y en horizontal y gana la mayor.
+    """
+    dpi = s.dpi
+    page_w, page_h = paper.page_size_px(
+        s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm
+    )
+    margin = paper.mm_to_px(s.margin_mm, dpi)
+    gutter = paper.mm_to_px(s.gutter_mm, dpi)
+    content_w = page_w - 2 * margin
+    content_h = page_h - 2 * margin
+    if content_w <= 0 or content_h <= 0:
+        return -1.0
+    cell_w = (content_w - (s.cols - 1) * gutter) / s.cols
+    cell_h = (content_h - (s.rows - 1) * gutter) / s.rows
+    label_area = (label_h + label_gap) if s.labels_on else 0
+    img_area_h = cell_h - label_area
+    if cell_w <= 1 or img_area_h <= 1 or src_w <= 0 or src_h <= 0:
+        return -1.0
+    scale = min(cell_w / src_w, img_area_h / src_h)
+    return (src_w * scale) * (src_h * scale)
+
+
+def _first_frame_aspect(frame_paths):
+    """Relación de aspecto (w, h) del primer fotograma legible; 16:9 por defecto."""
+    for fp in frame_paths:
+        try:
+            with Image.open(fp) as im:
+                w, h = im.size
+            if w > 0 and h > 0:
+                return w, h
+        except Exception:
+            continue
+    return 16, 9
+
+
+def resolve_landscape(s, frame_paths, label_h=0, label_gap=0) -> bool:
+    """Decide si la hoja va en horizontal según la orientación elegida.
+
+    - "Vertical"  -> False
+    - "Horizontal" -> True
+    - "Mejor ajuste" -> la orientación que maximiza el área impresa de los
+      fotogramas (usa la relación de aspecto del primer fotograma).
+    """
+    o = (s.orientation or "").strip().lower()
+    if o.startswith("horizontal"):
+        return True
+    if o.startswith("vertical"):
+        return False
+    src_w, src_h = _first_frame_aspect(frame_paths)
+    area_portrait = _frame_fit_area(s, False, src_w, src_h, label_h, label_gap)
+    area_landscape = _frame_fit_area(s, True, src_w, src_h, label_h, label_gap)
+    return area_landscape > area_portrait
+
+
 def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=None):
     """Construye y guarda los contact sheets.
 
@@ -132,15 +209,12 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
     """
     s = settings
     dpi = s.dpi
-    page_w, page_h = paper.page_size_px(
-        s.paper, dpi, s.landscape, s.custom_w_mm, s.custom_h_mm
-    )
 
     margin = paper.mm_to_px(s.margin_mm, dpi)
     gutter = paper.mm_to_px(s.gutter_mm, dpi)
     label_gap = paper.mm_to_px(s.label_gap_mm, dpi) if s.labels_on else 0
 
-    # Fuentes
+    # Fuentes (no dependen de la orientación, así que se calculan antes).
     label_font = None
     label_h = 0
     if s.labels_on:
@@ -153,6 +227,14 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
     if s.page_num_on:
         ppx = paper.pt_to_px(s.page_num_size_pt, dpi)
         page_font = _load_font(s.font_path, ppx)
+
+    # Orientación de la hoja: vertical, horizontal o "mejor ajuste" (la que
+    # hace los fotogramas más grandes). Los nombres y el numerador de hoja se
+    # colocan respecto a la hoja final, así que se acomodan solos.
+    landscape = resolve_landscape(s, frame_paths, label_h, label_gap)
+    page_w, page_h = paper.page_size_px(
+        s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm
+    )
 
     # Geometría de la cuadrícula
     content_w = page_w - 2 * margin
@@ -213,9 +295,14 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
             except Exception:
                 continue
 
-            # Centrado horizontal; la imagen se ancla arriba de la celda.
+            # El bloque imagen+etiqueta se centra verticalmente dentro de la
+            # celda, y la etiqueta queda pegada justo debajo de la imagen (no al
+            # fondo de la celda), para que se vea ordenado aunque el frame no
+            # llene todo el alto disponible.
+            block_h = new_h + (label_area if s.labels_on else 0)
+            block_top = cell_y + (cell_h - block_h) / 2
             px = int(round(cell_x + (cell_w - new_w) / 2))
-            py = int(round(cell_y + (img_area_h - new_h) / 2))
+            py = int(round(block_top))
             canvas.paste(resized, (px, py))
 
             # Exportar el frame individual con su nombre (máxima calidad).
@@ -226,12 +313,12 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
                 except Exception:
                     pass
 
-            # Etiqueta de nombre debajo del frame.
+            # Etiqueta de nombre justo debajo del frame.
             if s.labels_on and label_font is not None:
                 text = s.label_for(global_idx)
                 tw, th = _text_size(draw, text, label_font)
                 tx = int(round(cell_x + (cell_w - tw) / 2))
-                ty = int(round(cell_y + img_area_h + label_gap))
+                ty = int(round(py + new_h + label_gap))
                 draw.text((tx, ty), text, fill=s.label_color, font=label_font)
 
         # Numerador de hoja en la esquina.
@@ -281,6 +368,8 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
         "pdf": pdf_path,
         "frames_dir": str(frames_dir) if frames_dir else None,
         "num_pages": num_pages,
+        "landscape": landscape,
+        "orientation": "Horizontal" if landscape else "Vertical",
     }
 
 

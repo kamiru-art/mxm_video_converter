@@ -72,7 +72,7 @@ class App(tk.Tk):
         v.var_rows = tk.IntVar(value=5)
         # Hoja
         v.var_paper = tk.StringVar(value="A4")
-        v.var_landscape = tk.BooleanVar(value=False)
+        v.var_orientation = tk.StringVar(value=core.ORIENTATIONS[0])
         v.var_dpi = tk.IntVar(value=300)
         v.var_custom_w = tk.DoubleVar(value=210.0)
         v.var_custom_h = tk.DoubleVar(value=297.0)
@@ -227,11 +227,17 @@ class App(tk.Tk):
                           state="readonly", width=22)
         cb.grid(row=0, column=1, sticky="w", padx=4)
         cb.bind("<<ComboboxSelected>>", lambda e: self._sync_custom())
-        ttk.Checkbutton(sec, text="Horizontal (apaisado)",
-                        variable=self.var_landscape).grid(row=0, column=2, sticky="w", padx=PAD)
+
+        ttk.Label(sec, text="Orientación de la hoja:").grid(
+            row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(sec, values=core.ORIENTATIONS, textvariable=self.var_orientation,
+                     state="readonly", width=22).grid(
+            row=1, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Mejor ajuste = la orientación que agranda los fotogramas",
+                  style="Sub.TLabel").grid(row=1, column=2, sticky="w", padx=PAD, pady=(6, 0))
 
         self.custom_box = ttk.Frame(sec)
-        self.custom_box.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.custom_box.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(self.custom_box, text="Ancho (mm):").grid(row=0, column=0, sticky="w")
         ttk.Spinbox(self.custom_box, from_=10, to=2000, width=8,
                     textvariable=self.var_custom_w).grid(row=0, column=1, padx=4)
@@ -512,7 +518,7 @@ class App(tk.Tk):
     # ----------------------------------------------------------- ejecutar
     def _collect_settings(self) -> core.Settings:
         return core.Settings(
-            paper=self.var_paper.get(), landscape=self.var_landscape.get(),
+            paper=self.var_paper.get(), orientation=self.var_orientation.get(),
             dpi=self._int(self.var_dpi, 300),
             custom_w_mm=self._float(self.var_custom_w, 210),
             custom_h_mm=self._float(self.var_custom_h, 297),
@@ -658,9 +664,13 @@ class App(tk.Tk):
         self.progress.configure(mode="determinate", value=self.progress["maximum"])
         self._reset_run()
         n = result.get("num_pages", 0)
+        orient = result.get("orientation", "")
         self._set_status(f"¡Listo! Se generaron {n} hoja(s).")
         self._save_config()
         extra = ""
+        if orient:
+            suf = "  (elegida automáticamente)" if self.var_orientation.get().lower().startswith("mejor") else ""
+            extra += f"\nOrientación: {orient}{suf}"
         if result.get("pdf"):
             extra += f"\nPDF: {result['pdf']}"
         if result.get("frames_dir"):
@@ -701,7 +711,8 @@ class App(tk.Tk):
             "1) Pestaña 1: elige el video y el rango (todo o inicio/fin en segundos).\n"
             "2) Pestaña 2: cuántos fotogramas extraer (fps o todos) y la cuadrícula "
             "(columnas × filas = imágenes por hoja).\n"
-            "3) Pestaña 3: tamaño de hoja (A4 u otros), DPI y márgenes.\n"
+            "3) Pestaña 3: tamaño de hoja (A4 u otros), orientación "
+            "(vertical, horizontal o mejor ajuste automático), DPI y márgenes.\n"
             "4) Pestaña 4: nombre base, separador y ceros para los nombres "
             "(abc_001, abc_002, …) y la fuente/tamaño.\n"
             "5) Pestaña 5: numerador de hoja en la esquina.\n"
