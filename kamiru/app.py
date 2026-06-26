@@ -6,6 +6,12 @@ composición) corre en un hilo aparte para que la ventana no se congele.
 
 from __future__ import annotations
 
+import os
+
+# Silencia el aviso inofensivo de "Tk is deprecated" en macOS. Debe fijarse
+# antes de que se inicialice Tk (es decir, antes de importar tkinter).
+os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
+
 import queue
 import shutil
 import tempfile
@@ -495,6 +501,11 @@ class App(tk.Tk):
         return 0.0, (self.video_info.duration or None)
 
     def _update_estimate(self, *_):
+        # Puede invocarse mientras se construyen las pestañas (p. ej. desde
+        # _sync_range), antes de que existan las etiquetas de la barra inferior.
+        # En ese caso no hay nada que actualizar todavía.
+        if not hasattr(self, "estimate_lbl"):
+            return
         per_page = max(1, self._int(self.var_cols, 1) * self._int(self.var_rows, 1))
         if hasattr(self, "perpage_lbl"):
             self.perpage_lbl.configure(text=f"= {per_page} imágenes por hoja")
