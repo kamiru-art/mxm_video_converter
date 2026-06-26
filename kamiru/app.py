@@ -6,6 +6,12 @@ composición) corre en un hilo aparte para que la ventana no se congele.
 
 from __future__ import annotations
 
+import os
+
+# Silencia el aviso inofensivo de "Tk is deprecated" en macOS. Debe fijarse
+# antes de que se inicialice Tk (es decir, antes de importar tkinter).
+os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
+
 import queue
 import shutil
 import tempfile
