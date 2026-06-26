@@ -18,8 +18,11 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
 - Elegir **cuántas imágenes por hoja** (columnas × filas).
 - **Espaciado entre frames** dentro de la hoja, ajustable en milímetros.
 - Tamaño de hoja **A4** por defecto, y también **A3, A5, A6, B4, B5, Carta,
-  Oficio, Tabloide** o uno **personalizado** (ancho × alto en mm). Orientación
-  vertical u **horizontal (apaisado)**.
+  Oficio, Tabloide** o uno **personalizado** (ancho × alto en mm).
+- **Orientación de la hoja**: **Vertical**, **Horizontal** o **Mejor ajuste
+  (automático)** — esta última elige por ti la orientación que hace los
+  fotogramas **más grandes** (maximiza el área de impresión). Los nombres y el
+  numerador de hoja se acomodan solos a la orientación elegida.
 - **Nombres autoincrementales** para cada frame: por ejemplo `abc_1, abc_2, …`
   o `abc_001, abc_002, …`. Puedes elegir:
   - el **nombre base** (`abc`),
@@ -75,8 +78,8 @@ La ventana tiene pestañas numeradas:
    *inicio/fin en segundos*.
 2. **Extracción y cuadrícula** — cuántos fotogramas extraer (fps o todos) y la
    cuadrícula (columnas × filas = imágenes por hoja) y el espaciado entre frames.
-3. **Hoja** — tamaño (A4 u otro), orientación, DPI (300 = calidad de impresión),
-   margen y color de fondo.
+3. **Hoja** — tamaño (A4 u otro), **orientación** (vertical, horizontal o mejor
+   ajuste automático), DPI (300 = calidad de impresión), margen y color de fondo.
 4. **Nombres de frames** — nombre base, separador, ceros a la izquierda, número
    inicial, fuente, tamaño y margen entre el frame y su nombre.
 5. **Numerador de hoja** — muestra el número de hoja en la esquina que elijas.
