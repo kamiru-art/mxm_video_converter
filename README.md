@@ -106,12 +106,27 @@ fotogramas y hojas saldrán, y una barra de progreso.
 
 ## 🔧 Para quien sí quiera la terminal (opcional)
 
+> En macOS el comando suele ser `python3` (no `python`). En Windows, `py`.
+
 ```bash
-python -m pip install -r requirements.txt
-python -m kamiru          # abre la app
+python3 -m pip install -r requirements.txt
+python3 -m kamiru          # abre la app
 ```
 
 No hace falta instalar `ffmpeg` aparte: viene incluido vía `imageio-ffmpeg`.
+
+### ¿La ventana se abre en blanco (macOS)?
+
+Es el **Tk 8.5** obsoleto que trae macOS de fábrica; dibuja la ventana vacía.
+Solución: usa el **Python de [python.org](https://www.python.org/downloads/)**
+(incluye un Tk 8.6 que sí funciona). Los lanzadores ya lo eligen
+automáticamente y, si detectan un entorno viejo, lo recrean solos. Si lo
+arreglas a mano, borra el entorno y vuelve a abrir:
+
+```bash
+rm -rf .venv
+./run.command   # o doble clic
+```
 
 ---
 
