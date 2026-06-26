@@ -26,40 +26,37 @@ from . import __app_name__, __version__, config, core, fonts as fontmod
 from . import paper
 from .ffmpeg_utils import VideoInfo, extract_frames, find_ffmpeg, probe
 
-PAD = 8
+PAD = 10
 VIDEO_TYPES = [
     ("Videos", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv *.flv *.mts *.m2ts"),
     ("Todos los archivos", "*.*"),
 ]
 
+# Tope de fotogramas a extraer para la vista previa de TODAS las hojas (evita
+# que un video larguísimo congele la app; la generación final no tiene tope).
+PREVIEW_ALL_CAP = 2000
 
-def _preview_max_position(per_page, include_text, exclude_text, hard_cap=1500):
-    """Mayor posición de fotograma (1-based) necesaria para llenar la primera
-    hoja aplicando incluir/excluir. Acota cuántos fotogramas extraer en la
-    vista previa para que sea rápida.
-    """
-    inc = core.parse_ranges(include_text)
-    exc = core.parse_ranges(exclude_text)
-    inc_max = max(inc) if inc else None
-    selected = 0
-    pos = 0
-    while selected < per_page and pos < hard_cap:
-        pos += 1
-        if inc and pos not in inc:
-            if inc_max is not None and pos >= inc_max:
-                break
-            continue
-        if pos in exc:
-            continue
-        selected += 1
-    return max(1, min(hard_cap, pos))
+# Paleta de la interfaz (look limpio y cálido, con verde como acento 💚).
+PALETTE = {
+    "bg": "#F3F5F7",          # fondo general
+    "card": "#FFFFFF",        # campos / pestaña activa
+    "text": "#243038",        # texto principal
+    "muted": "#6B7B88",       # texto secundario
+    "accent": "#1FA37A",      # verde principal
+    "accent_dark": "#15795A",
+    "accent_soft": "#A9CEC2",  # acento atenuado (botón deshabilitado)
+    "accent_text": "#FFFFFF",
+    "border": "#D5DCE2",
+    "tab_off": "#E5EBEF",      # pestaña inactiva
+    "trough": "#E3E8EC",       # canal de la barra de progreso
+}
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{__app_name__}  v{__version__}")
-        self.minsize(720, 640)
+        self.minsize(900, 780)
 
         self.queue: "queue.Queue" = queue.Queue()
         self.worker = None
@@ -78,15 +75,85 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ UI
     def _build_style(self):
+        import tkinter.font as tkfont
+        p = PALETTE
+
+        # Fuentes base un poco más grandes (sin encoger las de macOS, que ya
+        # parten de un tamaño mayor).
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+            try:
+                f = tkfont.nametofont(name)
+                sz = f.cget("size")
+                if sz < 0:  # tamaño en píxeles -> pasamos a puntos aprox.
+                    sz = max(10, int(round(abs(sz) * 0.75)))
+                f.configure(size=max(sz, 13) + 1)
+            except tk.TclError:
+                pass
+
+        self.configure(bg=p["bg"])
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Accent.TButton", font=("", 12, "bold"), padding=8)
-        style.configure("Header.TLabel", font=("", 16, "bold"))
-        style.configure("Sub.TLabel", foreground="#666")
-        style.configure("Info.TLabel", foreground="#0a6")
+
+        style.configure(".", background=p["bg"], foreground=p["text"])
+        style.configure("TFrame", background=p["bg"])
+        style.configure("TLabel", background=p["bg"], foreground=p["text"])
+        style.configure("Header.TLabel", font=("", 25, "bold"),
+                        foreground=p["accent_dark"])
+        style.configure("Sub.TLabel", foreground=p["muted"])
+        style.configure("Info.TLabel", foreground=p["accent_dark"], font=("", 13, "bold"))
+
+        style.configure("TLabelframe", background=p["bg"], bordercolor=p["border"],
+                        relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background=p["bg"],
+                        foreground=p["accent_dark"], font=("", 14, "bold"))
+
+        for w in ("TCheckbutton", "TRadiobutton"):
+            style.configure(w, background=p["bg"], foreground=p["text"])
+            style.map(w, background=[("active", p["bg"])],
+                      foreground=[("disabled", p["muted"])])
+
+        # Botones
+        style.configure("TButton", padding=8, background=p["card"],
+                        foreground=p["text"], bordercolor=p["border"],
+                        focuscolor=p["accent"])
+        style.map("TButton",
+                  background=[("active", p["tab_off"]), ("pressed", p["tab_off"])],
+                  bordercolor=[("focus", p["accent"])])
+        style.configure("Accent.TButton", font=("", 15, "bold"), padding=11,
+                        background=p["accent"], foreground=p["accent_text"],
+                        bordercolor=p["accent"])
+        style.map("Accent.TButton",
+                  background=[("active", p["accent_dark"]),
+                              ("pressed", p["accent_dark"]),
+                              ("disabled", p["accent_soft"])],
+                  foreground=[("disabled", "#EEF6F2")])
+
+        # Pestañas
+        style.configure("TNotebook", background=p["bg"], bordercolor=p["border"],
+                        tabmargins=(4, 4, 4, 0))
+        style.configure("TNotebook.Tab", padding=(15, 9),
+                        background=p["tab_off"], foreground=p["muted"])
+        style.map("TNotebook.Tab",
+                  background=[("selected", p["card"])],
+                  foreground=[("selected", p["accent_dark"])],
+                  expand=[("selected", (1, 1, 1, 0))])
+
+        # Campos de entrada
+        style.configure("TEntry", fieldbackground=p["card"], bordercolor=p["border"],
+                        padding=4)
+        style.configure("TSpinbox", fieldbackground=p["card"], bordercolor=p["border"],
+                        arrowsize=14, padding=3)
+        style.configure("TCombobox", fieldbackground=p["card"], bordercolor=p["border"],
+                        padding=3)
+        style.map("TCombobox", fieldbackground=[("readonly", p["card"])])
+
+        # Barra de progreso
+        style.configure("TProgressbar", background=p["accent"], troughcolor=p["trough"],
+                        bordercolor=p["border"], lightcolor=p["accent"],
+                        darkcolor=p["accent"])
 
     def _build_vars(self):
         v = self
@@ -194,7 +261,7 @@ class App(tk.Tk):
 
     def _tab_video(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="1 · Video y rango")
+        nb.add(tab, text="1 · Video")
 
         sec = self._section(tab, "Archivo de video")
         ttk.Entry(sec, textvariable=self.var_video).grid(row=0, column=0, columnspan=2,
@@ -223,7 +290,7 @@ class App(tk.Tk):
 
     def _tab_grid(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="2 · Extracción y cuadrícula")
+        nb.add(tab, text="2 · Fotogramas")
 
         sec = self._section(tab, "¿Cuántos fotogramas extraer del video?")
         ttk.Radiobutton(sec, text="Muestrear N fotogramas por segundo (recomendado)",
@@ -318,7 +385,7 @@ class App(tk.Tk):
 
     def _tab_labels(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="4 · Nombres de frames")
+        nb.add(tab, text="4 · Nombres")
 
         sec = self._section(tab, "Etiquetas autoincrementales")
         ttk.Checkbutton(sec, text="Escribir el nombre debajo de cada frame",
@@ -361,7 +428,7 @@ class App(tk.Tk):
 
     def _tab_pagenum(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="5 · Numerador de hoja")
+        nb.add(tab, text="5 · Nº de hoja")
 
         sec = self._section(tab, "Número de hoja en la esquina")
         ttk.Checkbutton(sec, text="Mostrar el número de hoja (para organizarte mejor)",
@@ -741,32 +808,42 @@ class App(tk.Tk):
 
     def _work_preview(self, settings, start, end, fps, inc, exc):
         tmp = None
+        keep_tmp = False
         try:
             ff = find_ffmpeg()
             tmp = tempfile.mkdtemp(prefix="kamiru_pv_")
-            # Solo necesitamos los fotogramas que caen en la primera hoja.
-            per_page = settings.per_page
-            max_pos = _preview_max_position(per_page, inc, exc)
+            self.queue.put(("status", "Extrayendo fotogramas para la vista previa…"))
+
+            def ext_progress(done, total):
+                self.queue.put(("extract", done, total))
+
+            # Extraemos todos los fotogramas del rango (hasta un tope alto) para
+            # poder previsualizar TODAS las hojas, no solo la primera.
             frames = extract_frames(
                 ff, self.var_video.get(), tmp,
-                start=start, end=end, fps=fps, max_frames=max_pos,
-                cancel_check=lambda: self._cancel,
+                start=start, end=end, fps=fps, max_frames=PREVIEW_ALL_CAP,
+                progress_cb=ext_progress, cancel_check=lambda: self._cancel,
             )
             sel = core.select_frames(frames, inc, exc)
             if not sel:
                 raise ValueError(
                     "La selección de «Incluir/Excluir» no deja ningún fotograma "
                     "para previsualizar.")
-            img, num_pages = core.render_preview(settings, sel, 0)
-            # La imagen ya está en memoria; podemos borrar los temporales.
-            self.queue.put(("preview", (img, num_pages, len(sel))))
+            self.queue.put(("status", "Renderizando vista previa…"))
+            first_img, num_pages = core.render_preview(settings, sel, 0)
+            truncated = len(frames) >= PREVIEW_ALL_CAP
+            # No borramos tmp: las demás hojas se renderizan bajo demanda al
+            # navegar. La ventana de preview limpiará la carpeta al cerrarse.
+            keep_tmp = True
+            self.queue.put(("preview_multi",
+                            (first_img, sel, settings, num_pages, len(sel), tmp, truncated)))
         except Exception as e:
             if self._cancel:
                 self.queue.put(("cancelled", None))
             else:
                 self.queue.put(("error", str(e)))
         finally:
-            if tmp:
+            if tmp and not keep_tmp:
                 shutil.rmtree(tmp, ignore_errors=True)
 
     def _on_cancel(self):
@@ -810,11 +887,12 @@ class App(tk.Tk):
             self.progress.stop()
             self.progress.configure(maximum=max(1, total), value=done)
             self._set_status(f"Componiendo hojas…  {done}/{total}")
-        elif kind == "preview":
-            img, num_pages, nsel = msg[1]
+        elif kind == "preview_multi":
+            first_img, frames, settings, num_pages, nsel, tmpdir, truncated = msg[1]
             self._reset_run()
-            self._set_status(f"Vista previa lista (hoja 1 de {num_pages}).")
-            self._show_preview_window(img, num_pages, nsel)
+            self._set_status(f"Vista previa lista ({num_pages} hoja(s)).")
+            self._show_multi_preview(first_img, frames, settings, num_pages,
+                                     nsel, tmpdir, truncated)
         elif kind == "done":
             self._finish_ok(msg[1])
         elif kind == "cancelled":
@@ -862,33 +940,90 @@ class App(tk.Tk):
             pass
         self.worker = None
 
-    def _show_preview_window(self, img, num_pages, nsel):
+    def _show_multi_preview(self, first_img, frames, settings, num_pages, nsel,
+                            tmpdir, truncated):
+        """Ventana de vista previa con navegación por TODAS las hojas.
+
+        La hoja 0 ya viene renderizada; las demás se renderizan bajo demanda al
+        navegar (y se cachean). Los fotogramas temporales viven en tmpdir hasta
+        que se cierra la ventana.
+        """
         try:
             from PIL import ImageTk
         except Exception:
-            # Sin ImageTk: guardamos la vista previa como PNG y la abrimos.
             p = Path(tempfile.mkdtemp(prefix="kamiru_pv_")) / "vista_previa.png"
-            img.save(p)
-            messagebox.showinfo("Vista previa",
-                                f"Se guardó la vista previa en:\n{p}")
+            first_img.save(p)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            messagebox.showinfo("Vista previa", f"Se guardó la vista previa en:\n{p}")
             self._open_folder(str(p.parent))
             return
+
         win = tk.Toplevel(self)
-        win.title("Vista previa — hoja 1")
+        win.title("Vista previa de las hojas")
+        win.configure(bg=PALETTE["bg"])
         win.transient(self)
-        max_w, max_h = 1000, 720
-        w, h = img.size
-        scale = min(max_w / w, max_h / h, 1.0)
-        disp = (img.resize((max(1, int(w * scale)), max(1, int(h * scale))),
-                           Image.LANCZOS) if scale < 1 else img)
-        photo = ImageTk.PhotoImage(disp)
-        lbl = ttk.Label(win, image=photo)
-        lbl.image = photo  # mantener referencia para que no la borre el GC
-        lbl.pack(padx=10, pady=10)
-        note = (f"Hoja 1 de {num_pages}  ·  {nsel} fotograma(s) en la selección  ·  "
-                "vista a baja resolución (las hojas finales serán nítidas)")
-        ttk.Label(win, text=note, style="Sub.TLabel").pack(pady=(0, 6))
-        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=(0, 10))
+
+        state = {"idx": 0, "cache": {0: first_img}, "photo": None}
+
+        img_lbl = ttk.Label(win, anchor="center")
+        img_lbl.pack(padx=12, pady=(12, 6))
+        info_lbl = ttk.Label(win, text="", style="Sub.TLabel")
+        info_lbl.pack(pady=(0, 8))
+
+        nav = ttk.Frame(win)
+        nav.pack(pady=(0, 12))
+        page_var = tk.IntVar(value=1)
+
+        def render_pil(k):
+            if k not in state["cache"]:
+                img, _ = core.render_preview(settings, frames, k)
+                state["cache"][k] = img
+            return state["cache"][k]
+
+        def show(k):
+            k = max(0, min(int(k), num_pages - 1))
+            state["idx"] = k
+            pil = render_pil(k)
+            max_w, max_h = 980, 660
+            w, h = pil.size
+            scale = min(max_w / w, max_h / h, 1.0)
+            disp = (pil.resize((max(1, int(w * scale)), max(1, int(h * scale))),
+                               Image.LANCZOS) if scale < 1 else pil)
+            photo = ImageTk.PhotoImage(disp)
+            state["photo"] = photo  # mantener referencia
+            img_lbl.configure(image=photo)
+            note = (f"{nsel} fotograma(s) en la selección  ·  vista a baja "
+                    "resolución (las hojas finales serán nítidas)")
+            if truncated:
+                note += f"  ·  preview limitada a las primeras {PREVIEW_ALL_CAP} imágenes"
+            info_lbl.configure(text=note)
+            page_var.set(k + 1)
+            prev_btn.configure(state="normal" if k > 0 else "disabled")
+            next_btn.configure(state="normal" if k < num_pages - 1 else "disabled")
+
+        prev_btn = ttk.Button(nav, text="◀ Anterior", command=lambda: show(state["idx"] - 1))
+        prev_btn.grid(row=0, column=0, padx=4)
+        ttk.Label(nav, text="Hoja").grid(row=0, column=1, padx=(8, 2))
+        ttk.Spinbox(nav, from_=1, to=num_pages, width=5, textvariable=page_var,
+                    command=lambda: show(page_var.get() - 1)).grid(row=0, column=2)
+        ttk.Label(nav, text=f"de {num_pages}").grid(row=0, column=3, padx=(2, 8))
+        next_btn = ttk.Button(nav, text="Siguiente ▶", command=lambda: show(state["idx"] + 1))
+        next_btn.grid(row=0, column=4, padx=4)
+
+        def on_close():
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            win.destroy()
+
+        ttk.Button(nav, text="Cerrar", command=on_close).grid(row=0, column=5, padx=(16, 4))
+        win.bind("<Left>", lambda e: show(state["idx"] - 1))
+        win.bind("<Right>", lambda e: show(state["idx"] + 1))
+        win.bind("<Return>", lambda e: show(page_var.get() - 1))
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        show(0)
+        win.update_idletasks()
+        win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
+        win.focus_set()
 
     def _set_status(self, text):
         self.status_lbl.configure(text=text)
