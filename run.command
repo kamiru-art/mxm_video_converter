@@ -66,5 +66,5 @@ if [ ! -f ".venv/.deps_ok" ]; then
   touch .venv/.deps_ok
 fi
 
-echo "Abriendo Kamiru…"
+echo "Abriendo Video to Contact Sheets…"
 python -m kamiru

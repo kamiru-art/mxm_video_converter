@@ -1,4 +1,4 @@
-# Kamiru — Video a Contact Sheets 💚
+# Video to Contact Sheets 💚
 
 Una app de escritorio sencilla (con ventana, **sin tocar código**) para convertir
 un video en **contact sheets** imprimibles: hojas con una cuadrícula de fotogramas
@@ -50,42 +50,44 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
 
 ---
 
-## 🚀 Cómo abrirla (la forma fácil)
+## 🚀 Cómo abrirla (doble clic, sin terminal)
 
-Solo necesitas tener **Python 3** instalado. Los lanzadores se encargan del resto
-(crean un entorno e instalan las dependencias automáticamente la primera vez).
+Solo necesitas tener **Python 3** instalado. Cada sistema tiene su forma de
+abrirla como una app de verdad. La primera vez prepara el entorno e instala las
+dependencias sola (1–2 minutos); después abre al instante.
 
-### Windows
-1. Instala Python desde <https://www.python.org/downloads/> y, durante la
-   instalación, **marca la casilla "Add Python to PATH"**.
-2. Haz **doble clic en `run.bat`**.
+> ⚠️ **macOS — importante:** guarda esta carpeta **fuera de Documentos, Escritorio
+> y Descargas** (por ejemplo en tu carpeta de inicio, `~/Video to Contact Sheets`).
+> macOS bloquea a las apps el acceso a esas tres carpetas protegidas, y verías un
+> error «Operation not permitted». En cualquier otra ubicación funciona sin pedir
+> permisos.
 
-> La primera vez tardará un poco (instala dependencias). Las siguientes abre al instante.
-
-### macOS  (recomendado: como una app de verdad)
+### macOS  — `Video to Contact Sheets.app`
 1. Instala Python desde <https://www.python.org/downloads/> (incluye lo necesario
    para la ventana).
-2. Haz **doble clic en `Kamiru.app`**. Se abre como cualquier app, **sin que
-   aparezca ninguna terminal**. La primera vez prepara todo solo (te avisa con un
-   mensaje y tarda 1–2 minutos).
+2. Haz **doble clic en `Video to Contact Sheets.app`**. Se abre como cualquier
+   app, **sin que aparezca ninguna terminal**.
 
-> Mantén `Kamiru.app` **dentro de esta carpeta** (usa el repositorio). Truco:
-> arrástrala al **Dock** para tenerla a mano sin moverla de sitio.
+> Primera vez: clic derecho sobre la app → **Abrir** → **Abrir** (es una app sin
+> firmar). Truco: arrástrala al **Dock** para tenerla a mano.
 >
-> Si macOS dice que no puede abrirla por seguridad (apps sin firmar): clic
-> derecho sobre `Kamiru.app` → **Abrir** → **Abrir**, solo la primera vez.
->
-> ¿Prefieres la terminal? También existe `run.command` (doble clic), pero esa sí
-> abre una ventana de Terminal.
+> Si ya la tenías en Documentos y daba error: muévela (con su carpeta) a `~/` y
+> vuelve a abrirla. ¿Prefieres la terminal? También existe `run.command`.
 
-### Linux
+### Windows  — `Abrir Video to Contact Sheets.vbs`
+1. Instala Python desde <https://www.python.org/downloads/> y **marca la casilla
+   "Add Python to PATH"**.
+2. Haz **doble clic en `Abrir Video to Contact Sheets.vbs`**. Abre la app **sin
+   consola negra**. (También existe `run.bat`.)
+
+### Linux  — `Instalar en Linux.sh`
 1. Instala Python y Tk:
    - Debian/Ubuntu: `sudo apt install python3 python3-venv python3-tk`
    - Fedora: `sudo dnf install python3 python3-tkinter`
-2. En una terminal, dentro de la carpeta del proyecto:
-   ```bash
-   ./run.sh
-   ```
+2. Ejecuta **una vez** `./Instalar en Linux.sh` (o doble clic → «Ejecutar»). Eso
+   añade **Video to Contact Sheets** a tu menú de aplicaciones y al Escritorio.
+3. Ábrela desde el menú/Escritorio (se abre **sin terminal**). También puedes
+   usar `./run.sh` directamente.
 
 ---
 
@@ -156,16 +158,18 @@ rm -rf .venv
 ## 📦 Qué hay dentro
 
 ```
-kamiru/
+kamiru/                          El código de la app (paquete Python)
   app.py          La ventana (interfaz gráfica con Tkinter)
   core.py         Composición de los contact sheets (Pillow)
   ffmpeg_utils.py Extracción de fotogramas y lectura del video (ffmpeg)
   paper.py        Tamaños de hoja y conversiones mm/px
   fonts.py        Búsqueda de fuentes del sistema
   config.py       Guarda/recuerda tus ajustes
-run.bat           Lanzador de Windows (doble clic)
-run.command       Lanzador de macOS (doble clic)
-run.sh            Lanzador de Linux
+Video to Contact Sheets.app      App de macOS (doble clic, sin terminal)
+Abrir Video to Contact Sheets.vbs  App de Windows (doble clic, sin consola)
+Instalar en Linux.sh             Registra la app en Linux (ejecutar una vez)
+assets/icon.png · icon.ico       Ícono de la app
+run.command / run.bat / run.sh   Lanzadores por terminal (alternativa)
 main.py           Alternativa: python3 main.py
 requirements.txt  Dependencias (Pillow, imageio-ffmpeg)
 ```
