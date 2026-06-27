@@ -72,6 +72,17 @@ class App(tk.Tk):
         self._restore_config()
         self._update_estimate()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._bring_to_front()
+
+    def _bring_to_front(self):
+        # Al abrir desde el .app (sin terminal) la ventana puede quedar detrás
+        # de otras; la traemos al frente un instante.
+        try:
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------ UI
     def _build_style(self):
@@ -185,6 +196,7 @@ class App(tk.Tk):
         v.var_sep = tk.StringVar(value="_")
         v.var_zeros = tk.IntVar(value=1)
         v.var_startidx = tk.IntVar(value=1)
+        v.var_numbering = tk.StringVar(value=core.NUMBERING[0])
         v.var_font_name = tk.StringVar()
         v.var_font_size = tk.DoubleVar(value=9.0)
         v.var_label_gap = tk.DoubleVar(value=1.5)
@@ -402,14 +414,19 @@ class App(tk.Tk):
         ttk.Label(sec, text="Empezar en:").grid(row=2, column=2, sticky="w", pady=(6, 0))
         ttk.Spinbox(sec, from_=0, to=999999, width=8, textvariable=self.var_startidx,
                     command=self._update_name_preview).grid(row=2, column=3, sticky="w", padx=4, pady=(6, 0))
-        for var in (self.var_base, self.var_sep, self.var_zeros, self.var_startidx):
+        ttk.Label(sec, text="Numeración:").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(sec, values=core.NUMBERING, textvariable=self.var_numbering,
+                     state="readonly", width=28).grid(
+            row=3, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
+        for var in (self.var_base, self.var_sep, self.var_zeros, self.var_startidx,
+                    self.var_numbering):
             var.trace_add("write", lambda *_: self._update_name_preview())
         self.name_preview = ttk.Label(sec, text="", style="Info.TLabel")
-        self.name_preview.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self.name_preview.grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
         ttk.Checkbutton(
             sec, text="Usar el nombre del video automáticamente (nombre base y archivos)",
             variable=self.var_autoname, command=self._apply_autoname).grid(
-            row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
+            row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         sec = self._section(tab, "Tipografía de los nombres")
         ttk.Label(sec, text="Fuente:").grid(row=0, column=0, sticky="w")
@@ -619,8 +636,13 @@ class App(tk.Tk):
             return
         try:
             s = self._settings_for_preview()
-            ex = ", ".join(s.label_for(i) for i in range(3))
-            self.name_preview.configure(text=f"Ejemplo:  {ex}, …")
+            if self.var_numbering.get().lower().startswith("original"):
+                ex = ", ".join(s.format_label(n) for n in (5, 10, 15))
+                self.name_preview.configure(
+                    text=f"Ejemplo (posición real en el video):  {ex}, …")
+            else:
+                ex = ", ".join(s.label_for(i) for i in range(3))
+                self.name_preview.configure(text=f"Ejemplo:  {ex}, …")
         except Exception:
             self.name_preview.configure(text="")
 
@@ -726,6 +748,7 @@ class App(tk.Tk):
         start, end = self._selected_range()
         fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
         inc, exc = self.var_include.get(), self.var_exclude.get()
+        orig = self.var_numbering.get().lower().startswith("original")
 
         self._cancel = False
         self._set_busy(True)
@@ -733,11 +756,11 @@ class App(tk.Tk):
         self._set_status("Preparando…")
 
         self.worker = threading.Thread(
-            target=self._work, args=(s, start, end, fps, inc, exc), daemon=True)
+            target=self._work, args=(s, start, end, fps, inc, exc, orig), daemon=True)
         self.worker.start()
         self.after(100, self._poll_queue)
 
-    def _work(self, settings, start, end, fps, inc, exc):
+    def _work(self, settings, start, end, fps, inc, exc, numbering_original):
         tmp = None
         try:
             ff = find_ffmpeg()
@@ -753,11 +776,13 @@ class App(tk.Tk):
                 start=start, end=end, fps=fps,
                 progress_cb=ext_progress, cancel_check=lambda: self._cancel,
             )
-            sel = core.select_frames(frames, inc, exc)
-            if not sel:
+            positions = core.select_indices(len(frames), inc, exc)
+            if not positions:
                 raise ValueError(
                     "La selección de «Incluir/Excluir» (pestaña 2) no deja "
                     "ningún fotograma. Revisa esos campos.")
+            sel = [frames[i - 1] for i in positions]
+            numbers = positions if numbering_original else None
             if len(sel) != len(frames):
                 self.queue.put(("status",
                                 f"{len(sel)} de {len(frames)} fotogramas seleccionados. "
@@ -770,7 +795,7 @@ class App(tk.Tk):
                 self.queue.put(("compose", done, total))
 
             result = core.generate(
-                settings, sel, progress_cb=comp_progress,
+                settings, sel, numbers=numbers, progress_cb=comp_progress,
                 cancel_check=lambda: self._cancel)
             self.queue.put(("done", result))
         except Exception as e:
@@ -794,6 +819,7 @@ class App(tk.Tk):
         start, end = self._selected_range()
         fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
         inc, exc = self.var_include.get(), self.var_exclude.get()
+        orig = self.var_numbering.get().lower().startswith("original")
 
         self._cancel = False
         self._set_busy(True)
@@ -802,11 +828,12 @@ class App(tk.Tk):
         self._set_status("Preparando vista previa…")
 
         self.worker = threading.Thread(
-            target=self._work_preview, args=(s, start, end, fps, inc, exc), daemon=True)
+            target=self._work_preview, args=(s, start, end, fps, inc, exc, orig),
+            daemon=True)
         self.worker.start()
         self.after(100, self._poll_queue)
 
-    def _work_preview(self, settings, start, end, fps, inc, exc):
+    def _work_preview(self, settings, start, end, fps, inc, exc, numbering_original):
         tmp = None
         keep_tmp = False
         try:
@@ -824,19 +851,22 @@ class App(tk.Tk):
                 start=start, end=end, fps=fps, max_frames=PREVIEW_ALL_CAP,
                 progress_cb=ext_progress, cancel_check=lambda: self._cancel,
             )
-            sel = core.select_frames(frames, inc, exc)
-            if not sel:
+            positions = core.select_indices(len(frames), inc, exc)
+            if not positions:
                 raise ValueError(
                     "La selección de «Incluir/Excluir» no deja ningún fotograma "
                     "para previsualizar.")
+            sel = [frames[i - 1] for i in positions]
+            numbers = positions if numbering_original else None
             self.queue.put(("status", "Renderizando vista previa…"))
-            first_img, num_pages = core.render_preview(settings, sel, 0)
+            first_img, num_pages = core.render_preview(settings, sel, 0, numbers=numbers)
             truncated = len(frames) >= PREVIEW_ALL_CAP
             # No borramos tmp: las demás hojas se renderizan bajo demanda al
             # navegar. La ventana de preview limpiará la carpeta al cerrarse.
             keep_tmp = True
             self.queue.put(("preview_multi",
-                            (first_img, sel, settings, num_pages, len(sel), tmp, truncated)))
+                            (first_img, sel, settings, num_pages, len(sel), tmp,
+                             truncated, numbers)))
         except Exception as e:
             if self._cancel:
                 self.queue.put(("cancelled", None))
@@ -888,11 +918,12 @@ class App(tk.Tk):
             self.progress.configure(maximum=max(1, total), value=done)
             self._set_status(f"Componiendo hojas…  {done}/{total}")
         elif kind == "preview_multi":
-            first_img, frames, settings, num_pages, nsel, tmpdir, truncated = msg[1]
+            (first_img, frames, settings, num_pages, nsel, tmpdir,
+             truncated, numbers) = msg[1]
             self._reset_run()
             self._set_status(f"Vista previa lista ({num_pages} hoja(s)).")
             self._show_multi_preview(first_img, frames, settings, num_pages,
-                                     nsel, tmpdir, truncated)
+                                     nsel, tmpdir, truncated, numbers)
         elif kind == "done":
             self._finish_ok(msg[1])
         elif kind == "cancelled":
@@ -941,7 +972,7 @@ class App(tk.Tk):
         self.worker = None
 
     def _show_multi_preview(self, first_img, frames, settings, num_pages, nsel,
-                            tmpdir, truncated):
+                            tmpdir, truncated, numbers=None):
         """Ventana de vista previa con navegación por TODAS las hojas.
 
         La hoja 0 ya viene renderizada; las demás se renderizan bajo demanda al
@@ -976,7 +1007,7 @@ class App(tk.Tk):
 
         def render_pil(k):
             if k not in state["cache"]:
-                img, _ = core.render_preview(settings, frames, k)
+                img, _ = core.render_preview(settings, frames, k, numbers=numbers)
                 state["cache"][k] = img
             return state["cache"][k]
 

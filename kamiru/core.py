@@ -33,6 +33,12 @@ ORIENTATIONS = [
     "Horizontal",
 ]
 
+# Cómo numerar los nombres de los fotogramas cuando se incluye/excluye.
+NUMBERING = [
+    "Continua (1, 2, 3…)",
+    "Original (posición en el video)",
+]
+
 try:
     _RESAMPLE = Image.Resampling.LANCZOS  # Pillow >= 9.1
 except AttributeError:  # Pillow antiguo
@@ -94,15 +100,18 @@ class Settings:
     def per_page(self) -> int:
         return max(1, self.cols * self.rows)
 
-    def label_for(self, n: int) -> str:
-        """Etiqueta autoincremental para el índice global n (0-based)."""
-        num = self.start_index + n
+    def format_label(self, num: int) -> str:
+        """Aplica nombre base + separador + ceros a la izquierda a un número."""
         num_str = str(num)
         if self.leading_zeros > 1:
             num_str = num_str.zfill(self.leading_zeros)
         if self.base_name:
             return f"{self.base_name}{self.separator}{num_str}"
         return num_str
+
+    def label_for(self, n: int) -> str:
+        """Etiqueta continua para el índice global n (0-based)."""
+        return self.format_label(self.start_index + n)
 
     def page_label_for(self, page_idx: int) -> str:
         """Número de hoja (con prefijo y ceros a la izquierda) para page_idx 0-based."""
@@ -189,24 +198,23 @@ def parse_ranges(text, max_n=None):
     return result
 
 
-def select_frames(frame_paths, include_text="", exclude_text=""):
-    """Filtra los fotogramas por su posición 1-based.
+def select_indices(n, include_text="", exclude_text=""):
+    """Devuelve las posiciones 1-based que sobreviven al incluir/excluir.
 
-    - include_text vacío  -> se toman todos (salvo los excluidos).
-    - include_text con datos -> solo se conservan esas posiciones.
-    - exclude_text -> esas posiciones se quitan (tiene prioridad sobre include).
+    - include vacío  -> todas (salvo las excluidas).
+    - include con datos -> solo esas posiciones.
+    - exclude -> se quitan (tiene prioridad sobre include).
     """
-    n = len(frame_paths)
     inc = parse_ranges(include_text, n)
     exc = parse_ranges(exclude_text, n)
-    out = []
-    for i, fp in enumerate(frame_paths, start=1):
-        if inc and i not in inc:
-            continue
-        if i in exc:
-            continue
-        out.append(fp)
-    return out
+    return [i for i in range(1, n + 1)
+            if (not inc or i in inc) and i not in exc]
+
+
+def select_frames(frame_paths, include_text="", exclude_text=""):
+    """Filtra los fotogramas por su posición 1-based (ver select_indices)."""
+    idx = select_indices(len(frame_paths), include_text, exclude_text)
+    return [frame_paths[i - 1] for i in idx]
 
 
 def _frame_fit_area(s, landscape, src_w, src_h, label_h, label_gap) -> float:
@@ -326,8 +334,14 @@ def _build_layout(s: Settings) -> _Layout:
     return L
 
 
-def _render_page(s: Settings, L: _Layout, chunk, page_idx: int) -> "Image.Image":
-    """Dibuja una sola hoja y devuelve la imagen (no la guarda en disco)."""
+def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
+                 numbers=None) -> "Image.Image":
+    """Dibuja una sola hoja y devuelve la imagen (no la guarda en disco).
+
+    numbers: lista paralela a TODOS los fotogramas con el número a mostrar en
+    cada etiqueta (numeración original). Si es None, se usa la numeración
+    continua (start_index + posición).
+    """
     canvas = Image.new("RGB", (L.page_w, L.page_h), s.bg_color)
     draw = ImageDraw.Draw(canvas)
     start = page_idx * s.per_page
@@ -359,7 +373,10 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int) -> "Image.Image"
         canvas.paste(resized, (px, py))
 
         if s.labels_on and L.label_font is not None:
-            text = s.label_for(global_idx)
+            if numbers is not None and global_idx < len(numbers):
+                text = s.format_label(numbers[global_idx])
+            else:
+                text = s.label_for(global_idx)
             tw, th = _text_size(draw, text, L.label_font)
             tx = int(round(cell_x + (L.cell_w - tw) / 2))
             ty = int(round(py + new_h + L.label_gap))
@@ -385,7 +402,7 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int) -> "Image.Image"
 
 
 def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
-                   max_dpi: int = 150):
+                   numbers=None, max_dpi: int = 150):
     """Genera (en memoria) UNA hoja de muestra para previsualizar.
 
     Usa un DPI reducido (proporcional, así que es representativo) para que sea
@@ -399,11 +416,15 @@ def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
     num_pages = estimate_pages(len(frame_paths), per_page)
     page_idx = max(0, min(page_idx, max(0, num_pages - 1)))
     chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
-    return _render_page(s, L, chunk, page_idx), num_pages
+    return _render_page(s, L, chunk, page_idx, numbers=numbers), num_pages
 
 
-def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=None):
+def generate(settings: Settings, frame_paths, numbers=None,
+             progress_cb=None, cancel_check=None):
     """Construye y guarda los contact sheets.
+
+    numbers: lista paralela a frame_paths con el número a usar en cada etiqueta
+    (numeración original). Si es None, se numera de forma continua.
 
     Devuelve un dict con las rutas generadas: {'pages': [...], 'pdf': str|None,
     'frames_dir': str|None, ...}.
@@ -422,7 +443,8 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
         frames_dir = out_dir / f"{s.out_name}_frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
         for gidx, fpath in enumerate(frame_paths):
-            label_name = s.label_for(gidx) if s.labels_on else f"{gidx + 1}"
+            num = numbers[gidx] if numbers is not None else (s.start_index + gidx)
+            label_name = s.format_label(num) if s.labels_on else str(num)
             try:
                 shutil.copyfile(fpath, frames_dir / f"{label_name}.png")
             except Exception:
@@ -441,7 +463,7 @@ def generate(settings: Settings, frame_paths, progress_cb=None, cancel_check=Non
             raise _Cancelled()
 
         chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
-        canvas = _render_page(s, L, chunk, page_idx)
+        canvas = _render_page(s, L, chunk, page_idx, numbers=numbers)
 
         page_base = f"{s.out_name}_p{str(page_idx + 1).zfill(file_digits)}"
         if s.fmt_png:

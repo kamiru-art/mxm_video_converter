@@ -41,5 +41,10 @@ if not exist ".venv\.deps_ok" (
 )
 
 echo Abriendo Kamiru...
-python -m kamiru
-if errorlevel 1 pause
+REM pythonw.exe abre la app SIN ventana de consola; al salir, esta se cierra.
+if exist ".venv\Scripts\pythonw.exe" (
+  start "" ".venv\Scripts\pythonw.exe" -m kamiru
+) else (
+  python -m kamiru
+  if errorlevel 1 pause
+)

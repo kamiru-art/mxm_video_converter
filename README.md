@@ -34,6 +34,9 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
   - el **separador** entre el nombre y el número (`_`, `-`, espacio, lo que sea),
   - la cantidad de **ceros a la izquierda** (para tener `1` o `001`),
   - desde qué **número empezar**.
+  - la **numeración**: **continua** (1, 2, 3…) o **original** (la posición real
+    del fotograma en el video, p. ej. `5, 10, 15` si incluyes esos), para no
+    perder el orden real cuando incluyes o excluyes fotogramas.
   - Por defecto el **nombre base es el del video** (+ sufijos); puedes
     desactivarlo para escribir el tuyo.
 - **Numerador de hoja** opcional en cualquier **esquina**, para organizarte
@@ -59,13 +62,21 @@ Solo necesitas tener **Python 3** instalado. Los lanzadores se encargan del rest
 
 > La primera vez tardará un poco (instala dependencias). Las siguientes abre al instante.
 
-### macOS
+### macOS  (recomendado: como una app de verdad)
 1. Instala Python desde <https://www.python.org/downloads/> (incluye lo necesario
    para la ventana).
-2. Haz **doble clic en `run.command`**.
+2. Haz **doble clic en `Kamiru.app`**. Se abre como cualquier app, **sin que
+   aparezca ninguna terminal**. La primera vez prepara todo solo (te avisa con un
+   mensaje y tarda 1–2 minutos).
 
-> Si macOS dice que no puede abrirlo por seguridad: clic derecho → **Abrir** →
-> **Abrir**, solo la primera vez. (O en Terminal: `chmod +x run.command`.)
+> Mantén `Kamiru.app` **dentro de esta carpeta** (usa el repositorio). Truco:
+> arrástrala al **Dock** para tenerla a mano sin moverla de sitio.
+>
+> Si macOS dice que no puede abrirla por seguridad (apps sin firmar): clic
+> derecho sobre `Kamiru.app` → **Abrir** → **Abrir**, solo la primera vez.
+>
+> ¿Prefieres la terminal? También existe `run.command` (doble clic), pero esa sí
+> abre una ventana de Terminal.
 
 ### Linux
 1. Instala Python y Tk:
