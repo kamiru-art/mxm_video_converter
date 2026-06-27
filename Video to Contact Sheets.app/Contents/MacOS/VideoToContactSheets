@@ -1,0 +1,78 @@
+#!/bin/bash
+# Ejecutable de "Video to Contact Sheets.app" — se lanza al hacer DOBLE CLIC en
+# la app, SIN que aparezca ninguna terminal. Prepara el entorno la primera vez.
+#
+# El entorno virtual se crea en "Application Support" (fuera de la carpeta del
+# proyecto) para no chocar con la protección de privacidad de macOS, que impide
+# a las apps escribir dentro de Documentos/Escritorio/Descargas.
+
+HERE="$(cd "$(dirname "$0")" && pwd)"            # …/.app/Contents/MacOS
+PROJECT="$(cd "$HERE/../../.." && pwd)"          # carpeta del proyecto (junto a la .app)
+SUPPORT="$HOME/Library/Application Support/VideoToContactSheets"
+VENV="$SUPPORT/venv"
+LOG="$SUPPORT/setup.log"
+mkdir -p "$SUPPORT" 2>/dev/null
+
+alert() { /usr/bin/osascript -e "display alert \"$1\" message \"$2\" as critical" >/dev/null 2>&1 || true; }
+
+# ¿Podemos leer el código del proyecto? Si macOS lo bloquea (carpeta protegida),
+# avisamos con instrucciones claras en vez de fallar en silencio.
+if ! cat "$PROJECT/requirements.txt" >/dev/null 2>&1; then
+  alert "macOS bloqueó el acceso a la carpeta" "La carpeta del proyecto está en una ubicación protegida (Documentos, Escritorio o Descargas). Para abrir la app, haz UNA de estas opciones:\n\n1) Mueve la carpeta del proyecto a tu carpeta de inicio (por ejemplo ~/Video to Contact Sheets), fuera de Documentos/Escritorio/Descargas. (Lo más fácil.)\n\n2) O concédele acceso: Ajustes del Sistema → Privacidad y seguridad → Acceso a disco completo → añade «Video to Contact Sheets»."
+  exit 1
+fi
+
+pick_python() {
+  local cands=() p w
+  for p in /Library/Frameworks/Python.framework/Versions/*/bin/python3; do
+    [ -x "$p" ] && cands+=("$p")
+  done
+  for name in python3.13 python3.12 python3.11 python3.10 python3; do
+    w="$(command -v "$name" 2>/dev/null || true)"
+    [ -n "$w" ] && cands+=("$w")
+  done
+  for p in "${cands[@]}"; do
+    if "$p" -c 'import tkinter,sys; sys.exit(0 if tkinter.TkVersion>=8.6 else 1)' >/dev/null 2>&1; then
+      echo "$p"; return 0
+    fi
+  done
+  for p in "${cands[@]}"; do
+    if "$p" -c 'import tkinter' >/dev/null 2>&1; then echo "$p"; return 0; fi
+  done
+  return 1
+}
+
+venv_ok() {
+  [ -f "$VENV/.deps_ok" ] && \
+    "$VENV/bin/python" -c 'import tkinter,sys; sys.exit(0 if tkinter.TkVersion>=8.6 else 1)' >/dev/null 2>&1
+}
+
+if ! venv_ok; then
+  /usr/bin/osascript -e 'display dialog "Preparando Video to Contact Sheets por primera vez. Puede tardar 1–2 minutos. Pulsa Aceptar y espera a que se abra la ventana." buttons {"Aceptar"} default button 1 with icon note giving up after 12' >/dev/null 2>&1 || true
+
+  PYBIN="$(pick_python || true)"
+  if [ -z "$PYBIN" ]; then
+    alert "Falta Python" "Instala Python 3 desde https://www.python.org/downloads/ y vuelve a abrir la app."
+    exit 1
+  fi
+  if [ -d "$VENV" ] && ! "$VENV/bin/python" -c 'import tkinter,sys; sys.exit(0 if tkinter.TkVersion>=8.6 else 1)' >/dev/null 2>&1; then
+    rm -rf "$VENV"
+  fi
+  if [ ! -d "$VENV" ]; then
+    "$PYBIN" -m venv "$VENV" || { alert "Error" "No se pudo crear el entorno de Python."; exit 1; }
+    rm -f "$VENV/.deps_ok"
+  fi
+  {
+    "$VENV/bin/python" -m pip install --upgrade pip
+    "$VENV/bin/python" -m pip install -r "$PROJECT/requirements.txt"
+  } >"$LOG" 2>&1
+  if [ $? -ne 0 ]; then
+    alert "No se pudo preparar la app" "Falló la instalación de dependencias. Revisa el archivo:\n$LOG"
+    exit 1
+  fi
+  touch "$VENV/.deps_ok"
+fi
+
+# Abre la app desde la carpeta del proyecto (cwd en sys.path para -m kamiru).
+cd "$PROJECT" || { alert "Error" "No se pudo entrar a la carpeta del proyecto."; exit 1; }
+exec "$VENV/bin/python" -m kamiru

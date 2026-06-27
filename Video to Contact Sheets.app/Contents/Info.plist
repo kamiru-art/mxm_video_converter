@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Video to Contact Sheets</string>
+    <key>CFBundleDisplayName</key>
+    <string>Video to Contact Sheets</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.kamila.videotocontactsheets</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>VideoToContactSheets</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Video to Contact Sheets necesita leer la carpeta del proyecto para abrir la app.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Video to Contact Sheets necesita leer la carpeta del proyecto para abrir la app.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Video to Contact Sheets necesita leer la carpeta del proyecto para abrir la app.</string>
+</dict>
+</plist>

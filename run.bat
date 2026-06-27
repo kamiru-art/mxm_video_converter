@@ -1,5 +1,5 @@
 @echo off
-REM Lanzador para Windows: haz doble clic en este archivo para abrir Kamiru.
+REM Lanzador para Windows: haz doble clic en este archivo para abrir Video to Contact Sheets.
 REM La primera vez crea un entorno virtual e instala las dependencias solo.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -40,7 +40,7 @@ if not exist ".venv\.deps_ok" (
   echo ok> ".venv\.deps_ok"
 )
 
-echo Abriendo Kamiru...
+echo Abriendo Video to Contact Sheets...
 REM pythonw.exe abre la app SIN ventana de consola; al salir, esta se cierra.
 if exist ".venv\Scripts\pythonw.exe" (
   start "" ".venv\Scripts\pythonw.exe" -m kamiru
