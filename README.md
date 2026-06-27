@@ -16,8 +16,9 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
   (p. ej. `0.5` = 1 fotograma cada 2 segundos), o **extraer TODOS los fotogramas**
   (ideal para *mixed media*).
 - Elegir **cuántas imágenes por hoja** (columnas × filas).
-- **Vista previa** 👁 de la primera hoja antes de generar todo, para ver cómo
-  quedará (respeta orientación, nombres, selección de fotogramas, etc.).
+- **Vista previa** 👁 de **todas las hojas** antes de generar, con botones para
+  **navegar** entre ellas (◀ ▶ o las flechas del teclado). Respeta orientación,
+  nombres, numerador y la selección de fotogramas.
 - **Elegir qué fotogramas salen**: un campo para **incluir solo** ciertas
   posiciones y otro para **excluir**, con sintaxis de rangos (p. ej. `1, 3-5`).
 - **Espaciado entre frames** dentro de la hoja, ajustable en milímetros.
@@ -95,9 +96,9 @@ La ventana tiene pestañas numeradas:
    la izquierda configurables.
 6. **Salida** — carpeta, nombre de archivo y formatos (PNG / PDF / TIFF).
 
-Usa **«👁 Vista previa»** para ver la primera hoja antes de generar todo. Luego
-pulsa **«Generar contact sheets»**. Abajo verás una estimación de cuántos
-fotogramas y hojas saldrán, y una barra de progreso.
+Usa **«👁 Vista previa»** para ver todas las hojas (puedes navegar entre ellas)
+antes de generar. Luego pulsa **«Generar contact sheets»**. Abajo verás una
+estimación de cuántos fotogramas y hojas saldrán, y una barra de progreso.
 
 ---
 
