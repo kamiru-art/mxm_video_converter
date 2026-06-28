@@ -42,6 +42,9 @@ los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
 - **Numerador de hoja** opcional en cualquier **esquina**, para organizarte
   fácil (con texto antes del número, p. ej. `Hoja 1`), y con **ceros a la
   izquierda** configurables (`Hoja 001`) para que las hojas se ordenen bien.
+  Además puedes elegir entre numeración de hoja **continua** u **original**: la
+  original conserva el número que la hoja tendría en el video completo (ideal si
+  regeneras solo algunas hojas tras incluir/excluir fotogramas).
 - Elegir la **fuente**, el **tamaño de fuente** y el **margen entre el frame y
   su nombre** para las etiquetas.
 - Guarda en **PNG** (sin pérdida), **PDF** combinado (perfecto para imprimir) y/o
