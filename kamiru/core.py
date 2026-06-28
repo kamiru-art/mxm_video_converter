@@ -39,6 +39,12 @@ NUMBERING = [
     "Original (posición en el video)",
 ]
 
+# Cómo numerar las HOJAS cuando se incluye/excluye.
+PAGE_NUMBERING = [
+    "Continua (1, 2, 3…)",
+    "Original (según los fotogramas)",
+]
+
 try:
     _RESAMPLE = Image.Resampling.LANCZOS  # Pillow >= 9.1
 except AttributeError:  # Pillow antiguo
@@ -113,13 +119,16 @@ class Settings:
         """Etiqueta continua para el índice global n (0-based)."""
         return self.format_label(self.start_index + n)
 
-    def page_label_for(self, page_idx: int) -> str:
-        """Número de hoja (con prefijo y ceros a la izquierda) para page_idx 0-based."""
-        num = self.page_num_start + page_idx
+    def format_page_label(self, num: int) -> str:
+        """Aplica prefijo + ceros a la izquierda a un número de hoja."""
         num_str = str(num)
         if self.page_num_zeros > 1:
             num_str = num_str.zfill(self.page_num_zeros)
         return f"{self.page_num_prefix}{num_str}"
+
+    def page_label_for(self, page_idx: int) -> str:
+        """Número de hoja continuo (con prefijo y ceros) para page_idx 0-based."""
+        return self.format_page_label(self.page_num_start + page_idx)
 
 
 def _load_font(path, size_px: int):
@@ -215,6 +224,23 @@ def select_frames(frame_paths, include_text="", exclude_text=""):
     """Filtra los fotogramas por su posición 1-based (ver select_indices)."""
     idx = select_indices(len(frame_paths), include_text, exclude_text)
     return [frame_paths[i - 1] for i in idx]
+
+
+def original_page_numbers(positions, per_page, start=1):
+    """Número de hoja "original" de cada hoja de salida.
+
+    Dadas las posiciones originales (1-based) de los fotogramas seleccionados y
+    cuántos caben por hoja, devuelve para cada hoja el número que tendría en la
+    secuencia completa (sin incluir/excluir), basándose en el primer fotograma
+    de la hoja. Ej.: con per_page=4, una hoja que empieza en el fotograma 9 es
+    la hoja 3 (los fotogramas 1-4 → hoja 1, 5-8 → hoja 2, 9-12 → hoja 3).
+    """
+    per_page = max(1, int(per_page))
+    out = []
+    for k in range(0, len(positions), per_page):
+        first_pos = positions[k]
+        out.append(start + (first_pos - 1) // per_page)
+    return out
 
 
 def _frame_fit_area(s, landscape, src_w, src_h, label_h, label_gap) -> float:
@@ -335,12 +361,14 @@ def _build_layout(s: Settings) -> _Layout:
 
 
 def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
-                 numbers=None) -> "Image.Image":
+                 numbers=None, page_numbers=None) -> "Image.Image":
     """Dibuja una sola hoja y devuelve la imagen (no la guarda en disco).
 
     numbers: lista paralela a TODOS los fotogramas con el número a mostrar en
     cada etiqueta (numeración original). Si es None, se usa la numeración
     continua (start_index + posición).
+    page_numbers: lista con el número de hoja a mostrar en cada página. Si es
+    None, se usa la numeración continua de hoja (page_num_start + page_idx).
     """
     canvas = Image.new("RGB", (L.page_w, L.page_h), s.bg_color)
     draw = ImageDraw.Draw(canvas)
@@ -384,7 +412,10 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
 
     # Numerador de hoja en la esquina (con prefijo y ceros a la izquierda).
     if s.page_num_on and L.page_font is not None:
-        pno = s.page_label_for(page_idx)
+        if page_numbers is not None and page_idx < len(page_numbers):
+            pno = s.format_page_label(page_numbers[page_idx])
+        else:
+            pno = s.page_label_for(page_idx)
         tw, th = _text_size(draw, pno, L.page_font)
         pad = max(L.margin // 3, paper.mm_to_px(3, L.dpi))
         corner = s.page_num_corner
@@ -402,7 +433,7 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
 
 
 def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
-                   numbers=None, max_dpi: int = 150):
+                   numbers=None, page_numbers=None, max_dpi: int = 150):
     """Genera (en memoria) UNA hoja de muestra para previsualizar.
 
     Usa un DPI reducido (proporcional, así que es representativo) para que sea
@@ -416,15 +447,20 @@ def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
     num_pages = estimate_pages(len(frame_paths), per_page)
     page_idx = max(0, min(page_idx, max(0, num_pages - 1)))
     chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
-    return _render_page(s, L, chunk, page_idx, numbers=numbers), num_pages
+    img = _render_page(s, L, chunk, page_idx, numbers=numbers,
+                       page_numbers=page_numbers)
+    return img, num_pages
 
 
-def generate(settings: Settings, frame_paths, numbers=None,
+def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
              progress_cb=None, cancel_check=None):
     """Construye y guarda los contact sheets.
 
     numbers: lista paralela a frame_paths con el número a usar en cada etiqueta
     (numeración original). Si es None, se numera de forma continua.
+    page_numbers: lista con el número de cada hoja (numeración original de hoja).
+    Si es None, se numera de forma continua (page_num_start + posición). Afecta
+    al numerador impreso y al nombre de archivo de cada hoja.
 
     Devuelve un dict con las rutas generadas: {'pages': [...], 'pdf': str|None,
     'frames_dir': str|None, ...}.
@@ -452,9 +488,16 @@ def generate(settings: Settings, frame_paths, numbers=None,
 
     per_page = s.per_page
     num_pages = estimate_pages(len(frame_paths), per_page)
+
+    def _pnum(k):
+        if page_numbers is not None and k < len(page_numbers):
+            return page_numbers[k]
+        return s.page_num_start + k
+
     # Ceros en el nombre de archivo: respeta page_num_zeros pero garantiza que
-    # las hojas se ordenen bien aunque haya muchas.
-    file_digits = max(s.page_num_zeros, len(str(max(1, num_pages))))
+    # las hojas se ordenen bien aunque los números sean grandes (orden original).
+    max_pnum = max([_pnum(k) for k in range(num_pages)] + [1])
+    file_digits = max(s.page_num_zeros, len(str(max(1, max_pnum))))
     page_paths = []
     page_images_for_pdf = []
 
@@ -463,9 +506,10 @@ def generate(settings: Settings, frame_paths, numbers=None,
             raise _Cancelled()
 
         chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
-        canvas = _render_page(s, L, chunk, page_idx, numbers=numbers)
+        canvas = _render_page(s, L, chunk, page_idx, numbers=numbers,
+                              page_numbers=page_numbers)
 
-        page_base = f"{s.out_name}_p{str(page_idx + 1).zfill(file_digits)}"
+        page_base = f"{s.out_name}_p{str(_pnum(page_idx)).zfill(file_digits)}"
         if s.fmt_png:
             ppath = out_dir / f"{page_base}.png"
             canvas.save(ppath, "PNG", dpi=(dpi, dpi), compress_level=6)

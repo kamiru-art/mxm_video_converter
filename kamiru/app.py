@@ -209,6 +209,7 @@ class App(tk.Tk):
         v.var_pagenum_prefix = tk.StringVar(value="")
         v.var_pagenum_start = tk.IntVar(value=1)
         v.var_pagenum_zeros = tk.IntVar(value=1)
+        v.var_pagenum_order = tk.StringVar(value=core.PAGE_NUMBERING[0])
         v.var_pagenum_size = tk.DoubleVar(value=11.0)
         v.var_pagenum_color = tk.StringVar(value="#000000")
         # Salida
@@ -466,11 +467,16 @@ class App(tk.Tk):
         ttk.Spinbox(sec, from_=1, to=8, width=6,
                     textvariable=self.var_pagenum_zeros).grid(
             row=3, column=3, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(sec, text="Tamaño de fuente (pt):").grid(row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(sec, text="Orden al incluir/excluir:").grid(
+            row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(sec, values=core.PAGE_NUMBERING, textvariable=self.var_pagenum_order,
+                     state="readonly", width=28).grid(
+            row=4, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Tamaño de fuente (pt):").grid(row=5, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(sec, from_=4, to=72, increment=0.5, width=8,
-                    textvariable=self.var_pagenum_size).grid(row=4, column=1, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(sec, text="Color:").grid(row=5, column=0, sticky="w", pady=(6, 0))
-        self._color_picker(sec, self.var_pagenum_color, row=5, col=1)
+                    textvariable=self.var_pagenum_size).grid(row=5, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Color:").grid(row=6, column=0, sticky="w", pady=(6, 0))
+        self._color_picker(sec, self.var_pagenum_color, row=6, col=1)
 
     def _tab_output(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
@@ -749,6 +755,7 @@ class App(tk.Tk):
         fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
         inc, exc = self.var_include.get(), self.var_exclude.get()
         orig = self.var_numbering.get().lower().startswith("original")
+        page_orig = self.var_pagenum_order.get().lower().startswith("original")
 
         self._cancel = False
         self._set_busy(True)
@@ -756,11 +763,13 @@ class App(tk.Tk):
         self._set_status("Preparando…")
 
         self.worker = threading.Thread(
-            target=self._work, args=(s, start, end, fps, inc, exc, orig), daemon=True)
+            target=self._work, args=(s, start, end, fps, inc, exc, orig, page_orig),
+            daemon=True)
         self.worker.start()
         self.after(100, self._poll_queue)
 
-    def _work(self, settings, start, end, fps, inc, exc, numbering_original):
+    def _work(self, settings, start, end, fps, inc, exc, numbering_original,
+              page_numbering_original):
         tmp = None
         try:
             ff = find_ffmpeg()
@@ -783,6 +792,9 @@ class App(tk.Tk):
                     "ningún fotograma. Revisa esos campos.")
             sel = [frames[i - 1] for i in positions]
             numbers = positions if numbering_original else None
+            page_numbers = (core.original_page_numbers(
+                positions, settings.per_page, settings.page_num_start)
+                if page_numbering_original else None)
             if len(sel) != len(frames):
                 self.queue.put(("status",
                                 f"{len(sel)} de {len(frames)} fotogramas seleccionados. "
@@ -795,8 +807,8 @@ class App(tk.Tk):
                 self.queue.put(("compose", done, total))
 
             result = core.generate(
-                settings, sel, numbers=numbers, progress_cb=comp_progress,
-                cancel_check=lambda: self._cancel)
+                settings, sel, numbers=numbers, page_numbers=page_numbers,
+                progress_cb=comp_progress, cancel_check=lambda: self._cancel)
             self.queue.put(("done", result))
         except Exception as e:
             if self._cancel:
@@ -820,6 +832,7 @@ class App(tk.Tk):
         fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
         inc, exc = self.var_include.get(), self.var_exclude.get()
         orig = self.var_numbering.get().lower().startswith("original")
+        page_orig = self.var_pagenum_order.get().lower().startswith("original")
 
         self._cancel = False
         self._set_busy(True)
@@ -828,12 +841,13 @@ class App(tk.Tk):
         self._set_status("Preparando vista previa…")
 
         self.worker = threading.Thread(
-            target=self._work_preview, args=(s, start, end, fps, inc, exc, orig),
-            daemon=True)
+            target=self._work_preview,
+            args=(s, start, end, fps, inc, exc, orig, page_orig), daemon=True)
         self.worker.start()
         self.after(100, self._poll_queue)
 
-    def _work_preview(self, settings, start, end, fps, inc, exc, numbering_original):
+    def _work_preview(self, settings, start, end, fps, inc, exc,
+                      numbering_original, page_numbering_original):
         tmp = None
         keep_tmp = False
         try:
@@ -858,15 +872,19 @@ class App(tk.Tk):
                     "para previsualizar.")
             sel = [frames[i - 1] for i in positions]
             numbers = positions if numbering_original else None
+            page_numbers = (core.original_page_numbers(
+                positions, settings.per_page, settings.page_num_start)
+                if page_numbering_original else None)
             self.queue.put(("status", "Renderizando vista previa…"))
-            first_img, num_pages = core.render_preview(settings, sel, 0, numbers=numbers)
+            first_img, num_pages = core.render_preview(
+                settings, sel, 0, numbers=numbers, page_numbers=page_numbers)
             truncated = len(frames) >= PREVIEW_ALL_CAP
             # No borramos tmp: las demás hojas se renderizan bajo demanda al
             # navegar. La ventana de preview limpiará la carpeta al cerrarse.
             keep_tmp = True
             self.queue.put(("preview_multi",
                             (first_img, sel, settings, num_pages, len(sel), tmp,
-                             truncated, numbers)))
+                             truncated, numbers, page_numbers)))
         except Exception as e:
             if self._cancel:
                 self.queue.put(("cancelled", None))
@@ -919,11 +937,11 @@ class App(tk.Tk):
             self._set_status(f"Componiendo hojas…  {done}/{total}")
         elif kind == "preview_multi":
             (first_img, frames, settings, num_pages, nsel, tmpdir,
-             truncated, numbers) = msg[1]
+             truncated, numbers, page_numbers) = msg[1]
             self._reset_run()
             self._set_status(f"Vista previa lista ({num_pages} hoja(s)).")
             self._show_multi_preview(first_img, frames, settings, num_pages,
-                                     nsel, tmpdir, truncated, numbers)
+                                     nsel, tmpdir, truncated, numbers, page_numbers)
         elif kind == "done":
             self._finish_ok(msg[1])
         elif kind == "cancelled":
@@ -972,7 +990,7 @@ class App(tk.Tk):
         self.worker = None
 
     def _show_multi_preview(self, first_img, frames, settings, num_pages, nsel,
-                            tmpdir, truncated, numbers=None):
+                            tmpdir, truncated, numbers=None, page_numbers=None):
         """Ventana de vista previa con navegación por TODAS las hojas.
 
         La hoja 0 ya viene renderizada; las demás se renderizan bajo demanda al
@@ -1007,7 +1025,8 @@ class App(tk.Tk):
 
         def render_pil(k):
             if k not in state["cache"]:
-                img, _ = core.render_preview(settings, frames, k, numbers=numbers)
+                img, _ = core.render_preview(settings, frames, k, numbers=numbers,
+                                             page_numbers=page_numbers)
                 state["cache"][k] = img
             return state["cache"][k]
 
@@ -1086,7 +1105,8 @@ class App(tk.Tk):
             "(vertical, horizontal o mejor ajuste automático), DPI y márgenes.\n"
             "4) Pestaña 4: nombre base, separador y ceros para los nombres "
             "(abc_001, abc_002, …) y la fuente/tamaño.\n"
-            "5) Pestaña 5: numerador de hoja en la esquina.\n"
+            "5) Pestaña 5: numerador de hoja en la esquina, con orden continuo "
+            "u original (para conservar el número de hoja al incluir/excluir).\n"
             "6) Pestaña 6: carpeta, nombre de archivo y formatos (PNG/PDF/TIFF).\n\n"
             "Usa «👁 Vista previa» para ver la primera hoja antes de generar todo.\n"
             "Pulsa «Generar contact sheets». Las imágenes se extraen en PNG sin "
