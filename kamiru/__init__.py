@@ -1,8 +1,12 @@
-"""Video to Contact Sheets — convierte un video en contact sheets imprimibles.
+"""Kamiru Studio — Contact sheets, mixed media y cianotipia en una sola app.
 
-Una app de escritorio (interfaz gráfica) pensada para usarse sin tocar código,
-sin perder calidad ni alterar el color.
+Convierte un video (o una carpeta de fotogramas) en contact sheets imprimibles,
+con marcadores de registro (ArUco + QR) para poder pintar sobre las hojas,
+escanearlas y recuperar cada fotograma recortado y alineado automáticamente,
+sin depender de Photoshop. Incluye modo de negativos para cianotipia,
+calibración de impresora y de proceso de cianotipia, y reconstrucción del
+video final.
 """
 
-__version__ = "1.0.0"
-__app_name__ = "Video to Contact Sheets"
+__version__ = "2.0.0"
+__app_name__ = "Kamiru Studio"
