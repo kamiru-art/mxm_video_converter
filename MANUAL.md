@@ -49,6 +49,22 @@ La ventana tiene **4 pestañas grandes** (fases), en el orden del flujo:
 
 ## 2. Instalación (solo la primera vez)
 
+### La forma fácil: descarga el ejecutable (recomendada)
+
+1. Entra a la página de **Releases** del repositorio en GitHub.
+2. Descarga el archivo de tu sistema:
+   - **Windows**: `Kamiru-Studio-windows.zip` → descomprime la carpeta donde
+     quieras y abre `Kamiru-Studio.exe`. (Si SmartScreen avisa: «Más
+     información» → «Ejecutar de todas formas».)
+   - **macOS con chip Apple (M1–M4)**: `Kamiru-Studio-macos-apple-silicon.zip`
+     → descomprime y abre `Kamiru-Studio.app`. La primera vez: **clic
+     derecho → Abrir → Abrir** (es una app sin firmar).
+   - **Linux**: `Kamiru-Studio-linux.tar.gz` → descomprime y ejecuta
+     `Kamiru-Studio/Kamiru-Studio`.
+3. Listo. **No hace falta instalar Python, ni git, ni nada.**
+
+### La forma clásica: desde el código
+
 1. Instala **Python 3** desde <https://www.python.org/downloads/>
    (en Windows, marca la casilla **"Add Python to PATH"**).
 2. Abre la app:
@@ -105,8 +121,12 @@ preset "MXM 2×2" y otro "Cianotipia A4".
   Tolerancia 4 recomendada; 0 = solo idénticos exactos.
 
 ### Pestaña 3 · Hoja
-- Tamaño de hoja, orientación (el "mejor ajuste" elige la que agranda más los
-  fotogramas), **DPI** (300 = imprenta), margen y color de fondo.
+- Tamaño de hoja, orientación y **DPI** (300 = imprenta), margen y color de
+  fondo. El **"mejor ajuste"** prueba vertical/horizontal **y también la
+  cuadrícula intercambiada** (p. ej. 4×5 ↔ 5×4, misma cantidad por hoja) y
+  elige la combinación que deja los fotogramas más grandes — siempre igual o
+  mejor que eligiendo a mano. Si intercambió la cuadrícula, te lo dice al
+  terminar.
 - **Perfil de impresora**: si ya calibraste (fase ③), elígelo aquí. La app
   compensará la escala real de tu impresora y con el botón
   *"Aplicar tamaños recomendados"* usará los tamaños de marcador/QR que se
@@ -231,28 +251,45 @@ emulsionado y exponerlo al sol, la luz UV pasa por las zonas transparentes
 Kamiru Studio hace todo el trabajo raro por ti. Con el **modo cianotipia**
 activado (fase ①, pestaña 7):
 
-- Cada hoja sale como **negativo**: imágenes invertidas, **fondo entintado**
-  (para que el papel alrededor quede blanco), y los **marcadores, QRs y
-  nombres también invertidos** — así, en la copia azul final, todo queda con
-  la polaridad normal y la fase ② la procesa como cualquier hoja.
+- Cada hoja sale como **negativo**: imágenes invertidas y los **marcadores,
+  QRs y nombres también invertidos** — así, en la copia azul final, todo queda
+  con la polaridad normal y la fase ② la procesa como cualquier hoja.
+- **Fondo del negativo (consumo de tinta)**, a elegir:
+  - **AHORRO DE TINTA** (por defecto): las zonas muertas quedan
+    **transparentes** (sin tinta) y solo los marcadores, QRs y nombres llevan
+    un **halo entintado** (margen configurable, 3 mm por defecto) para
+    distinguirse. En la copia azul el fondo queda **azul** y cada marcador/QR
+    flota en su islita blanca. Gasta una fracción de la tinta.
+  - **Fondo COMPLETO**: toda la zona muerta va entintada; en la copia azul el
+    fondo queda **blanco papel** (como una hoja normal). Bonito, pero carísimo
+    en tinta.
 - **Espejado** (activado por defecto): el negativo se imprime en espejo para
   exponer "cara impresa contra papel" (más nitidez). La copia azul queda
   derecha sola.
-- **Color de tinta**: negro por defecto; algunas impresoras bloquean mejor el
-  UV con tintas cálidas (naranja/ámbar). Prueba con la calibración.
+- **Color de tinta**: negro por defecto, PERO el negro no siempre es lo que
+  mejor bloquea el UV. La carta **EDN ColorBlocker** (fase ③) mide qué color
+  bloquea mejor en TU impresora y crea un **perfil de color** (con degradado
+  de 3 paradas). Si eliges un perfil de color en la pestaña 7, reemplaza al
+  color simple.
 - **Curva de compensación**: la joya. La química de la cianotipia no responde
   de forma lineal; sin corrección, los medios tonos se aplastan. La curva se
-  crea con la calibración (fase ③) y se aplica sola al generar los negativos.
+  crea con la calibración (fase ③, tira Kamiru o carta EDN 2.2) y se aplica
+  sola al generar los negativos. Si generas negativos sin curva, la app te
+  ofrece crear la hoja de calibración primero.
 
 ### Receta completa de cianotipia
-1. **(Una vez)** Calibra: fase ③ → Cianotipia → genera la tira → imprímela en
-   acetato → haz tu cianotipia como siempre (mismo sol, mismos tiempos) →
-   escanea la copia azul seca → analiza → guarda el perfil.
-2. Fase ① → pestaña 7: activa **modo cianotipia**, elige tu **curva** y tu
-   color de tinta. Marcadores activados (pestaña 6).
-3. Genera las hojas → imprímelas en **acetato** al 100 %.
-4. Expón tus cianotipias al sol, revela, lava y **seca**.
-5. **Escanea las copias azules** (no los acetatos) → fase ② en modo
+1. **(Una vez, opcional pero muy recomendado)** Fase ③ → carta
+   **EDN ColorBlocker** → imprímela en acetato → cianotipia → escanea → analiza
+   → guarda el **perfil de color** (descubre tu mejor tinta).
+2. **(Una vez)** Fase ③ → carta de curva (**tira Kamiru** o **EDN 2.2 de 256
+   tonos**), con tu perfil de color elegido → imprime en acetato → cianotipia
+   → escanea la copia azul seca → analiza → guarda el **perfil de curva**.
+3. Fase ① → pestaña 7: activa **modo cianotipia**, elige **fondo ahorro o
+   completo**, tu **perfil de color** y tu **curva**. Marcadores activados
+   (pestaña 6).
+4. Genera las hojas → imprímelas en **acetato** al 100 %.
+5. Expón tus cianotipias al sol, revela, lava y **seca**.
+6. **Escanea las copias azules** (no los acetatos) → fase ② en modo
    "Automático" → fotogramas azules perfectos → fase ④ → video de cianotipia.
 
 > 💡 La app tolera la **variabilidad de tonos** del azul (exposiciones
@@ -279,14 +316,28 @@ activado (fase ①, pestaña 7):
 4. Ponle nombre y **Guardar perfil** → aparece en la fase ①, pestaña Hoja.
 
 ### Cianotipia ☀️
-1. Elige color de tinta y espejado (los MISMOS que usarás de verdad) →
-   **Generar tira de calibración** → imprímela en acetato.
-2. Haz la cianotipia de esa tira exactamente con tu proceso normal.
-3. Escanea la copia azul seca → **Analizar cianotipia**. La app mide la
-   respuesta real de todo tu proceso y construye la **curva de compensación**;
-   además informa el **rango dinámico** logrado y da sugerencias (p. ej. si
-   la tinta plena no está bloqueando bien el UV).
+
+Elige primero la **carta** en el desplegable:
+
+| Carta | Para qué sirve |
+|---|---|
+| **Tira Kamiru (21 parches)** | Curva de compensación rápida. Ideal para empezar. |
+| **Carta EDN 2.2 (256 tonos)** | Curva de compensación FINA con los 256 valores, según el método [Easy Digital Negatives](http://www.easydigitalnegatives.com/) de Peter Mrhar. Aquí viene con el marco de marcadores de Kamiru: el análisis del escaneo es automático (no hay que recortar ni subir nada a ninguna web). |
+| **EDN ColorBlocker 3** | Descubre **qué color de tinta bloquea mejor el UV** en tu impresora (36 matices × 21 variantes + grises). Produce un **perfil de color** con el mejor color y un degradado de 3 paradas. |
+
+El flujo es el mismo para las tres:
+1. Elige color de tinta/perfil de color y espejado (los MISMOS que usarás de
+   verdad) → **Generar carta de calibración** → imprímela en acetato al 100 %
+   en calidad máxima.
+2. Haz la cianotipia de esa carta exactamente con tu proceso normal.
+3. Escanea la copia azul seca → **Analizar cianotipia**. Según la carta, la
+   app construye la **curva de compensación** (con rango dinámico y
+   sugerencias) o el **perfil de color** (mejor bloqueador + degradado).
 4. **Guardar perfil** → aparece en la fase ①, pestaña Cianotipia.
+
+Orden recomendado: primero el **ColorBlocker** (una vez, para conocer tu mejor
+tinta) y después la **curva** (tira Kamiru o EDN 2.2) usando ese perfil de
+color, para que la curva mida tu proceso real completo.
 
 > Recalibra si cambias de impresora, tinta, acetato, papel, química o si la
 > luz de tu proceso cambia mucho (verano/invierno).

@@ -14,6 +14,23 @@ from .gui_common import PAD, PhaseFrame
 _IMG_TYPES = [("Imágenes", "*.tif *.tiff *.png *.jpg *.jpeg"),
               ("Todos los archivos", "*.*")]
 
+# Cartas de calibración de cianotipia elegibles en la interfaz.
+CYANO_TARGET_LABELS = [
+    "Tira Kamiru (21 parches)",
+    "Carta EDN 2.2 (256 tonos)",
+    "EDN ColorBlocker 3 (elegir color de tinta)",
+]
+NO_COLOR_PROFILE = "(color simple, sin degradado)"
+
+
+def _target_key(label: str) -> str:
+    l = (label or "").lower()
+    if "colorblocker" in l:
+        return "colorblocker"
+    if "edn" in l:
+        return "edn256"
+    return "kamiru21"
+
 
 # ════════════════════════════════════════════════════════════════
 # FASE 2 · PROCESAR ESCANEOS
@@ -336,6 +353,8 @@ class CalibPhase(PhaseFrame):
         self.var_c_mirror = tk.BooleanVar(value=True)
         self.var_c_scan = tk.StringVar()
         self.var_c_name = tk.StringVar(value="Mi cianotipia")
+        self.var_c_target = tk.StringVar(value=CYANO_TARGET_LABELS[0])
+        self.var_c_colorprofile = tk.StringVar(value=NO_COLOR_PROFILE)
 
     def _build_ui(self):
         cols = ttk.Frame(self)
@@ -388,14 +407,27 @@ class CalibPhase(PhaseFrame):
 
         # ── Cianotipia ───────────────────────────────────────────
         sec = self.section(right, "☀️  Cianotipia")
-        ttk.Label(sec, text="1. Genera la tira, imprímela en ACETATO (mismo "
-                            "color de tinta y espejado que usarás), expón tu "
-                            "cianotipia como siempre, revela, seca y escanea "
+        ttk.Label(sec, text="1. Elige la carta, genérala, imprímela en ACETATO "
+                            "(mismo color de tinta y espejado que usarás), expón "
+                            "tu cianotipia como siempre, revela, seca y escanea "
                             "el resultado azul.",
                   style="Sub.TLabel", wraplength=380).grid(
             row=0, column=0, columnspan=3, sticky="w")
+
+        tg = ttk.Frame(sec)
+        tg.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(tg, text="Carta:").pack(side="left")
+        ttk.Combobox(tg, values=CYANO_TARGET_LABELS,
+                     textvariable=self.var_c_target, state="readonly",
+                     width=34).pack(side="left", padx=4)
+        ttk.Label(sec, text="EDN 2.2 = curva fina con 256 tonos · ColorBlocker "
+                            "= descubre QUÉ COLOR de tinta bloquea mejor el UV "
+                            "en tu impresora (método easydigitalnegatives.com).",
+                  style="Sub.TLabel", wraplength=380).grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
         cc = ttk.Frame(sec)
-        cc.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        cc.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(cc, text="Papel:").pack(side="left")
         ttk.Combobox(cc, values=[p for p in paper.PAPER_ORDER if p != "Personalizado"],
                      textvariable=self.var_c_paper, state="readonly",
@@ -404,34 +436,42 @@ class CalibPhase(PhaseFrame):
         ttk.Spinbox(cc, from_=150, to=1200, increment=50, width=6,
                     textvariable=self.var_c_dpi).pack(side="left", padx=4)
         ik = ttk.Frame(sec)
-        ik.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ik.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Label(ik, text="Color de tinta del negativo:").grid(row=0, column=0)
         self.color_picker(ik, self.var_c_ink, row=0, col=1)
+        cp = ttk.Frame(sec)
+        cp.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(cp, text="Perfil de color (ColorBlocker):").pack(side="left")
+        self.c_colorprofile_cb = ttk.Combobox(
+            cp, textvariable=self.var_c_colorprofile, state="readonly",
+            width=24, values=[NO_COLOR_PROFILE])
+        self.c_colorprofile_cb.pack(side="left", padx=4)
         ttk.Checkbutton(sec, text="Espejar (imprimir en espejo, recomendado)",
                         variable=self.var_c_mirror).grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        ttk.Button(sec, text="Generar tira de calibración…",
+            row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Button(sec, text="Generar carta de calibración…",
                    command=self._gen_cyano_strip).grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(8, 4))
+            row=7, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
         ttk.Label(sec, text="2. Analiza el escaneo de la CIANOTIPIA (no del acetato):",
                   style="Sub.TLabel", wraplength=380).grid(
-            row=5, column=0, columnspan=3, sticky="w")
+            row=8, column=0, columnspan=3, sticky="w")
         ttk.Entry(sec, textvariable=self.var_c_scan).grid(
-            row=6, column=0, columnspan=2, sticky="ew", padx=(0, 4), pady=(4, 0))
+            row=9, column=0, columnspan=2, sticky="ew", padx=(0, 4), pady=(4, 0))
         ttk.Button(sec, text="Examinar…",
                    command=lambda: self._pick(self.var_c_scan)).grid(
-            row=6, column=2, pady=(4, 0))
+            row=9, column=2, pady=(4, 0))
         ttk.Button(sec, text="Analizar cianotipia", command=self._analyze_cyano).grid(
-            row=7, column=0, columnspan=3, sticky="w", pady=(8, 4))
+            row=10, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
         nn = ttk.Frame(sec)
-        nn.grid(row=8, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        nn.grid(row=11, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Label(nn, text="Nombre del perfil:").pack(side="left")
         ttk.Entry(nn, textvariable=self.var_c_name, width=18).pack(side="left", padx=4)
         self.c_save_btn = ttk.Button(nn, text="Guardar perfil", state="disabled",
                                      command=self._save_cyano)
         self.c_save_btn.pack(side="left", padx=4)
+        self.refresh_color_profiles()
 
         self.build_log(self, height=10)
         self._append_log(
@@ -487,19 +527,45 @@ class CalibPhase(PhaseFrame):
             self.queue.put(("error", str(e)))
 
     # ---------------------------------------------------------- cianotipia
+    def refresh_color_profiles(self):
+        values = [NO_COLOR_PROFILE] + config.list_profiles("cianotipia_color")
+        self.c_colorprofile_cb.configure(values=values)
+        if self.var_c_colorprofile.get() not in values:
+            self.var_c_colorprofile.set(NO_COLOR_PROFILE)
+
+    def _color_stops(self):
+        """Stops del perfil de color elegido (o None para color simple)."""
+        name = self.var_c_colorprofile.get()
+        if not name or name == NO_COLOR_PROFILE:
+            return None
+        prof = config.load_profile("cianotipia_color", name)
+        return prof.get("stops") if prof else None
+
     def _gen_cyano_strip(self):
+        target = _target_key(self.var_c_target.get())
+        nombre = {"colorblocker": "colorblocker",
+                  "edn256": "carta_edn256",
+                  "kamiru21": "tira_cianotipia"}[target]
         path = filedialog.asksaveasfilename(
-            title="Guardar tira de calibración",
+            title="Guardar carta de calibración",
             defaultextension=".tif",
-            initialfile="tira_cianotipia.tif",
+            initialfile=f"{nombre}.tif",
             filetypes=[("TIFF", "*.tif"), ("PNG", "*.png")])
         if not path:
             return
         try:
-            out = calibration.generar_tira_cianotipia(
-                path, self.var_c_paper.get(), self.to_int(self.var_c_dpi, 300),
-                self.var_c_ink.get(), self.var_c_mirror.get())
-            self.log(f"✅ Tira de calibración guardada: {out}")
+            if target == "colorblocker":
+                out = calibration.generar_colorblocker(
+                    path, self.var_c_paper.get(),
+                    self.to_int(self.var_c_dpi, 300),
+                    self.var_c_mirror.get())
+            else:
+                out = calibration.generar_tira_cianotipia(
+                    path, self.var_c_paper.get(),
+                    self.to_int(self.var_c_dpi, 300),
+                    self.var_c_ink.get(), self.var_c_mirror.get(),
+                    target=target, ink_stops=self._color_stops())
+            self.log(f"✅ Carta de calibración guardada: {out}")
             self.log("   Imprímela en acetato, haz tu cianotipia como siempre "
                      "y escanea el resultado azul seco.")
         except Exception as e:
@@ -509,18 +575,24 @@ class CalibPhase(PhaseFrame):
         scan_path = self.var_c_scan.get().strip()
         if not scan_path or not Path(scan_path).is_file():
             messagebox.showwarning("Falta algo", "Elige el escaneo de la "
-                                                 "cianotipia de la tira.")
+                                                 "cianotipia de la carta.")
             return
         self.log("═" * 30)
         self.log("Analizando cianotipia…")
         self.start_worker(self._work_cyano, scan_path,
-                          self.var_c_paper.get(), self.to_int(self.var_c_dpi, 300))
+                          self.var_c_paper.get(), self.to_int(self.var_c_dpi, 300),
+                          _target_key(self.var_c_target.get()))
 
-    def _work_cyano(self, scan_path, paper_name, dpi):
+    def _work_cyano(self, scan_path, paper_name, dpi, target):
         try:
-            prof = calibration.analizar_tira_cianotipia(
-                scan_path, paper_name, dpi, log=self.log)
-            self.queue.put(("cyano_done", prof))
+            if target == "colorblocker":
+                prof = calibration.analizar_colorblocker(
+                    scan_path, paper_name, dpi, log=self.log)
+                self.queue.put(("cb_done", prof))
+            else:
+                prof = calibration.analizar_tira_cianotipia(
+                    scan_path, paper_name, dpi, target=target, log=self.log)
+                self.queue.put(("cyano_done", prof))
         except Exception as e:
             self.queue.put(("error", str(e)))
 
@@ -541,9 +613,19 @@ class CalibPhase(PhaseFrame):
             self._cyano_profile = msg[1]
             p = msg[1]
             self.log(f"📋 Rango dinámico: {p['rango_dinamico'] * 100:.0f} % · "
-                     f"curva de {len(p['lut'])} valores construida.")
+                     f"curva de {len(p['lut'])} valores construida "
+                     f"({p.get('steps', '?')} parches medidos).")
             for n in p.get("notas", []):
                 self.log(f"   • {n}")
+            self.c_save_btn.configure(state="normal")
+        elif kind == "cb_done":
+            self._cyano_profile = msg[1]
+            p = msg[1]
+            self.log(f"📋 Mejor color bloqueador: {p['mejor_color']} · "
+                     f"degradado: " + " → ".join(c for _, c in p["stops"]))
+            for n in p.get("notas", []):
+                self.log(f"   • {n}")
+            self.var_c_ink.set(p["mejor_color"])
             self.c_save_btn.configure(state="normal")
         elif kind == "error":
             messagebox.showerror("Ups, algo falló", msg[1])
@@ -563,8 +645,13 @@ class CalibPhase(PhaseFrame):
         if not self._cyano_profile:
             return
         name = self.var_c_name.get().strip() or "Mi cianotipia"
-        path = config.save_profile("cianotipia", name, self._cyano_profile)
-        self.log(f"💾 Perfil de cianotipia «{name}» guardado ({path}).")
+        kind = ("cianotipia_color"
+                if self._cyano_profile.get("tipo") == "cianotipia_color"
+                else "cianotipia")
+        path = config.save_profile(kind, name, self._cyano_profile)
+        etiqueta = "de color (ColorBlocker)" if kind == "cianotipia_color" else "de curva"
+        self.log(f"💾 Perfil {etiqueta} «{name}» guardado ({path}).")
+        self.refresh_color_profiles()
         try:
             self.app.sheets_phase.refresh_profiles()
         except Exception:

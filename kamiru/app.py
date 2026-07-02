@@ -32,7 +32,7 @@ from . import fonts as fontmod
 from . import markers, paper
 from .ffmpeg_utils import VideoInfo, extract_frames, find_ffmpeg, probe
 from .gui_common import PAD, PALETTE, PhaseFrame, build_style
-from .gui_phases import CalibPhase, ScansPhase, VideoPhase
+from .gui_phases import NO_COLOR_PROFILE, CalibPhase, ScansPhase, VideoPhase
 
 VIDEO_TYPES = [
     ("Videos", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv *.flv *.mts *.m2ts"),
@@ -140,6 +140,9 @@ class SheetsPhase(PhaseFrame):
         v.var_cyan_ink = tk.StringVar(value="#000000")
         v.var_cyan_curve = tk.StringVar(value=NO_CURVE)
         v.var_cyan_sim = tk.BooleanVar(value=False)
+        v.var_cyan_bg = tk.StringVar(value="ahorro")  # ahorro | completo
+        v.var_cyan_halo = tk.DoubleVar(value=3.0)
+        v.var_cyan_colorprofile = tk.StringVar(value=NO_COLOR_PROFILE)
         # Salida
         v.var_out_dir = tk.StringVar()
         v.var_out_name = tk.StringVar(value="contact_sheet")
@@ -551,15 +554,44 @@ class SheetsPhase(PhaseFrame):
                                   "exponer emulsión contra emulsión — recomendado)",
                         variable=self.var_cyan_mirror).grid(
             row=2, column=0, columnspan=3, sticky="w")
+
+        sec = self.section(tab, "Fondo del negativo (consumo de tinta)")
+        ttk.Radiobutton(
+            sec, text="AHORRO DE TINTA: fondo transparente; solo los marcadores, "
+                      "QRs y nombres llevan un halo entintado (el fondo de la "
+                      "cianotipia queda AZUL)",
+            variable=self.var_cyan_bg, value="ahorro").grid(
+            row=0, column=0, columnspan=3, sticky="w")
+        ttk.Radiobutton(
+            sec, text="Fondo COMPLETO: toda la zona muerta entintada (gasta mucha "
+                      "más tinta; el fondo de la cianotipia queda BLANCO papel)",
+            variable=self.var_cyan_bg, value="completo").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        hh = ttk.Frame(sec)
+        hh.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(hh, text="Halo entintado alrededor de marcadores/QRs/nombres (mm):").pack(side="left")
+        ttk.Spinbox(hh, from_=1.0, to=10.0, increment=0.5, width=6,
+                    textvariable=self.var_cyan_halo).pack(side="left", padx=4)
+
+        sec = self.section(tab, "Color de la tinta del negativo")
         ik = ttk.Frame(sec)
-        ik.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(ik, text="Color de tinta del negativo:").grid(row=0, column=0)
+        ik.grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(ik, text="Color simple:").grid(row=0, column=0)
         self.color_picker(ik, self.var_cyan_ink, row=0, col=1)
-        ttk.Label(sec, text="Negro es lo estándar; algunas impresoras bloquean "
-                            "mejor el UV con tintas cálidas (naranja/ámbar). "
-                            "Compara con la calibración de la fase ③.",
+        cp = ttk.Frame(sec)
+        cp.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(cp, text="Perfil de color (ColorBlocker):").pack(side="left")
+        self.colorprofile_cb = ttk.Combobox(cp, textvariable=self.var_cyan_colorprofile,
+                                            state="readonly", width=26,
+                                            values=[NO_COLOR_PROFILE])
+        self.colorprofile_cb.pack(side="left", padx=4)
+        ttk.Label(sec, text="El negro no siempre es lo que mejor bloquea el UV. "
+                            "El perfil ColorBlocker (fase ③, método "
+                            "easydigitalnegatives.com) usa el color/degradado "
+                            "medido como MEJOR bloqueador en TU impresora; si "
+                            "eliges uno, reemplaza al color simple.",
                   style="Sub.TLabel", wraplength=740).grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(2, 0))
+            row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
         sec = self.section(tab, "Curva de compensación (calibración)")
         ttk.Label(sec, text="Curva:").grid(row=0, column=0, sticky="w")
@@ -663,6 +695,16 @@ class SheetsPhase(PhaseFrame):
         self.curve_cb.configure(values=curves)
         if self.var_cyan_curve.get() not in curves:
             self.var_cyan_curve.set(NO_CURVE)
+        colors = [NO_COLOR_PROFILE] + config.list_profiles("cianotipia_color")
+        self.colorprofile_cb.configure(values=colors)
+        if self.var_cyan_colorprofile.get() not in colors:
+            self.var_cyan_colorprofile.set(NO_COLOR_PROFILE)
+
+    def _cyan_color_profile(self) -> dict | None:
+        name = self.var_cyan_colorprofile.get()
+        if not name or name == NO_COLOR_PROFILE:
+            return None
+        return config.load_profile("cianotipia_color", name)
 
     def _printer_profile(self) -> dict | None:
         name = self.var_printer_profile.get()
@@ -934,6 +976,8 @@ class SheetsPhase(PhaseFrame):
     # ----------------------------------------------------------- ejecutar
     def _collect_settings(self) -> core.Settings:
         prof = self._printer_profile() or {}
+        color_prof = self._cyan_color_profile() or {}
+        cyan_ink = color_prof.get("mejor_color") or self.var_cyan_ink.get()
         return core.Settings(
             paper=self.var_paper.get(), orientation=self.var_orientation.get(),
             dpi=self.to_int(self.var_dpi, 300),
@@ -966,8 +1010,11 @@ class SheetsPhase(PhaseFrame):
             project_name=self.var_project.get().strip() or self.var_out_name.get(),
             mode="cianotipia" if self.var_cyan_on.get() else "normal",
             cyan_mirror=self.var_cyan_mirror.get(),
-            cyan_ink=self.var_cyan_ink.get(),
+            cyan_ink=cyan_ink,
             cyan_curve=self._cyan_curve_lut(),
+            cyan_bg=self.var_cyan_bg.get(),
+            cyan_halo_mm=self.to_float(self.var_cyan_halo, 3.0),
+            cyan_ink_stops=color_prof.get("stops"),
             print_scale_x=float(prof.get("scale_x", 1.0) or 1.0),
             print_scale_y=float(prof.get("scale_y", 1.0) or 1.0),
             out_dir=self.var_out_dir.get(), out_name=self.var_out_name.get() or "contact_sheet",
@@ -1021,6 +1068,21 @@ class SheetsPhase(PhaseFrame):
         if err:
             messagebox.showwarning("Falta algo", err)
             return
+        # Cianotipia sin calibrar: ofrecer la hoja de calibración primero.
+        if self.var_cyan_on.get() and self.var_cyan_curve.get() == NO_CURVE:
+            r = messagebox.askyesnocancel(
+                "Cianotipia sin calibrar",
+                "No has elegido una curva de calibración de cianotipia, así "
+                "que los tonos pueden salir aplastados.\n\n"
+                "¿Quieres ir a la fase ③ Calibración para generar e imprimir "
+                "primero una hoja de calibración (tira Kamiru, carta EDN 2.2 "
+                "o ColorBlocker)?\n\n"
+                "Sí = ir a Calibración   ·   No = continuar sin curva")
+            if r is None:
+                return
+            if r:
+                self.app.goto_calibration()
+                return
         self._set_busy(True)
         self.progress.configure(value=0, maximum=100)
         self._set_status("Preparando…")
@@ -1253,6 +1315,10 @@ class SheetsPhase(PhaseFrame):
         if orient:
             suf = "  (elegida automáticamente)" if self.var_orientation.get().lower().startswith("mejor") else ""
             extra += f"\nOrientación: {orient}{suf}"
+        if result.get("grid_swapped"):
+            extra += (f"\nCuadrícula usada: {result.get('grid')} (el mejor "
+                      "ajuste intercambió columnas×filas para agrandar los "
+                      "fotogramas)")
         if result.get("pdf"):
             extra += f"\nPDF: {result['pdf']}"
         if result.get("layout"):
@@ -1421,6 +1487,7 @@ class App(tk.Tk):
 
         phases = ttk.Notebook(self, style="Phase.TNotebook")
         phases.pack(fill="both", expand=True, padx=PAD, pady=PAD)
+        self.phases_nb = phases
         self.sheets_phase = SheetsPhase(phases, self)
         self.scans_phase = ScansPhase(phases, self)
         self.calib_phase = CalibPhase(phases, self)
@@ -1439,6 +1506,13 @@ class App(tk.Tk):
             self.lift()
             self.attributes("-topmost", True)
             self.after(400, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
+
+    def goto_calibration(self):
+        """Salta a la fase ③ (usado cuando falta un perfil de calibración)."""
+        try:
+            self.phases_nb.select(self.calib_phase)
         except tk.TclError:
             pass
 

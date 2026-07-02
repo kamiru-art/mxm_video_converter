@@ -32,7 +32,10 @@ Esta versión 2 une en una sola app a *Video to Contact Sheets* y a
   fotogramas** (mixed media).
 - **Cuadrícula libre** (columnas × filas), espaciado en mm, márgenes, DPI,
   tamaño de hoja (A4, A3, A5, A6, B4, B5, Carta, Oficio, Tabloide o
-  personalizado) y orientación **vertical/horizontal/mejor ajuste automático**.
+  personalizado) y orientación **vertical/horizontal/mejor ajuste automático**
+  (el mejor ajuste también prueba la cuadrícula intercambiada — 4×5 ↔ 5×4 —
+  y elige la combinación que hace los fotogramas MÁS GRANDES, igual o mejor
+  que eligiendo a mano).
 - **Incluir/excluir fotogramas** por posición (`1, 3-5`) y **elegir qué hojas
   producir** (`3, 5-7`) — perfecto para reimprimir una hoja dañada.
 - 🆕 **Detección de dibujos repetidos** (deduplicación perceptual): los frames
@@ -46,10 +49,15 @@ Esta versión 2 une en una sola app a *Video to Contact Sheets* y a
   cortados (con 8, bastan 3 sanos). Más **un código QR por fotograma** que
   identifica cada hoja aunque se escaneen desordenadas.
 - 🆕 **Modo CIANOTIPIA**: genera **negativos para acetato** — invertidos,
-  espejados (opcional), con **color de tinta configurable** y **curva de
-  compensación calibrable** (estilo *easy digital negatives*, integrado).
-  Los marcadores/QRs/nombres se invierten para que en la copia azul queden
-  con la polaridad correcta.
+  espejados (opcional), con **color o degradado de tinta configurable** y
+  **curva de compensación calibrable** (método *Easy Digital Negatives*,
+  integrado). Los marcadores/QRs/nombres se invierten para que en la copia
+  azul queden con la polaridad correcta.
+- 🆕 **Ahorro de tinta en cianotipia**: elige entre fondo **completamente
+  entintado** (fondo blanco en la copia) o modo **AHORRO** (fondo
+  transparente: solo los marcadores, QRs y nombres llevan un **halo
+  entintado** para distinguirse del fondo azul — gasta una fracción de la
+  tinta).
 - 🆕 **Tira de parches de grises** opcional para normalizar el escáner.
 - 🆕 **Presets con nombre** (guarda/carga configuraciones completas).
 - **Vista previa navegable de todas las hojas** (incluye marcadores, negativos
@@ -77,10 +85,18 @@ Esta versión 2 une en una sola app a *Video to Contact Sheets* y a
 - **Perfil de impresora**: imprime una página de prueba, escanéala y la app
   mide la **escala real** de tu impresora (y la compensa al generar hojas),
   su **respuesta tonal** y el **tamaño mínimo fiable** de marcador y de QR.
-- **Perfil de cianotipia**: imprime una tira de densidades en acetato, haz tu
-  cianotipia como siempre, escanéala y la app construye la **curva de
-  compensación** que lineariza los tonos y aprovecha todo el **rango dinámico**
-  de TU proceso (impresora + acetato + química + sol), con sugerencias.
+- **Perfil de cianotipia (curva)** con carta a elegir:
+  - **Tira Kamiru** (21 parches, rápida), o
+  - **Carta EDN 2.2** (los **256 tonos** del método
+    [Easy Digital Negatives](http://www.easydigitalnegatives.com/) de Peter
+    Mrhar → curva muy fina), ambas con el marco de marcadores de Kamiru para
+    que el análisis del escaneo sea **automático** (sin recortar a mano).
+- **EDN ColorBlocker 3**: la carta de **36 matices × 21 variantes + grises**
+  que descubre **qué color de tinta bloquea mejor el UV en TU impresora**
+  (el negro no siempre es lo mejor). El perfil resultante trae el mejor color
+  y un **degradado de 3 paradas** que se aplica a los negativos con un clic.
+- Si activas el modo cianotipia sin perfil, la app te ofrece generar la hoja
+  de calibración antes de imprimir nada.
 
 ### Fase ④ — Video final  🆕
 - Reconstruye el video (MP4 H.264, H.264 4:4:4 o **ProRes**) con los
@@ -89,7 +105,25 @@ Esta versión 2 une en una sola app a *Video to Contact Sheets* y a
 
 ---
 
-## 🚀 Cómo abrirla (doble clic, sin terminal)
+## 🚀 Cómo abrirla
+
+### Opción A (recomendada): ejecutable listo, sin instalar nada
+
+Ve a la página de **[Releases](../../releases)** del repositorio y descarga el
+archivo de tu sistema:
+
+| Sistema | Archivo |
+|---|---|
+| Windows | `Kamiru-Studio-windows.zip` → descomprime y abre `Kamiru-Studio.exe` |
+| macOS Apple Silicon (M1–M4) | `Kamiru-Studio-macos-apple-silicon.zip` → abre `Kamiru-Studio.app` |
+| macOS Intel | `Kamiru-Studio-macos-intel.zip` |
+| Linux | `Kamiru-Studio-linux.tar.gz` → ejecuta `Kamiru-Studio/Kamiru-Studio` |
+
+**No hace falta Python ni `git clone`.** En macOS, la primera vez: clic
+derecho → Abrir → Abrir (app sin firmar); en Windows, si SmartScreen avisa:
+«Más información» → «Ejecutar de todas formas».
+
+### Opción B: desde el código (doble clic, sin terminal)
 
 Solo necesitas tener **Python 3** instalado. La primera vez prepara el entorno
 e instala las dependencias sola (2–3 minutos); después abre al instante.

@@ -130,6 +130,15 @@ class Settings:
         self.cyan_ink = kw.get("cyan_ink", "#000000")
         # LUT de 256 valores (de un perfil de calibración) o None (identidad).
         self.cyan_curve = kw.get("cyan_curve") or None
+        # Fondo del negativo: "ahorro" = solo halos entintados alrededor de
+        # marcadores/QRs/nombres (gasta MUCHA menos tinta; el fondo de la
+        # cianotipia queda azul); "completo" = todo el fondo entintado (el
+        # fondo de la cianotipia queda blanco papel).
+        self.cyan_bg = kw.get("cyan_bg", "ahorro")
+        self.cyan_halo_mm = float(kw.get("cyan_halo_mm", 3.0))
+        # Degradado de tinta opcional (perfil ColorBlocker):
+        # [[densidad, "#RRGGBB"], ...]. None = color simple (cyan_ink).
+        self.cyan_ink_stops = kw.get("cyan_ink_stops") or None
 
         # ── Compensación de impresora (de un perfil de calibración) ─────
         self.print_scale_x = float(kw.get("print_scale_x", 1.0))
@@ -313,6 +322,7 @@ _SNAPSHOT_FIELDS = [
     "page_num_color", "registration_on", "marker_count", "marker_size_mm",
     "marker_margin_mm", "marker_dict", "qr_on", "qr_size_mm", "gray_patch_on",
     "project_name", "mode", "cyan_mirror", "cyan_ink", "cyan_curve",
+    "cyan_bg", "cyan_halo_mm", "cyan_ink_stops",
     "print_scale_x", "print_scale_y", "out_name", "fmt_png", "fmt_pdf",
     "fmt_tiff",
 ]
@@ -332,11 +342,14 @@ def _meta_content_height(s: Settings, label_h: int, dpi: int) -> int:
     return h
 
 
-def _frame_fit_area(s, landscape, src_w, src_h, meta_h, label_gap) -> float:
+def _frame_fit_area(s, landscape, src_w, src_h, meta_h, label_gap,
+                    cols=None, rows=None) -> float:
     """Área (en px²) que ocuparía un fotograma de tamaño (src_w, src_h) dentro
-    de una celda para la orientación dada. Sirve para decidir el "mejor ajuste":
-    se compara esta área en vertical y en horizontal y gana la mayor.
+    de una celda para la orientación y cuadrícula dadas. Sirve para decidir el
+    "mejor ajuste": se comparan las combinaciones y gana la mayor.
     """
+    cols = cols or s.cols
+    rows = rows or s.rows
     dpi = s.dpi
     page_w, page_h = paper.page_size_px(
         s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm
@@ -347,8 +360,8 @@ def _frame_fit_area(s, landscape, src_w, src_h, meta_h, label_gap) -> float:
     content_h = page_h - 2 * margin
     if content_w <= 0 or content_h <= 0:
         return -1.0
-    cell_w = (content_w - (s.cols - 1) * gutter) / s.cols
-    cell_h = (content_h - (s.rows - 1) * gutter) / s.rows
+    cell_w = (content_w - (cols - 1) * gutter) / cols
+    cell_h = (content_h - (rows - 1) * gutter) / rows
     meta_area = (meta_h + label_gap) if meta_h > 0 else 0
     img_area_h = cell_h - meta_area
     if cell_w <= 1 or img_area_h <= 1 or src_w <= 0 or src_h <= 0:
@@ -370,23 +383,40 @@ def _first_frame_aspect(frame_paths):
     return 16, 9
 
 
-def resolve_landscape(s, frame_paths, meta_h=0, label_gap=0) -> bool:
-    """Decide si la hoja va en horizontal según la orientación elegida.
+def resolve_page_layout(s, frame_paths, meta_h=0, label_gap=0):
+    """Decide orientación Y cuadrícula según la opción elegida.
 
-    - "Vertical"  -> False
-    - "Horizontal" -> True
-    - "Mejor ajuste" -> la orientación que maximiza el área impresa de los
-      fotogramas (usa la relación de aspecto del primer fotograma).
+    - "Vertical"   -> (False, cols, rows)
+    - "Horizontal" -> (True, cols, rows)
+    - "Mejor ajuste" -> prueba las 4 combinaciones (vertical/horizontal ×
+      cuadrícula tal cual / columnas↔filas intercambiadas) y devuelve la que
+      hace los fotogramas MÁS GRANDES. Intercambiar la cuadrícula mantiene la
+      misma cantidad de imágenes por hoja, así que es equivalente a lo que se
+      elegiría a mano al rotar la hoja (esto corrige que el "mejor ajuste"
+      antiguo produjera áreas impresas menores que la elección manual).
     """
     o = (s.orientation or "").strip().lower()
     if o.startswith("horizontal"):
-        return True
+        return True, s.cols, s.rows
     if o.startswith("vertical"):
-        return False
+        return False, s.cols, s.rows
+
     src_w, src_h = _first_frame_aspect(frame_paths)
-    area_portrait = _frame_fit_area(s, False, src_w, src_h, meta_h, label_gap)
-    area_landscape = _frame_fit_area(s, True, src_w, src_h, meta_h, label_gap)
-    return area_landscape > area_portrait
+    candidates = [(False, s.cols, s.rows), (True, s.cols, s.rows)]
+    if s.cols != s.rows:
+        candidates += [(False, s.rows, s.cols), (True, s.rows, s.cols)]
+    best, best_area = candidates[0], -1.0
+    for landscape, cols, rows in candidates:
+        area = _frame_fit_area(s, landscape, src_w, src_h, meta_h, label_gap,
+                               cols, rows)
+        if area > best_area + 1e-9:
+            best, best_area = (landscape, cols, rows), area
+    return best
+
+
+def resolve_landscape(s, frame_paths, meta_h=0, label_gap=0) -> bool:
+    """(Compatibilidad) Solo la orientación de resolve_page_layout()."""
+    return resolve_page_layout(s, frame_paths, meta_h, label_gap)[0]
 
 
 def _marker_dims(s: Settings, dpi: int):
@@ -413,9 +443,9 @@ class _Layout:
     __slots__ = (
         "dpi", "margin", "gutter", "label_gap", "label_font", "label_h",
         "page_font", "landscape", "page_w", "page_h", "cell_w", "cell_h",
-        "label_area", "img_area_h", "meta_h", "qr_px",
+        "label_area", "img_area_h", "meta_h", "qr_px", "cols", "rows",
         "marker_side", "marker_quiet", "marker_patch", "marker_margin",
-        "marker_positions", "marker_bboxes", "patch_strip",
+        "marker_positions", "marker_bboxes", "patch_strip", "halo_px",
     )
 
 
@@ -441,9 +471,10 @@ def _build_layout(s: Settings) -> _Layout:
     meta_h = _meta_content_height(s, label_h, dpi)
     label_gap = paper.mm_to_px(s.label_gap_mm, dpi) if meta_h > 0 else 0
 
-    # Orientación: vertical, horizontal o "mejor ajuste".
+    # Orientación y cuadrícula: vertical, horizontal o "mejor ajuste" (que
+    # puede intercambiar columnas↔filas para agrandar los fotogramas).
     frame_paths = getattr(s, "_frame_paths", None) or []
-    landscape = resolve_landscape(s, frame_paths, meta_h, label_gap)
+    landscape, cols, rows = resolve_page_layout(s, frame_paths, meta_h, label_gap)
     page_w, page_h = paper.page_size_px(
         s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm
     )
@@ -453,8 +484,8 @@ def _build_layout(s: Settings) -> _Layout:
     if content_w <= 0 or content_h <= 0:
         raise ValueError("Los márgenes son demasiado grandes para el tamaño de hoja.")
 
-    cell_w = (content_w - (s.cols - 1) * gutter) / s.cols
-    cell_h = (content_h - (s.rows - 1) * gutter) / s.rows
+    cell_w = (content_w - (cols - 1) * gutter) / cols
+    cell_h = (content_h - (rows - 1) * gutter) / rows
     label_area = (meta_h + label_gap) if meta_h > 0 else 0
     img_area_h = cell_h - label_area
     if cell_w <= 1 or img_area_h <= 1:
@@ -467,10 +498,12 @@ def _build_layout(s: Settings) -> _Layout:
     L.dpi, L.margin, L.gutter, L.label_gap = dpi, margin, gutter, label_gap
     L.label_font, L.label_h, L.page_font = label_font, label_h, page_font
     L.landscape, L.page_w, L.page_h = landscape, page_w, page_h
+    L.cols, L.rows = cols, rows
     L.cell_w, L.cell_h = cell_w, cell_h
     L.label_area, L.img_area_h = label_area, img_area_h
     L.meta_h = meta_h
     L.qr_px = paper.mm_to_px(s.qr_size_mm, dpi) if (s.registration_on and s.qr_on) else 0
+    L.halo_px = paper.mm_to_px(max(0.0, s.cyan_halo_mm), dpi)
 
     # Geometría de los marcadores de registro (igual en todas las hojas).
     if s.registration_on:
@@ -518,29 +551,50 @@ def _patch_strip_geometry(s: Settings, L: _Layout):
 # Render de una hoja
 # ────────────────────────────────────────────────────────────────
 
-def _ink_is_dark(ink_hex: str) -> bool:
-    r, g, b = cyan.hex_to_rgb(ink_hex)
-    return (0.299 * r + 0.587 * g + 0.114 * b) < 140
+def _ink_full_color(s: Settings):
+    """Color de la tinta plena (densidad máxima) del negativo."""
+    return cyan.solid_density_color(255, s.cyan_ink, s.cyan_ink_stops)
+
+
+def _cyan_saving(s: Settings) -> bool:
+    """True si el negativo usa el modo AHORRO DE TINTA (fondo transparente y
+    solo halos entintados alrededor de marcadores/QRs/nombres)."""
+    return s.is_cyanotype and (s.cyan_bg or "ahorro").lower().startswith("ahorro")
 
 
 def _page_bg_color(s: Settings):
     if s.is_cyanotype:
+        if _cyan_saving(s):
+            # Fondo transparente (sin tinta): la cianotipia queda azul en las
+            # zonas muertas y se ahorra muchísima tinta.
+            return "#FFFFFF"
         # Fondo = tinta plena: bloquea el UV y la cianotipia queda blanca
         # alrededor de los fotogramas (igual que el papel en modo normal).
-        return cyan.solid_density_color(255, s.cyan_ink)
+        return _ink_full_color(s)
     return s.bg_color
 
 
 def _label_text_color(s: Settings) -> str:
     if s.is_cyanotype:
-        return "#FFFFFF" if _ink_is_dark(s.cyan_ink) else "#000000"
+        # Texto = densidad 0 (transparente): sale AZUL OSCURO en la copia,
+        # sobre el rectángulo entintado (que sale blanco papel).
+        return "#FFFFFF"
     return s.label_color
 
 
 def _page_num_color(s: Settings) -> str:
     if s.is_cyanotype:
-        return "#FFFFFF" if _ink_is_dark(s.cyan_ink) else "#000000"
+        return "#FFFFFF"
     return s.page_num_color
+
+
+def _halo_rect(draw: ImageDraw.ImageDraw, s: Settings, bbox, halo_px: int):
+    """Rectángulo de tinta plena detrás de un elemento (modo ahorro): da al
+    marcador/QR/nombre un fondo bloqueador para que en la copia azul quede
+    sobre blanco y se distinga del fondo azul."""
+    x1, y1, x2, y2 = bbox
+    draw.rectangle([x1 - halo_px, y1 - halo_px, x2 + halo_px, y2 + halo_px],
+                   fill=_ink_full_color(s))
 
 
 def _label_text_for(s: Settings, labels, numbers, global_idx: int) -> str:
@@ -553,17 +607,35 @@ def _label_text_for(s: Settings, labels, numbers, global_idx: int) -> str:
 
 
 def _draw_registration_frame(s: Settings, L: _Layout, canvas: Image.Image):
-    """Dibuja los marcadores ArUco y la tira de parches (si procede)."""
-    inverted = s.is_cyanotype
+    """Dibuja los marcadores ArUco y la tira de parches (si procede).
+
+    En cianotipia los parches se interpretan como DENSIDAD (negro del marcador
+    = transparente → azul en la copia; blanco = tinta plena → papel), lo que
+    los deja con polaridad estándar en la copia azul y respeta el color o
+    degradado de tinta elegido. En modo ahorro, cada marcador recibe además un
+    halo entintado para destacar sobre el fondo azul.
+    """
+    draw = ImageDraw.Draw(canvas)
+    saving = _cyan_saving(s)
     for mid, (px, py) in L.marker_positions.items():
         patch = markers.marker_patch(mid, L.marker_side, L.marker_quiet,
-                                     s.marker_dict, inverted=inverted)
+                                     s.marker_dict, inverted=False)
+        if s.is_cyanotype:
+            if saving:
+                _halo_rect(draw, s, [px, py, px + patch.width, py + patch.height],
+                           L.halo_px)
+            patch = cyan.colorize_gray_patch(patch, s.cyan_ink, s.cyan_ink_stops)
         canvas.paste(patch, (int(px), int(py)))
     if L.patch_strip:
-        draw = ImageDraw.Draw(canvas)
+        if saving:
+            xs = [b for b, _ in L.patch_strip]
+            _halo_rect(draw, s, [min(b[0] for b in xs), min(b[1] for b in xs),
+                                 max(b[2] for b in xs), max(b[3] for b in xs)],
+                       L.halo_px)
         for bbox, nivel in L.patch_strip:
             if s.is_cyanotype:
-                color = cyan.solid_density_color(nivel, s.cyan_ink)
+                color = cyan.solid_density_color(nivel, s.cyan_ink,
+                                                 s.cyan_ink_stops)
             else:
                 color = (nivel, nivel, nivel)
             draw.rectangle(bbox, fill=color)
@@ -602,11 +674,12 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
         record = {"numero": int(sheet_num), "frames": {}, "qrs": {}}
 
     label_color = _label_text_color(s)
+    saving = _cyan_saving(s)
 
     for cell_idx, fpath in enumerate(chunk):
         global_idx = start + cell_idx
-        row = cell_idx // s.cols
-        col = cell_idx % s.cols
+        row = cell_idx // L.cols
+        col = cell_idx % L.cols
         cell_x = L.margin + col * (L.cell_w + L.gutter)
         cell_y = L.margin + row * (L.cell_h + L.gutter)
 
@@ -622,7 +695,8 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
             continue
 
         if s.is_cyanotype:
-            resized = cyan.make_negative(resized, s.cyan_curve, s.cyan_ink)
+            resized = cyan.make_negative(resized, s.cyan_curve, s.cyan_ink,
+                                         s.cyan_ink_stops)
 
         # Bloque imagen+metadatos centrado en la celda; los metadatos van
         # pegados bajo la imagen para que se vea ordenado aunque el frame no
@@ -641,8 +715,10 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
         if L.qr_px > 0 and record is not None:
             payload = markers.qr_payload(s.project_name or s.out_name,
                                          sheet_num, cell_idx, text)
-            qr_img = markers.qr_image(payload, L.qr_px,
-                                      inverted=s.is_cyanotype)
+            qr_img = markers.qr_image(payload, L.qr_px, inverted=False)
+            if s.is_cyanotype:
+                qr_img = cyan.colorize_gray_patch(qr_img, s.cyan_ink,
+                                                  s.cyan_ink_stops)
             tw = th = 0
             if s.labels_on and L.label_font is not None:
                 tw, th = _text_size(draw, text, L.label_font)
@@ -650,6 +726,13 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
             total_w = L.qr_px + gap_qr_text + tw
             qx = int(round(cell_x + (L.cell_w - total_w) / 2))
             qy = int(round(meta_top + (L.meta_h - L.qr_px) / 2))
+            if saving:
+                # Halo entintado detrás de toda la fila de metadatos.
+                _halo_rect(draw, s,
+                           [qx, min(qy, int(meta_top)),
+                            qx + total_w, max(qy + L.qr_px,
+                                              int(meta_top + L.meta_h))],
+                           L.halo_px)
             canvas.paste(qr_img, (qx, qy))
             qr_bbox = [qx, qy, qx + L.qr_px, qy + L.qr_px]
             if tw:
@@ -663,6 +746,8 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
             tw, th = _text_size(draw, text, L.label_font)
             tx = int(round(cell_x + (L.cell_w - tw) / 2))
             ty = int(round(meta_top + (L.meta_h - th) / 2))
+            if saving:
+                _halo_rect(draw, s, [tx, ty, tx + tw, ty + th], L.halo_px)
             draw.text((tx, ty), text, fill=label_color, font=L.label_font)
 
         if record is not None:
@@ -688,6 +773,9 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
             pos = (L.page_w - pad - tw, pad)
         else:  # Superior izquierda
             pos = (pad, pad)
+        if saving:
+            _halo_rect(draw, s, [pos[0], pos[1], pos[0] + tw, pos[1] + th],
+                       max(4, L.halo_px // 2))
         draw.text(pos, pno, fill=_page_num_color(s), font=L.page_font)
 
     return canvas, record
@@ -938,6 +1026,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
             "app": "kamiru-studio",
             "proyecto": s.project_name or s.out_name,
             "modo": "cianotipia" if s.is_cyanotype else "normal",
+            "fondo_cianotipia": (s.cyan_bg if s.is_cyanotype else None),
             "espejado": bool(s.is_cyanotype and s.cyan_mirror),
             "lienzo": {
                 "ancho_px": L.page_w,
@@ -971,6 +1060,8 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
         "num_generated": done_count,
         "landscape": L.landscape,
         "orientation": "Horizontal" if L.landscape else "Vertical",
+        "grid": f"{L.cols}×{L.rows}",
+        "grid_swapped": (L.cols, L.rows) != (s.cols, s.rows),
     }
 
 
@@ -997,8 +1088,8 @@ def _render_geometry_only(s: Settings, L: _Layout, chunk, page_idx,
 
     for cell_idx, fpath in enumerate(chunk):
         global_idx = start + cell_idx
-        row = cell_idx // s.cols
-        col = cell_idx % s.cols
+        row = cell_idx // L.cols
+        col = cell_idx % L.cols
         cell_x = L.margin + col * (L.cell_w + L.gutter)
         cell_y = L.margin + row * (L.cell_h + L.gutter)
         try:
