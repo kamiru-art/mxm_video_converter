@@ -7,6 +7,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    # Crear una rama "release/vX.Y.Z" también publica el release vX.Y.Z
+    # (útil desde entornos que no pueden empujar tags por git).
+    branches: ["release/**"]
   workflow_dispatch:
     inputs:
       tag:
@@ -102,10 +105,27 @@ jobs:
     name: Publicar Release
     needs: build
     runs-on: ubuntu-latest
-    # Se publica al empujar un tag v*, o al lanzarlo a mano indicando el tag
-    # (en ese caso la action crea el tag apuntando al commit del workflow).
-    if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+    # Se publica al empujar un tag v*, una rama release/vX.Y.Z, o al lanzarlo
+    # a mano indicando el tag (la action crea el tag si no existe).
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      startsWith(github.ref_name, 'release/') ||
+      inputs.tag != ''
     steps:
+      - name: Determinar el tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag }}"
+          REF="${{ github.ref_name }}"
+          if [ -z "$TAG" ]; then
+            case "$REF" in
+              release/*) TAG="${REF#release/}" ;;
+              *)         TAG="$REF" ;;
+            esac
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v4
         with:
           path: artefactos
@@ -113,7 +133,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: artefactos/*
           generate_release_notes: true
