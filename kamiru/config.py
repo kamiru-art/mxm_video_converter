@@ -28,7 +28,9 @@ def _config_dir() -> Path:
 CONFIG_PATH = _config_dir() / "settings.json"
 
 # Tipos de perfiles de calibración y de presets.
-PROFILE_KINDS = ("impresora", "cianotipia")
+# "cianotipia" = curvas de compensación; "cianotipia_color" = perfiles de
+# color de tinta (ColorBlocker).
+PROFILE_KINDS = ("impresora", "cianotipia", "cianotipia_color")
 
 
 def load() -> dict:

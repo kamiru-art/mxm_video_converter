@@ -202,6 +202,7 @@ check("hoja de cabeza procesada", rep_rot["escaneos_ok"] == 1,
 print("\n══ 4. Modo cianotipia (negativo → copia azul → procesado) ══")
 out2 = TMP / "hojas_cyano"
 s2 = settings_base(out2, mode="cianotipia", cyan_mirror=True,
+                   cyan_bg="completo",
                    cyan_ink="#000000", out_name="cyano", project_name="cyano")
 res2 = core.generate(s2, frame_paths[:4], labels=labels[:4])
 check("genera negativo cianotipia", len(res2["pages"]) == 1)
@@ -328,6 +329,117 @@ try:
     check("video MP4 creado", Path(vid).stat().st_size > 10000)
 except Exception as e:
     check("video final", False, f"{type(e).__name__}: {e}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 9b. Cianotipia en modo AHORRO DE TINTA (fondo azul + halos) ══")
+out3 = TMP / "hojas_cyano_ahorro"
+s3 = settings_base(out3, mode="cianotipia", cyan_mirror=True, cyan_bg="ahorro",
+                   cyan_halo_mm=3.0, out_name="ahorro", project_name="ahorro")
+res3 = core.generate(s3, frame_paths[:4], labels=labels[:4])
+neg3 = cv2.imread(res3["pages"][0], cv2.IMREAD_COLOR)
+# El negativo en ahorro debe tener MUCHA menos tinta que el de fondo completo.
+tinta_ahorro = (cv2.cvtColor(neg3, cv2.COLOR_BGR2GRAY) < 128).mean()
+neg_full = cv2.imread(res2["pages"][0], cv2.IMREAD_COLOR)
+tinta_full = (cv2.cvtColor(neg_full, cv2.COLOR_BGR2GRAY) < 128).mean()
+check("modo ahorro usa mucha menos tinta",
+      tinta_ahorro < tinta_full * 0.6,
+      f"ahorro={tinta_ahorro:.2f} vs completo={tinta_full:.2f}")
+
+# Proceso físico + escaneo + procesamiento del modo ahorro.
+neg3 = cv2.flip(neg3, 1)
+gray3 = cv2.cvtColor(neg3, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+expo3 = gray3[..., None]
+print3 = (paperc[None, None, :] * (1 - expo3)
+          + bluec[None, None, :] * expo3).astype(np.uint8)
+print3_path = TMP / "cyano_ahorro_print.png"
+cv2.imwrite(str(print3_path), print3)
+scans3 = TMP / "scans_ahorro"
+scans3.mkdir()
+fake_scan(print3_path, scans3 / "scan_ahorro.png", angle_deg=2.4, scale=2.7,
+          tint=(1.05, 0.96, 0.92), seed=41)
+rep3 = scan.procesar_carpeta(scans3, res3["layout"], TMP / "proc_ahorro",
+                             scan.ScanOptions(threads=1, report=False),
+                             log=lambda t: print("   ", t))
+check("modo ahorro procesado (fondo azul)", rep3["escaneos_ok"] == 1,
+      str([r["error"] for r in rep3["resultados"]]))
+check("4/4 frames en modo ahorro", rep3["frames_extraidos"] == 4,
+      f"faltan: {rep3['etiquetas_faltantes']}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 9c. Carta EDN 2.2 (256 tonos) ══")
+edn = TMP / "edn256.png"
+calibration.generar_tira_cianotipia(edn, "A4", 200, "#000000", mirror=True,
+                                    target="edn256")
+neg_e = cv2.flip(cv2.imread(str(edn)), 1)
+gray_e = cv2.cvtColor(neg_e, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+expo_e = (gray_e ** 1.6)[..., None]
+print_e = (paperc[None, None, :] * (1 - expo_e)
+           + bluec[None, None, :] * expo_e).astype(np.uint8)
+pe_path = TMP / "edn_print.png"
+cv2.imwrite(str(pe_path), print_e)
+scan_e = TMP / "scan_edn.png"
+fake_scan(pe_path, scan_e, angle_deg=-1.4, scale=2.1, noise=3, seed=51)
+prof_e = calibration.analizar_tira_cianotipia(scan_e, "A4", 200,
+                                              target="edn256",
+                                              log=lambda t: print("   ", t))
+check("EDN 256: mide 256 parches", prof_e["steps"] == 256
+      and len(prof_e["respuesta"]) >= 250, str(len(prof_e["respuesta"])))
+lut_e = prof_e["lut"]
+check("EDN 256: LUT monótona y compensadora",
+      all(lut_e[i] <= lut_e[i + 1] for i in range(255))
+      and abs(lut_e[128] - 128) > 8, f"lut[128]={lut_e[128]}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 9d. EDN ColorBlocker (elección del color de tinta) ══")
+cb = TMP / "colorblocker.png"
+calibration.generar_colorblocker(cb, "A4", 200, mirror=True)
+neg_cb = cv2.flip(cv2.imread(str(cb)), 1)
+# Física simulada realista: la tinta ROJA/cálida bloquea el UV mejor que la
+# negra (el negro de impresora FILTRA algo de UV — la premisa del
+# ColorBlocker). Transmisión por canal + fuga en tintas oscuras.
+f_cb = neg_cb.astype(np.float32) / 255.0
+Rf, Gf, Bf = f_cb[..., 2], f_cb[..., 1], f_cb[..., 0]
+leak = 0.22 * (1.0 - np.maximum(np.maximum(Rf, Gf), Bf))  # tinta oscura = fuga
+trans = 0.05 * Rf + 0.25 * Gf + 0.9 * Bf + leak
+expo_cb = np.clip(trans, 0, 1)[..., None]
+print_cb = (paperc[None, None, :] * (1 - expo_cb)
+            + bluec[None, None, :] * expo_cb).astype(np.uint8)
+pcb_path = TMP / "cb_print.png"
+cv2.imwrite(str(pcb_path), print_cb)
+scan_cb = TMP / "scan_cb.png"
+fake_scan(pcb_path, scan_cb, angle_deg=1.1, scale=1.8, noise=3, seed=61)
+prof_cb = calibration.analizar_colorblocker(scan_cb, "A4", 200,
+                                            log=lambda t: print("   ", t))
+mejor_rgb = [int(prof_cb["mejor_color"][i:i + 2], 16) for i in (1, 3, 5)]
+check("ColorBlocker: el mejor color es cálido (R alto, B bajo)",
+      mejor_rgb[0] > 180 and mejor_rgb[2] < 120, prof_cb["mejor_color"])
+check("ColorBlocker: 3 paradas de degradado", len(prof_cb["stops"]) == 3
+      and prof_cb["stops"][0][0] == 0 and prof_cb["stops"][2][0] == 255,
+      str(prof_cb["stops"]))
+
+# Y el degradado se puede usar para generar negativos.
+s_grad = settings_base(TMP / "hojas_grad", mode="cianotipia",
+                       cyan_ink=prof_cb["mejor_color"],
+                       cyan_ink_stops=prof_cb["stops"], out_name="grad")
+res_grad = core.generate(s_grad, frame_paths[:2], labels=labels[:2])
+check("negativo con degradado ColorBlocker", len(res_grad["pages"]) == 1)
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 9e. Mejor ajuste con intercambio de cuadrícula ══")
+tall_dir = TMP / "frames_tall"
+tall = make_frames(tall_dir, n=1, size=(360, 640))  # frames verticales
+s_fit = core.Settings(paper="A4", dpi=200, cols=4, rows=5, labels_on=True,
+                      orientation="Mejor ajuste (automático)")
+s_fit._frame_paths = tall
+landscape, cols, rows = core.resolve_page_layout(s_fit, tall, 20, 5)
+area_auto = core._frame_fit_area(s_fit, landscape, 360, 640, 20, 5, cols, rows)
+area_v = core._frame_fit_area(s_fit, False, 360, 640, 20, 5, 4, 5)
+area_h = core._frame_fit_area(s_fit, True, 360, 640, 20, 5, 4, 5)
+check("mejor ajuste ≥ ambas orientaciones manuales",
+      area_auto >= max(area_v, area_h) - 1e-6,
+      f"auto={area_auto:.0f} V={area_v:.0f} H={area_h:.0f}")
+check("con frames verticales intercambia la cuadrícula (4×5→5×4)",
+      (cols, rows) == (5, 4), f"eligió {cols}×{rows}, landscape={landscape}")
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 10. Compatibilidad con layout v1 (app antigua) ══")

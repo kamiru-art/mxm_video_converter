@@ -1,0 +1,130 @@
+# Construye los ejecutables de Kamiru Studio (Windows / macOS / Linux) con
+# PyInstaller y publica un Release de GitHub cada vez que se empuja un tag
+# "v*" (p. ej. v2.1.0). También se puede lanzar a mano (workflow_dispatch).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.nombre }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            nombre: windows
+          - os: macos-latest        # Apple Silicon (M1-M4)
+            nombre: macos-apple-silicon
+          - os: macos-13            # Intel
+            nombre: macos-intel
+          - os: ubuntu-22.04
+            nombre: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+          # La variante headless de OpenCV pesa menos y evita conflictos de
+          # librerías gráficas dentro del ejecutable (la GUI es Tkinter).
+          pip uninstall -y opencv-python || true
+          pip install opencv-python-headless
+
+      - name: Prueba de integración (sin GUI)
+        shell: bash
+        run: python tests/test_pipeline.py
+
+      - name: Construir con PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name Kamiru-Studio \
+            --icon assets/icon.ico \
+            --collect-all imageio_ffmpeg \
+            main.py
+
+      - name: Construir con PyInstaller (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name Kamiru-Studio \
+            --collect-all imageio_ffmpeg \
+            main.py
+
+      - name: Empaquetar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/Kamiru-Studio -DestinationPath Kamiru-Studio-windows.zip
+
+      - name: Empaquetar (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd dist
+          # ditto conserva los atributos que necesita el .app
+          ditto -c -k --keepParent "Kamiru-Studio.app" \
+            "../Kamiru-Studio-${{ matrix.nombre }}.zip"
+
+      - name: Empaquetar (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: tar -C dist -czf Kamiru-Studio-linux.tar.gz Kamiru-Studio
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kamiru-Studio-${{ matrix.nombre }}
+          path: |
+            Kamiru-Studio-*.zip
+            Kamiru-Studio-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publicar Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefactos
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artefactos/*
+          generate_release_notes: true
+          body: |
+            ## Kamiru Studio — ejecutables listos para usar 💚☀️
+
+            Descarga el archivo de tu sistema, descomprímelo y ábrelo.
+            **No hace falta instalar Python ni nada más.**
+
+            | Sistema | Archivo |
+            |---|---|
+            | Windows | `Kamiru-Studio-windows.zip` → descomprime y abre `Kamiru-Studio.exe` |
+            | macOS con chip Apple (M1–M4) | `Kamiru-Studio-macos-apple-silicon.zip` → descomprime y abre `Kamiru-Studio.app` |
+            | macOS Intel | `Kamiru-Studio-macos-intel.zip` |
+            | Linux | `Kamiru-Studio-linux.tar.gz` → descomprime y ejecuta `Kamiru-Studio/Kamiru-Studio` |
+
+            > **macOS:** la primera vez, clic derecho sobre la app → **Abrir** → **Abrir**
+            > (es una app sin firmar). Si macOS la bloquea igualmente:
+            > `xattr -dr com.apple.quarantine "Kamiru-Studio.app"` en la Terminal.
+            >
+            > **Windows:** si SmartScreen avisa, pulsa «Más información» → «Ejecutar de todas formas».
+
+            La guía completa de uso está en [`MANUAL.md`](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/MANUAL.md).

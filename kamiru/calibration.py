@@ -359,12 +359,28 @@ def analizar_prueba_impresora(scan_path, paper_name: str = "A4",
 
 
 # ────────────────────────────────────────────────────────────────
-# TIRA DE CALIBRACIÓN DE CIANOTIPIA
+# CARTAS DE CALIBRACIÓN DE CIANOTIPIA (curva de tonos)
 # ────────────────────────────────────────────────────────────────
+#
+# Dos cartas disponibles, elegibles en la interfaz:
+#   * "kamiru21": la tira propia de 21 parches (rápida, suficiente para
+#     empezar).
+#   * "edn256": la carta de 256 tonos del método EASY DIGITAL NEGATIVES
+#     (Peter Mrhar, easydigitalnegatives.com), 16×16 parches con TODOS los
+#     valores 0..255 → curva mucho más fina. Aquí se genera con el marco de
+#     marcadores de Kamiru para que el análisis del escaneo sea automático
+#     (sin recortar a mano como en la web de EDN).
+
+CYANO_TARGETS = {
+    "kamiru21": "Tira Kamiru (21 parches)",
+    "edn256": "Carta EDN 2.2 (256 tonos)",
+}
+
 
 def cyanotype_strip_geometry(paper_name: str = "A4", dpi: int = 300,
-                             steps: int = CYANO_STEPS) -> dict:
-    """Geometría determinista de la tira de calibración de cianotipia."""
+                             steps: int = CYANO_STEPS,
+                             target: str = "kamiru21") -> dict:
+    """Geometría determinista de la carta de calibración de cianotipia."""
     page_w, page_h = paper.page_size_px(paper_name, dpi, landscape=False)
     side = _mm(CAL_MARKER_MM, dpi)
     quiet = max(2, side // 7)
@@ -375,23 +391,39 @@ def cyanotype_strip_geometry(paper_name: str = "A4", dpi: int = 300,
     band = margin + side + 2 * quiet + _mm(6, dpi)
     content_x1, content_x2 = band, page_w - band
 
-    cols = 3
-    rows = (steps + cols - 1) // cols
-    gap = _mm(4, dpi)
-    patch_w = (content_x2 - content_x1 - (cols - 1) * gap) // cols
-    patch_h = _mm(16, dpi)
-    y0 = band + _mm(24, dpi)
     patches = []
-    for i in range(steps):
-        row, col = divmod(i, cols)
-        x = content_x1 + col * (patch_w + gap)
-        y = y0 + row * (patch_h + gap + _mm(5, dpi))
-        densidad = int(round(255 * i / (steps - 1)))
-        patches.append({"bbox": [x, y, x + patch_w, y + patch_h],
-                        "densidad": densidad})
+    if target == "edn256":
+        # Grilla 16×16 con los 256 valores (0..255), como la carta EDN RGB256.
+        cols = rows = 16
+        gap = _mm(1.2, dpi)
+        y0 = band + _mm(20, dpi)
+        avail_w = content_x2 - content_x1
+        avail_h = page_h - band - y0
+        pitch = min((avail_w - (cols - 1) * gap) // cols,
+                    (avail_h - (rows - 1) * gap) // rows)
+        for i in range(256):
+            row, col = divmod(i, cols)
+            x = content_x1 + col * (pitch + gap)
+            y = y0 + row * (pitch + gap)
+            patches.append({"bbox": [x, y, x + pitch, y + pitch],
+                            "densidad": i})
+        steps = 256
+    else:
+        cols = 3
+        gap = _mm(4, dpi)
+        patch_w = (content_x2 - content_x1 - (cols - 1) * gap) // cols
+        patch_h = _mm(16, dpi)
+        y0 = band + _mm(24, dpi)
+        for i in range(steps):
+            row, col = divmod(i, cols)
+            x = content_x1 + col * (patch_w + gap)
+            y = y0 + row * (patch_h + gap + _mm(5, dpi))
+            densidad = int(round(255 * i / (steps - 1)))
+            patches.append({"bbox": [x, y, x + patch_w, y + patch_h],
+                            "densidad": densidad})
 
     return {
-        "paper": paper_name, "dpi": dpi, "steps": steps,
+        "paper": paper_name, "dpi": dpi, "steps": steps, "target": target,
         "page_w": page_w, "page_h": page_h,
         "marker_side": side, "marker_quiet": quiet,
         "marker_positions": mk_pos, "marker_bboxes": mk_bboxes,
@@ -401,39 +433,47 @@ def cyanotype_strip_geometry(paper_name: str = "A4", dpi: int = 300,
 
 def generar_tira_cianotipia(out_path, paper_name: str = "A4", dpi: int = 300,
                             ink_color: str = "#000000", mirror: bool = True,
-                            steps: int = CYANO_STEPS) -> str:
-    """Genera el negativo de la tira de calibración para imprimir en acetato.
+                            steps: int = CYANO_STEPS,
+                            target: str = "kamiru21",
+                            ink_stops=None) -> str:
+    """Genera el negativo de la carta de calibración para imprimir en acetato.
 
-    IMPORTANTE: usa el mismo color de tinta y el mismo espejado que se usarán
-    en los negativos reales, para que la medición represente el proceso real.
+    IMPORTANTE: usa el mismo color/degradado de tinta y el mismo espejado que
+    se usarán en los negativos reales, para que la medición represente el
+    proceso completo de verdad.
     """
-    g = cyanotype_strip_geometry(paper_name, dpi, steps)
-    bg = cyan.solid_density_color(255, ink_color)  # tinta plena de fondo
+    g = cyanotype_strip_geometry(paper_name, dpi, steps, target)
+    ramp = cyan.ink_ramp(ink_color, ink_stops)
+    bg = tuple(int(v) for v in ramp[255])  # tinta plena de fondo
     canvas = Image.new("RGB", (g["page_w"], g["page_h"]), bg)
     draw = ImageDraw.Draw(canvas)
     font = _load_font(None, _mm(4, dpi))
     font_small = _load_font(None, _mm(2.8, dpi))
-    text_color = "#FFFFFF" if sum(cyan.hex_to_rgb(ink_color)) < 420 else "#000000"
+    text_color = "#FFFFFF" if sum(bg) < 420 else "#000000"
 
     for mid, (px, py) in g["marker_positions"].items():
-        patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"],
-                                     inverted=True)
+        patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
+        patch = cyan.colorize_gray_patch(patch, ink_color, ink_stops)
         canvas.paste(patch, (int(px), int(py)))
 
     band = g["patches"][0]["bbox"][0]
-    draw.text((band, band), "Kamiru Studio — Calibración de cianotipia",
-              fill=text_color, font=font)
-    draw.text((band, band + _mm(6, dpi)),
+    titulo = ("Kamiru Studio — Calibración de cianotipia (carta EDN 2.2, 256 tonos)"
+              if target == "edn256" else
+              "Kamiru Studio — Calibración de cianotipia (tira de 21 parches)")
+    draw.text((band, _mm(CAL_MARGIN_MM, dpi) + _mm(1, dpi) + g["marker_side"]
+               + 2 * g["marker_quiet"]), titulo, fill=text_color, font=font)
+    draw.text((band, g["patches"][0]["bbox"][1] - _mm(6, dpi)),
               "Imprime en acetato al 100 %, expón tu cianotipia como siempre, "
               "revela, seca y escanea el RESULTADO AZUL (no el acetato).",
               fill=text_color, font=font_small)
 
     for i, p in enumerate(g["patches"]):
-        color = cyan.solid_density_color(p["densidad"], ink_color)
+        color = tuple(int(v) for v in ramp[int(p["densidad"])])
         draw.rectangle(p["bbox"], fill=color)
-        draw.text((p["bbox"][0], p["bbox"][3] + _mm(1, dpi)),
-                  f"{i + 1:02d} · d={p['densidad']}", fill=text_color,
-                  font=font_small)
+        if g["target"] != "edn256":
+            draw.text((p["bbox"][0], p["bbox"][3] + _mm(1, dpi)),
+                      f"{i + 1:02d} · d={p['densidad']}", fill=text_color,
+                      font=font_small)
 
     if mirror:
         canvas = cyan.mirror(canvas)
@@ -446,24 +486,26 @@ def generar_tira_cianotipia(out_path, paper_name: str = "A4", dpi: int = 300,
 
 
 def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
-                             steps: int = CYANO_STEPS, log=None) -> dict:
-    """Analiza el escaneo de la CIANOTIPIA de la tira y construye la curva.
+                             steps: int = CYANO_STEPS,
+                             target: str = "kamiru21", log=None) -> dict:
+    """Analiza el escaneo de la CIANOTIPIA de la carta y construye la curva.
 
     Devuelve un perfil con la LUT de compensación (256 valores), la respuesta
     medida y notas/sugerencias.
     """
     _log = log or (lambda *_: None)
-    g = cyanotype_strip_geometry(paper_name, dpi, steps)
+    g = cyanotype_strip_geometry(paper_name, dpi, steps, target)
     warp, s, refined, _ = _align_to_canonical(scan_path, g, mode="cianotipia")
-    _log(f"Tira alineada ({len(refined)} marcadores, escala {s:.3f}×).")
+    _log(f"Carta alineada ({len(refined)} marcadores, escala {s:.3f}×).")
 
     # Luminancia medida de cada parche (densidad creciente → más blanco).
     respuesta = []  # [densidad, luminancia]
     for p in g["patches"]:
-        m = _patch_mean(warp, p["bbox"], s)
+        m = _patch_mean(warp, p["bbox"], s,
+                        shrink=0.3 if g["target"] == "edn256" else 0.25)
         if m is not None:
             respuesta.append([int(p["densidad"]), round(m, 1)])
-    if len(respuesta) < max(5, steps // 2):
+    if len(respuesta) < max(5, len(g["patches"]) // 2):
         raise ValueError(
             "No se pudieron medir suficientes parches; revisa que el escaneo "
             "esté completo, plano y bien iluminado.")
@@ -486,8 +528,9 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
         notas.append(
             "Rango dinámico bajo (<35 %). Sugerencias: aumenta el tiempo de "
             "exposición, verifica que la tinta plena del acetato realmente "
-            "bloquee la luz (imprime en calidad máxima / doble pasada) y "
-            "revisa el lavado.")
+            "bloquee la luz (imprime en calidad máxima, o usa el ColorBlocker "
+            "para encontrar un color de tinta que bloquee mejor) y revisa el "
+            "lavado.")
     if rango > 0.85:
         notas.append("Excelente rango dinámico. 💙")
 
@@ -505,9 +548,239 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
         "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
         "paper": paper_name,
         "dpi": dpi,
-        "steps": steps,
+        "steps": g["steps"],
+        "target": g["target"],
         "lut": lut,
         "respuesta": respuesta,
         "rango_dinamico": round(rango, 3),
+        "notas": notas,
+    }
+
+
+# ────────────────────────────────────────────────────────────────
+# EDN COLORBLOCKER (elección del color de tinta que mejor bloquea el UV)
+# ────────────────────────────────────────────────────────────────
+#
+# Réplica del método EDN ColorBlocker 3 (Peter Mrhar,
+# easydigitalnegatives.com): una carta HSB con 36 matices × 21 variantes
+# (brillo 0→100 % con saturación plena, y luego saturación 90→0 % con brillo
+# pleno) más una columna K de grises. Se imprime en acetato, se expone la
+# cianotipia y se mide qué color BLOQUEÓ mejor el UV (el parche que quedó más
+# claro en la copia azul). También se eligen 3 paradas de color (sombras /
+# medios / luces) a lo largo del mejor matiz, igual que el degradado que
+# genera la herramienta original. La diferencia: esta carta lleva el marco de
+# marcadores de Kamiru, así que el análisis del escaneo es automático.
+
+CB_HUE_COLS = 36    # matices 0..350° (paso 10°)
+CB_COLS = CB_HUE_COLS + 1  # + columna K (grises)
+CB_ROWS = 21        # filas 0..10: B=0..100 (S=100); filas 11..20: S=90..0 (B=100)
+
+
+def _cb_patch_rgb(col: int, row: int) -> tuple[int, int, int]:
+    """Color RGB del parche (col, fila) de la carta ColorBlocker."""
+    import colorsys
+    if col >= CB_HUE_COLS:  # columna K: grises de negro a blanco
+        v = int(round(255 * row / (CB_ROWS - 1)))
+        return (v, v, v)
+    hue = (col * 10) / 360.0
+    if row <= 10:
+        s_, b_ = 1.0, row / 10.0
+    else:
+        s_, b_ = (10 - (row - 10)) / 10.0, 1.0
+    r, g_, b2 = colorsys.hsv_to_rgb(hue, s_, b_)
+    return (int(round(r * 255)), int(round(g_ * 255)), int(round(b2 * 255)))
+
+
+def _cb_patch_hsb(col: int, row: int):
+    """(H, S, B) nominal del parche, para el informe."""
+    if col >= CB_HUE_COLS:
+        return None
+    if row <= 10:
+        return (col * 10, 100, row * 10)
+    return (col * 10, (10 - (row - 10)) * 10, 100)
+
+
+def colorblocker_geometry(paper_name: str = "A4", dpi: int = 300) -> dict:
+    """Geometría de la carta ColorBlocker (hoja HORIZONTAL)."""
+    page_w, page_h = paper.page_size_px(paper_name, dpi, landscape=True)
+    side = _mm(CAL_MARKER_MM, dpi)
+    quiet = max(2, side // 7)
+    margin = _mm(CAL_MARGIN_MM, dpi)
+    mk_pos = markers.marker_layout(page_w, page_h, 8, side, margin, quiet)
+    mk_bboxes = markers.marker_bboxes(page_w, page_h, 8, side, margin, quiet)
+
+    band = margin + side + 2 * quiet + _mm(5, dpi)
+    x1, x2 = band, page_w - band
+    y1 = band + _mm(14, dpi)
+    y2 = page_h - band - _mm(4, dpi)
+    gap = _mm(0.8, dpi)
+    pitch_x = (x2 - x1 - (CB_COLS - 1) * gap) // CB_COLS
+    pitch_y = (y2 - y1 - (CB_ROWS - 1) * gap) // CB_ROWS
+    pitch = int(min(pitch_x, pitch_y * 1.4))  # parches un poco anchos
+
+    patches = []  # [{bbox, col, fila}]
+    for col in range(CB_COLS):
+        for row in range(CB_ROWS):
+            x = x1 + col * (pitch + gap)
+            y = y1 + row * (pitch_y + gap)
+            patches.append({"bbox": [int(x), int(y), int(x + pitch),
+                                     int(y + pitch_y)],
+                            "col": col, "fila": row})
+
+    return {
+        "paper": paper_name, "dpi": dpi,
+        "page_w": page_w, "page_h": page_h,
+        "marker_side": side, "marker_quiet": quiet,
+        "marker_positions": mk_pos, "marker_bboxes": mk_bboxes,
+        "patches": patches,
+    }
+
+
+def generar_colorblocker(out_path, paper_name: str = "A4", dpi: int = 300,
+                         mirror: bool = True) -> str:
+    """Genera la carta ColorBlocker para imprimir en acetato.
+
+    Los parches van con sus colores DIRECTOS (sin mapear por tinta): la
+    gracia es medir cómo bloquea el UV cada color real de la impresora.
+    """
+    g = colorblocker_geometry(paper_name, dpi)
+    canvas = Image.new("RGB", (g["page_w"], g["page_h"]), "#000000")
+    draw = ImageDraw.Draw(canvas)
+    font = _load_font(None, _mm(3.6, dpi))
+    font_small = _load_font(None, _mm(2.2, dpi))
+
+    for mid, (px, py) in g["marker_positions"].items():
+        patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
+        patch = cyan.colorize_gray_patch(patch, "#000000")
+        canvas.paste(patch, (int(px), int(py)))
+
+    x0 = g["patches"][0]["bbox"][0]
+    draw.text((x0, g["patches"][0]["bbox"][1] - _mm(11, dpi)),
+              "Kamiru Studio — EDN ColorBlocker (elige el color que mejor "
+              "bloquea el UV)", fill="#FFFFFF", font=font)
+    draw.text((x0, g["patches"][0]["bbox"][1] - _mm(6, dpi)),
+              "Imprime en acetato al 100 % en MÁXIMA calidad, expón tu "
+              "cianotipia como siempre, revela, seca y escanea el resultado azul.",
+              fill="#FFFFFF", font=font_small)
+
+    for p in g["patches"]:
+        draw.rectangle(p["bbox"], fill=_cb_patch_rgb(p["col"], p["fila"]))
+
+    if mirror:
+        canvas = cyan.mirror(canvas)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = "TIFF" if out_path.suffix.lower() in (".tif", ".tiff") else "PNG"
+    canvas.save(str(out_path), fmt, dpi=(dpi, dpi))
+    return str(out_path)
+
+
+def analizar_colorblocker(scan_path, paper_name: str = "A4", dpi: int = 300,
+                          log=None) -> dict:
+    """Analiza la CIANOTIPIA de la carta ColorBlocker.
+
+    Sigue la lógica de EDN ColorBlocker 3: normaliza las luminancias medidas,
+    descarta matices no monótonos, encuentra el color que MÁS bloqueó (parche
+    más claro), el matiz con mejor separación tonal, y construye las 3 paradas
+    de color (sombras/medios/luces) para el degradado de tinta.
+    """
+    _log = log or (lambda *_: None)
+    g = colorblocker_geometry(paper_name, dpi)
+    warp, s, refined, _ = _align_to_canonical(scan_path, g, mode="cianotipia")
+    _log(f"Carta alineada ({len(refined)} marcadores, escala {s:.3f}×).")
+
+    # Medir todas las luminancias.
+    vK = np.full((CB_COLS, CB_ROWS), np.nan)
+    for p in g["patches"]:
+        m = _patch_mean(warp, p["bbox"], s, shrink=0.3)
+        if m is not None:
+            vK[p["col"], p["fila"]] = m
+    if np.isnan(vK).sum() > vK.size * 0.2:
+        raise ValueError("No se pudieron medir suficientes parches del "
+                         "ColorBlocker; revisa el escaneo.")
+    vK = np.nan_to_num(vK, nan=float(np.nanmean(vK)))
+
+    # Normalizar 0..255 (como hace EDN).
+    vmin, vmax = float(vK.min()), float(vK.max())
+    if vmax - vmin < 10:
+        raise ValueError("La carta apenas tiene contraste: la exposición fue "
+                         "demasiado corta o larga.")
+    vK = (vK - vmin) / (vmax - vmin) * 255.0
+
+    # Análisis por matiz: escalones tonales (≥10, en valor absoluto, para no
+    # depender del ORDEN de la respuesta), monotonía informativa y suavidad.
+    # Nota: a diferencia de funk.js, aquí NO se descarta un matiz por respuesta
+    # no monótona al buscar el mejor bloqueador — en impresoras donde el negro
+    # filtra UV, justamente los matices ganadores son "no monótonos" respecto
+    # del orden nominal de la carta. El parche que salió MÁS CLARO en la copia
+    # es, por definición física, el que mejor bloqueó.
+    monotona = np.ones(CB_COLS, dtype=bool)
+    escalones = np.zeros(CB_COLS, dtype=int)
+    suavidad = np.zeros(CB_COLS)
+    for k in range(CB_COLS):
+        colv = vK[k]
+        deltas = np.diff(colv)
+        if (deltas < -10).any():
+            monotona[k] = False
+        escalones[k] = int((np.abs(deltas) >= 10).sum())
+        orden_col = np.sort(colv)
+        tramo = np.diff(orden_col)
+        ideal = (orden_col[-1] - orden_col[0]) / max(1, len(orden_col) - 1)
+        suavidad[k] = float(np.abs(tramo - ideal).mean()) if len(tramo) else 999.0
+
+    # 1) Mejor bloqueador: el parche MÁS CLARO de toda la carta.
+    best_col, best_row = np.unravel_index(int(np.argmax(vK)), vK.shape)
+    best_col, best_row = int(best_col), int(best_row)
+    best_v = float(vK[best_col, best_row])
+    mejor_rgb = _cb_patch_rgb(best_col, best_row)
+    mejor_hex = cyan.rgb_to_hex(mejor_rgb)
+    nombre_col = "K (gris)" if best_col >= CB_HUE_COLS else f"{best_col * 10}°"
+    _log(f"Color que mejor bloquea: {mejor_hex} (matiz {nombre_col}, "
+         f"fila {best_row + 1}).")
+
+    # 2) Matiz con mejor separación tonal: top-3 por escalones, gana el más
+    #    suave (como tri() + iNH() de EDN, pero orden-agnóstico).
+    orden = np.argsort(-escalones)
+    top3 = [int(i) for i in orden[:3]]
+    mejor_hue_col = min(top3, key=lambda k: suavidad[k])
+
+    # 3) Paradas del degradado: filas del mejor matiz cuya luminancia quede
+    #    más cerca de 0 / 127 / 255 (normalizado), como _li() de EDN.
+    stops = []
+    for target_v, dens in ((0.0, 0), (127.0, 127), (255.0, 255)):
+        fila = int(np.argmin(np.abs(vK[mejor_hue_col] - target_v)))
+        stops.append([dens, cyan.rgb_to_hex(_cb_patch_rgb(mejor_hue_col, fila))])
+    nombre_hue = ("K (gris)" if mejor_hue_col >= CB_HUE_COLS
+                  else f"{mejor_hue_col * 10}°")
+    _log(f"Matiz con mejor separación tonal: {nombre_hue} · degradado "
+         + " → ".join(c for _, c in stops))
+
+    notas = []
+    negro_v = float(vK[CB_HUE_COLS].max())  # mejor gris de la columna K
+    if best_col < CB_HUE_COLS and best_v > negro_v + 15:
+        notas.append(
+            f"En tu impresora, el color {mejor_hex} bloquea el UV claramente "
+            f"mejor que el negro: úsalo como tinta de los negativos.")
+    elif best_col >= CB_HUE_COLS:
+        notas.append("En tu impresora el negro/gris es el mejor bloqueador: "
+                     "puedes seguir usando tinta negra.")
+    if not monotona.all():
+        malos = int((~monotona).sum())
+        notas.append(f"{malos} matiz(es) dieron respuesta no monótona y se "
+                     f"descartaron (normal: colores que casi no bloquean).")
+
+    return {
+        "tipo": "cianotipia_color",
+        "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "paper": paper_name,
+        "dpi": dpi,
+        "mejor_color": mejor_hex,
+        "mejor_matiz": None if best_col >= CB_HUE_COLS else best_col * 10,
+        "mejor_hsb": _cb_patch_hsb(best_col, best_row),
+        "stops": stops,
+        "matiz_degradado": (None if mejor_hue_col >= CB_HUE_COLS
+                            else mejor_hue_col * 10),
+        "escalones_max": int(escalones[mejor_hue_col]),
         "notas": notas,
     }
