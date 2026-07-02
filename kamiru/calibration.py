@@ -35,10 +35,25 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from . import cyanotype as cyan
+from . import fonts as fontmod
 from . import markers, paper
 from .core import _load_font, _text_size
 from .scan import (_detect_markers_multi, _estimate_scale,
                    _refine_corners_fullres, _to_u8, leer_imagen_robusta)
+
+# Fuente del sistema para los textos de las hojas de calibración (la fuente
+# por defecto de Pillow no siempre trae acentos). Se descubre una sola vez.
+_FONT_PATH_CACHE: list = []
+
+
+def _get_font(size_px: int):
+    if not _FONT_PATH_CACHE:
+        try:
+            _, path = fontmod.default_font(fontmod.discover_fonts())
+        except Exception:
+            path = None
+        _FONT_PATH_CACHE.append(path)
+    return _load_font(_FONT_PATH_CACHE[0], size_px)
 
 # Geometría fija de las páginas de calibración (en mm).
 CAL_MARKER_MM = 10.0      # lado de los marcadores de registro
@@ -119,8 +134,8 @@ def generar_pagina_prueba_impresora(out_path, paper_name: str = "A4",
     g = printer_test_geometry(paper_name, dpi)
     canvas = Image.new("RGB", (g["page_w"], g["page_h"]), "#FFFFFF")
     draw = ImageDraw.Draw(canvas)
-    font = _load_font(None, _mm(4, dpi))
-    font_small = _load_font(None, _mm(2.6, dpi))
+    font = _get_font( _mm(4, dpi))
+    font_small = _get_font( _mm(2.6, dpi))
 
     for mid, (px, py) in g["marker_positions"].items():
         patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
@@ -447,8 +462,8 @@ def generar_tira_cianotipia(out_path, paper_name: str = "A4", dpi: int = 300,
     bg = tuple(int(v) for v in ramp[255])  # tinta plena de fondo
     canvas = Image.new("RGB", (g["page_w"], g["page_h"]), bg)
     draw = ImageDraw.Draw(canvas)
-    font = _load_font(None, _mm(4, dpi))
-    font_small = _load_font(None, _mm(2.8, dpi))
+    font = _get_font( _mm(4, dpi))
+    font_small = _get_font( _mm(2.8, dpi))
     text_color = "#FFFFFF" if sum(bg) < 420 else "#000000"
 
     for mid, (px, py) in g["marker_positions"].items():
@@ -646,8 +661,8 @@ def generar_colorblocker(out_path, paper_name: str = "A4", dpi: int = 300,
     g = colorblocker_geometry(paper_name, dpi)
     canvas = Image.new("RGB", (g["page_w"], g["page_h"]), "#000000")
     draw = ImageDraw.Draw(canvas)
-    font = _load_font(None, _mm(3.6, dpi))
-    font_small = _load_font(None, _mm(2.2, dpi))
+    font = _get_font( _mm(3.6, dpi))
+    font_small = _get_font( _mm(2.2, dpi))
 
     for mid, (px, py) in g["marker_positions"].items():
         patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
