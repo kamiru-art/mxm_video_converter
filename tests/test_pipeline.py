@@ -18,6 +18,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+# La consola de Windows usa cp1252 por defecto y no puede imprimir los
+# emojis/box-drawing de este reporte; se fuerza UTF-8 (con reemplazo).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw

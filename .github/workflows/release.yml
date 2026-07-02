@@ -20,6 +20,9 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONUTF8: "1"   # consola UTF-8 también en Windows (emojis del test/log)
+
 jobs:
   build:
     name: Build (${{ matrix.nombre }})
