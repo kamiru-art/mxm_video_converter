@@ -1,6 +1,12 @@
-# Dependencias de Kamiru — Video a Contact Sheets
+# Dependencias de Kamiru Studio
 # Instálalas con:  python -m pip install -r requirements.txt
 # (los lanzadores run.command / run.bat / run.sh lo hacen automáticamente)
 
-Pillow>=9.2.0
+Pillow>=10.0
 imageio-ffmpeg>=0.4.8
+numpy>=1.24
+opencv-python>=4.8       # marcadores ArUco, alineación de escaneos, QR
+qrcode[pil]>=7.4         # generación de códigos QR
+
+# Opcional (refuerzo extra para leer QRs difíciles; requiere libzbar):
+# pyzbar>=0.1.9

@@ -1,7 +1,13 @@
-"""Interfaz gráfica (Tkinter) de Kamiru — Video a Contact Sheets.
+"""Interfaz gráfica (Tkinter) de Kamiru Studio.
 
-Pensada para usarse sin tocar código. Toda la lógica pesada (extracción y
-composición) corre en un hilo aparte para que la ventana no se congele.
+Pensada para usarse sin tocar código. La app tiene 4 fases (pestañas grandes):
+
+    ① Generar hojas      video/carpeta → contact sheets (con o sin marcadores)
+    ② Procesar escaneos  escaneos pintados/expuestos → fotogramas digitales
+    ③ Calibración        perfiles de impresora y de cianotipia
+    ④ Video final        fotogramas procesados → video
+
+Toda la lógica pesada corre en hilos aparte para que la ventana no se congele.
 """
 
 from __future__ import annotations
@@ -12,164 +18,66 @@ import os
 # antes de que se inicialice Tk (es decir, antes de importar tkinter).
 os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 
-import queue
 import shutil
 import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image
 
-from . import __app_name__, __version__, config, core, fonts as fontmod
-from . import paper
+from . import __app_name__, __version__, config, core, dedup
+from . import fonts as fontmod
+from . import markers, paper
 from .ffmpeg_utils import VideoInfo, extract_frames, find_ffmpeg, probe
+from .gui_common import PAD, PALETTE, PhaseFrame, build_style
+from .gui_phases import CalibPhase, ScansPhase, VideoPhase
 
-PAD = 10
 VIDEO_TYPES = [
     ("Videos", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv *.flv *.mts *.m2ts"),
     ("Todos los archivos", "*.*"),
 ]
 
+IMG_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+
 # Tope de fotogramas a extraer para la vista previa de TODAS las hojas (evita
 # que un video larguísimo congele la app; la generación final no tiene tope).
 PREVIEW_ALL_CAP = 2000
 
-# Paleta de la interfaz (look limpio y cálido, con verde como acento 💚).
-PALETTE = {
-    "bg": "#F3F5F7",          # fondo general
-    "card": "#FFFFFF",        # campos / pestaña activa
-    "text": "#243038",        # texto principal
-    "muted": "#6B7B88",       # texto secundario
-    "accent": "#1FA37A",      # verde principal
-    "accent_dark": "#15795A",
-    "accent_soft": "#A9CEC2",  # acento atenuado (botón deshabilitado)
-    "accent_text": "#FFFFFF",
-    "border": "#D5DCE2",
-    "tab_off": "#E5EBEF",      # pestaña inactiva
-    "trough": "#E3E8EC",       # canal de la barra de progreso
-}
+NO_PRINTER = "(sin perfil)"
+NO_CURVE = "(sin curva — lineal)"
+
+LABEL_SOURCES = [
+    "Nombre base + número (abc_001)",
+    "Nombre del archivo de imagen",
+]
 
 
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title(f"{__app_name__}  v{__version__}")
-        self.minsize(900, 780)
+class SheetsPhase(PhaseFrame):
+    """Fase ①: de un video (o carpeta de imágenes) a hojas imprimibles."""
 
-        self.queue: "queue.Queue" = queue.Queue()
-        self.worker = None
-        self._cancel = False
+    def __init__(self, master, app):
+        super().__init__(master, app)
         self._tmpdir = None
         self.video_info = VideoInfo()
         self.fonts_map = {}
+        self._folder_count = 0
 
-        self._build_style()
         self._build_vars()
         self._build_ui()
         self._load_fonts_async()
-        self._restore_config()
+        self.refresh_profiles()
         self._update_estimate()
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._bring_to_front()
+        self._poll_forever()
 
-    def _bring_to_front(self):
-        # Al abrir desde el .app (sin terminal) la ventana puede quedar detrás
-        # de otras; la traemos al frente un instante.
-        try:
-            self.lift()
-            self.attributes("-topmost", True)
-            self.after(400, lambda: self.attributes("-topmost", False))
-        except tk.TclError:
-            pass
-
-    # ------------------------------------------------------------------ UI
-    def _build_style(self):
-        import tkinter.font as tkfont
-        p = PALETTE
-
-        # Fuentes base un poco más grandes (sin encoger las de macOS, que ya
-        # parten de un tamaño mayor).
-        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
-            try:
-                f = tkfont.nametofont(name)
-                sz = f.cget("size")
-                if sz < 0:  # tamaño en píxeles -> pasamos a puntos aprox.
-                    sz = max(10, int(round(abs(sz) * 0.75)))
-                f.configure(size=max(sz, 13) + 1)
-            except tk.TclError:
-                pass
-
-        self.configure(bg=p["bg"])
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        style.configure(".", background=p["bg"], foreground=p["text"])
-        style.configure("TFrame", background=p["bg"])
-        style.configure("TLabel", background=p["bg"], foreground=p["text"])
-        style.configure("Header.TLabel", font=("", 25, "bold"),
-                        foreground=p["accent_dark"])
-        style.configure("Sub.TLabel", foreground=p["muted"])
-        style.configure("Info.TLabel", foreground=p["accent_dark"], font=("", 13, "bold"))
-
-        style.configure("TLabelframe", background=p["bg"], bordercolor=p["border"],
-                        relief="solid", borderwidth=1)
-        style.configure("TLabelframe.Label", background=p["bg"],
-                        foreground=p["accent_dark"], font=("", 14, "bold"))
-
-        for w in ("TCheckbutton", "TRadiobutton"):
-            style.configure(w, background=p["bg"], foreground=p["text"])
-            style.map(w, background=[("active", p["bg"])],
-                      foreground=[("disabled", p["muted"])])
-
-        # Botones
-        style.configure("TButton", padding=8, background=p["card"],
-                        foreground=p["text"], bordercolor=p["border"],
-                        focuscolor=p["accent"])
-        style.map("TButton",
-                  background=[("active", p["tab_off"]), ("pressed", p["tab_off"])],
-                  bordercolor=[("focus", p["accent"])])
-        style.configure("Accent.TButton", font=("", 15, "bold"), padding=11,
-                        background=p["accent"], foreground=p["accent_text"],
-                        bordercolor=p["accent"])
-        style.map("Accent.TButton",
-                  background=[("active", p["accent_dark"]),
-                              ("pressed", p["accent_dark"]),
-                              ("disabled", p["accent_soft"])],
-                  foreground=[("disabled", "#EEF6F2")])
-
-        # Pestañas
-        style.configure("TNotebook", background=p["bg"], bordercolor=p["border"],
-                        tabmargins=(4, 4, 4, 0))
-        style.configure("TNotebook.Tab", padding=(15, 9),
-                        background=p["tab_off"], foreground=p["muted"])
-        style.map("TNotebook.Tab",
-                  background=[("selected", p["card"])],
-                  foreground=[("selected", p["accent_dark"])],
-                  expand=[("selected", (1, 1, 1, 0))])
-
-        # Campos de entrada
-        style.configure("TEntry", fieldbackground=p["card"], bordercolor=p["border"],
-                        padding=4)
-        style.configure("TSpinbox", fieldbackground=p["card"], bordercolor=p["border"],
-                        arrowsize=14, padding=3)
-        style.configure("TCombobox", fieldbackground=p["card"], bordercolor=p["border"],
-                        padding=3)
-        style.map("TCombobox", fieldbackground=[("readonly", p["card"])])
-
-        # Barra de progreso
-        style.configure("TProgressbar", background=p["accent"], troughcolor=p["trough"],
-                        bordercolor=p["border"], lightcolor=p["accent"],
-                        darkcolor=p["accent"])
-
+    # ------------------------------------------------------------------ vars
     def _build_vars(self):
         v = self
-        # Video / rango
+        # Origen
+        v.var_source = tk.StringVar(value="video")  # video | folder
         v.var_video = tk.StringVar()
+        v.var_frames_dir = tk.StringVar()
         v.var_range_mode = tk.StringVar(value="all")  # all | range
         v.var_start = tk.DoubleVar(value=0.0)
         v.var_end = tk.DoubleVar(value=0.0)
@@ -181,6 +89,9 @@ class App(tk.Tk):
         # Selección de fotogramas (incluir / excluir por posición, p. ej. "1, 3-5")
         v.var_include = tk.StringVar(value="")
         v.var_exclude = tk.StringVar(value="")
+        # Deduplicación
+        v.var_dedup = tk.BooleanVar(value=False)
+        v.var_dedup_thr = tk.IntVar(value=4)
         # Hoja
         v.var_paper = tk.StringVar(value="A4")
         v.var_orientation = tk.StringVar(value=core.ORIENTATIONS[0])
@@ -190,8 +101,10 @@ class App(tk.Tk):
         v.var_margin = tk.DoubleVar(value=10.0)
         v.var_gutter = tk.DoubleVar(value=5.0)
         v.var_bg = tk.StringVar(value="#FFFFFF")
+        v.var_printer_profile = tk.StringVar(value=NO_PRINTER)
         # Etiquetas
         v.var_labels_on = tk.BooleanVar(value=True)
+        v.var_label_source = tk.StringVar(value=LABEL_SOURCES[0])
         v.var_base = tk.StringVar(value="abc")
         v.var_sep = tk.StringVar(value="_")
         v.var_zeros = tk.IntVar(value=1)
@@ -212,6 +125,21 @@ class App(tk.Tk):
         v.var_pagenum_order = tk.StringVar(value=core.PAGE_NUMBERING[0])
         v.var_pagenum_size = tk.DoubleVar(value=11.0)
         v.var_pagenum_color = tk.StringVar(value="#000000")
+        # Marcadores de registro
+        v.var_reg_on = tk.BooleanVar(value=True)
+        v.var_marker_count = tk.IntVar(value=8)
+        v.var_marker_size = tk.DoubleVar(value=8.0)
+        v.var_marker_margin = tk.DoubleVar(value=4.0)
+        v.var_qr_on = tk.BooleanVar(value=True)
+        v.var_qr_size = tk.DoubleVar(value=10.0)
+        v.var_patch_on = tk.BooleanVar(value=False)
+        v.var_project = tk.StringVar(value="")
+        # Cianotipia
+        v.var_cyan_on = tk.BooleanVar(value=False)
+        v.var_cyan_mirror = tk.BooleanVar(value=True)
+        v.var_cyan_ink = tk.StringVar(value="#000000")
+        v.var_cyan_curve = tk.StringVar(value=NO_CURVE)
+        v.var_cyan_sim = tk.BooleanVar(value=False)
         # Salida
         v.var_out_dir = tk.StringVar()
         v.var_out_name = tk.StringVar(value="contact_sheet")
@@ -219,32 +147,31 @@ class App(tk.Tk):
         v.var_pdf = tk.BooleanVar(value=True)
         v.var_tiff = tk.BooleanVar(value=False)
         v.var_export_frames = tk.BooleanVar(value=False)
+        v.var_sheets_include = tk.StringVar(value="")
+        v.var_sheets_exclude = tk.StringVar(value="")
+        v.var_keep_orig = tk.BooleanVar(value=True)
 
         # Recalcular estimación cuando cambien los valores clave.
         for var in (v.var_fps, v.var_cols, v.var_rows, v.var_start, v.var_end,
                     v.var_range_mode, v.var_extract_mode, v.var_include,
-                    v.var_exclude):
+                    v.var_exclude, v.var_source):
             var.trace_add("write", lambda *_: self._update_estimate())
 
+    # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        # Cabecera
-        head = ttk.Frame(self, padding=(PAD * 2, PAD, PAD * 2, 0))
-        head.pack(fill="x")
-        ttk.Label(head, text="Video → Contact Sheets", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(head, text="Hecho con cariño para Kamila 💚  ·  sin pérdida de calidad, sin cambios de color",
-                  style="Sub.TLabel").pack(anchor="w")
-
         nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=PAD * 2, pady=PAD)
-        self._tab_video(nb)
+        nb.pack(fill="both", expand=True, padx=PAD, pady=(0, PAD))
+        self._tab_source(nb)
         self._tab_grid(nb)
         self._tab_sheet(nb)
         self._tab_labels(nb)
         self._tab_pagenum(nb)
+        self._tab_markers(nb)
+        self._tab_cyanotype(nb)
         self._tab_output(nb)
 
         # Barra inferior de acción
-        bar = ttk.Frame(self, padding=(PAD * 2, 0, PAD * 2, PAD))
+        bar = ttk.Frame(self, padding=(PAD, 0, PAD, 0))
         bar.pack(fill="x")
         self.estimate_lbl = ttk.Label(bar, text="", style="Info.TLabel")
         self.estimate_lbl.pack(anchor="w", pady=(0, 4))
@@ -255,7 +182,7 @@ class App(tk.Tk):
 
         btns = ttk.Frame(bar)
         btns.pack(fill="x")
-        self.run_btn = ttk.Button(btns, text="Generar contact sheets",
+        self.run_btn = ttk.Button(btns, text="Generar hojas",
                                   style="Accent.TButton", command=self._on_run)
         self.run_btn.pack(side="right")
         self.cancel_btn = ttk.Button(btns, text="Cancelar", command=self._on_cancel,
@@ -266,32 +193,52 @@ class App(tk.Tk):
         self.preview_btn.pack(side="right", padx=(0, PAD))
         ttk.Button(btns, text="Ayuda", command=self._show_help).pack(side="left")
 
-    def _section(self, parent, title):
-        lf = ttk.LabelFrame(parent, text=title, padding=PAD)
-        lf.pack(fill="x", padx=PAD, pady=(PAD, 0))
-        lf.columnconfigure(1, weight=1)
-        return lf
+        # Presets con nombre
+        pf = ttk.Frame(btns)
+        pf.pack(side="left", padx=(PAD, 0))
+        ttk.Label(pf, text="Preset:").pack(side="left")
+        self.preset_cb = ttk.Combobox(pf, width=18, values=config.list_presets())
+        self.preset_cb.pack(side="left", padx=4)
+        ttk.Button(pf, text="Cargar", width=7,
+                   command=self._load_preset).pack(side="left")
+        ttk.Button(pf, text="Guardar", width=8,
+                   command=self._save_preset).pack(side="left", padx=(4, 0))
 
-    def _tab_video(self, nb):
+    def _tab_source(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="1 · Video")
+        nb.add(tab, text="1 · Origen")
 
-        sec = self._section(tab, "Archivo de video")
-        ttk.Entry(sec, textvariable=self.var_video).grid(row=0, column=0, columnspan=2,
-                                                         sticky="ew", padx=(0, PAD))
-        ttk.Button(sec, text="Examinar…", command=self._pick_video).grid(row=0, column=2)
-        self.video_info_lbl = ttk.Label(sec, text="Aún no se ha cargado ningún video.",
+        sec = self.section(tab, "¿De dónde salen los fotogramas?")
+        ttk.Radiobutton(sec, text="De un video", variable=self.var_source,
+                        value="video", command=self._sync_source).grid(
+            row=0, column=0, sticky="w")
+        ttk.Radiobutton(sec, text="De una carpeta de imágenes (frames ya "
+                                  "exportados, dibujos, etc.)",
+                        variable=self.var_source, value="folder",
+                        command=self._sync_source).grid(
+            row=1, column=0, columnspan=2, sticky="w")
+
+        self.video_sec = self.section(tab, "Archivo de video")
+        ttk.Entry(self.video_sec, textvariable=self.var_video).grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=(0, PAD))
+        self.video_browse_btn = ttk.Button(self.video_sec, text="Examinar…",
+                                           command=self._pick_video)
+        self.video_browse_btn.grid(row=0, column=2)
+        self.video_info_lbl = ttk.Label(self.video_sec,
+                                        text="Aún no se ha cargado ningún video.",
                                         style="Sub.TLabel")
         self.video_info_lbl.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
-        sec = self._section(tab, "Rango a procesar")
-        ttk.Radiobutton(sec, text="Todo el video", variable=self.var_range_mode,
-                        value="all", command=self._sync_range).grid(row=0, column=0,
-                                                                    columnspan=3, sticky="w")
-        ttk.Radiobutton(sec, text="Elegir inicio y fin (en segundos)",
+        self.range_sec = self.section(tab, "Rango a procesar (solo video)")
+        ttk.Radiobutton(self.range_sec, text="Todo el video",
+                        variable=self.var_range_mode,
+                        value="all", command=self._sync_range).grid(
+            row=0, column=0, columnspan=3, sticky="w")
+        ttk.Radiobutton(self.range_sec, text="Elegir inicio y fin (en segundos)",
                         variable=self.var_range_mode, value="range",
-                        command=self._sync_range).grid(row=1, column=0, columnspan=3, sticky="w")
-        self.range_box = ttk.Frame(sec)
+                        command=self._sync_range).grid(row=1, column=0,
+                                                       columnspan=3, sticky="w")
+        self.range_box = ttk.Frame(self.range_sec)
         self.range_box.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 0))
         ttk.Label(self.range_box, text="Inicio (s):").grid(row=0, column=0, sticky="w")
         ttk.Spinbox(self.range_box, from_=0, to=999999, increment=0.5, width=10,
@@ -299,13 +246,27 @@ class App(tk.Tk):
         ttk.Label(self.range_box, text="Fin (s):").grid(row=0, column=2, sticky="w")
         ttk.Spinbox(self.range_box, from_=0, to=999999, increment=0.5, width=10,
                     textvariable=self.var_end).grid(row=0, column=3, padx=4)
+
+        self.folder_sec = self.section(tab, "Carpeta de imágenes")
+        ttk.Entry(self.folder_sec, textvariable=self.var_frames_dir).grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=(0, PAD))
+        self.folder_browse_btn = ttk.Button(self.folder_sec, text="Examinar…",
+                                            command=self._pick_frames_dir)
+        self.folder_browse_btn.grid(row=0, column=2)
+        self.folder_info_lbl = ttk.Label(self.folder_sec, text="",
+                                         style="Sub.TLabel")
+        self.folder_info_lbl.grid(row=1, column=0, columnspan=3, sticky="w",
+                                  pady=(6, 0))
+
         self._sync_range()
+        self._sync_source()
 
     def _tab_grid(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
         nb.add(tab, text="2 · Fotogramas")
 
-        sec = self._section(tab, "¿Cuántos fotogramas extraer del video?")
+        sec = self.section(tab, "¿Cuántos fotogramas extraer del video?")
+        self.extract_sec = sec
         ttk.Radiobutton(sec, text="Muestrear N fotogramas por segundo (recomendado)",
                         variable=self.var_extract_mode, value="fps",
                         command=self._sync_extract).grid(row=0, column=0, columnspan=3, sticky="w")
@@ -322,9 +283,7 @@ class App(tk.Tk):
                                                          sticky="w", pady=(6, 0))
         self._sync_extract()
 
-        sec = self._section(tab, "Imágenes por hoja (cuadrícula)")
-        # Columnas y filas van juntas en un sub-marco para que NO se separen
-        # cuando la ventana se maximiza (la columna 1 de la sección se estira).
+        sec = self.section(tab, "Imágenes por hoja (cuadrícula)")
         grid_box = ttk.Frame(sec)
         grid_box.grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(grid_box, text="Columnas:").grid(row=0, column=0, sticky="w")
@@ -335,8 +294,11 @@ class App(tk.Tk):
             row=0, column=3, sticky="w", padx=4)
         self.perpage_lbl = ttk.Label(sec, text="", style="Sub.TLabel")
         self.perpage_lbl.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(sec, text="Para mixed media clásico usa 2 columnas × 2 filas "
+                            "(4 por hoja).", style="Sub.TLabel").grid(
+            row=2, column=0, columnspan=2, sticky="w")
 
-        sec = self._section(tab, "Elegir qué fotogramas salen (opcional)")
+        sec = self.section(tab, "Elegir qué fotogramas salen (opcional)")
         gb = ttk.Frame(sec)
         gb.grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(gb, text="Incluir solo:").grid(row=0, column=0, sticky="w")
@@ -350,7 +312,21 @@ class App(tk.Tk):
                   style="Sub.TLabel").grid(row=1, column=0, columnspan=2,
                                            sticky="w", pady=(6, 0))
 
-        sec = self._section(tab, "Espaciado entre frames")
+        sec = self.section(tab, "Fotogramas repetidos (ahorra papel y pintura)")
+        ttk.Checkbutton(sec, text="Detectar dibujos repetidos e imprimir solo "
+                                  "uno por grupo (se reutilizan al armar el video)",
+                        variable=self.var_dedup).grid(row=0, column=0,
+                                                      columnspan=3, sticky="w")
+        db = ttk.Frame(sec)
+        db.grid(row=1, column=0, columnspan=3, sticky="w", padx=(20, 0), pady=(4, 0))
+        ttk.Label(db, text="Tolerancia:").grid(row=0, column=0, sticky="w")
+        ttk.Spinbox(db, from_=0, to=16, width=6,
+                    textvariable=self.var_dedup_thr).grid(row=0, column=1, padx=4)
+        ttk.Label(db, text="0 = solo idénticos · 4 = tolera ruido de video "
+                           "(recomendado) · más = agrupa parecidos",
+                  style="Sub.TLabel").grid(row=0, column=2, sticky="w", padx=(6, 0))
+
+        sec = self.section(tab, "Espaciado entre frames")
         ttk.Label(sec, text="Separación entre imágenes (mm):").grid(row=0, column=0, sticky="w")
         ttk.Spinbox(sec, from_=0, to=100, increment=0.5, width=8,
                     textvariable=self.var_gutter).grid(row=0, column=1, sticky="w", padx=4)
@@ -359,7 +335,7 @@ class App(tk.Tk):
         tab = ttk.Frame(nb, padding=PAD)
         nb.add(tab, text="3 · Hoja")
 
-        sec = self._section(tab, "Tamaño y orientación")
+        sec = self.section(tab, "Tamaño y orientación")
         ttk.Label(sec, text="Tamaño de hoja:").grid(row=0, column=0, sticky="w")
         cb = ttk.Combobox(sec, values=paper.PAPER_ORDER, textvariable=self.var_paper,
                           state="readonly", width=22)
@@ -384,7 +360,7 @@ class App(tk.Tk):
                     textvariable=self.var_custom_h).grid(row=0, column=3, padx=4)
         self._sync_custom()
 
-        sec = self._section(tab, "Calidad y márgenes")
+        sec = self.section(tab, "Calidad y márgenes")
         ttk.Label(sec, text="Resolución (DPI):").grid(row=0, column=0, sticky="w")
         ttk.Spinbox(sec, from_=72, to=1200, increment=10, width=8,
                     textvariable=self.var_dpi).grid(row=0, column=1, sticky="w", padx=4)
@@ -394,42 +370,63 @@ class App(tk.Tk):
         ttk.Spinbox(sec, from_=0, to=100, increment=0.5, width=8,
                     textvariable=self.var_margin).grid(row=1, column=1, sticky="w", padx=4, pady=(6, 0))
         ttk.Label(sec, text="Color de fondo:").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self._color_picker(sec, self.var_bg, row=2, col=1)
+        self.color_picker(sec, self.var_bg, row=2, col=1)
+
+        sec = self.section(tab, "Perfil de impresora (de la fase ③ Calibración)")
+        ttk.Label(sec, text="Perfil:").grid(row=0, column=0, sticky="w")
+        self.printer_cb = ttk.Combobox(sec, textvariable=self.var_printer_profile,
+                                       state="readonly", width=26,
+                                       values=[NO_PRINTER])
+        self.printer_cb.grid(row=0, column=1, sticky="w", padx=4)
+        ttk.Button(sec, text="Aplicar tamaños recomendados",
+                   command=self._apply_printer_sizes).grid(row=0, column=2, padx=4)
+        ttk.Label(sec, text="Con un perfil activo se compensa la escala real de "
+                            "tu impresora y puedes usar los tamaños de marcador/QR "
+                            "que se midieron como seguros.",
+                  style="Sub.TLabel", wraplength=720).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def _tab_labels(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
         nb.add(tab, text="4 · Nombres")
 
-        sec = self._section(tab, "Etiquetas autoincrementales")
+        sec = self.section(tab, "Etiquetas de los fotogramas")
         ttk.Checkbutton(sec, text="Escribir el nombre debajo de cada frame",
                         variable=self.var_labels_on,
                         command=self._update_name_preview).grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Label(sec, text="Nombre base:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(sec, text="Fuente del nombre:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(sec, values=LABEL_SOURCES, textvariable=self.var_label_source,
+                     state="readonly", width=32).grid(
+            row=1, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="«Nombre del archivo» es útil con carpetas de "
+                            "imágenes (conserva CLIP018, CLIP019…).",
+                  style="Sub.TLabel").grid(row=2, column=0, columnspan=4, sticky="w")
+        ttk.Label(sec, text="Nombre base:").grid(row=3, column=0, sticky="w", pady=(6, 0))
         e = ttk.Entry(sec, textvariable=self.var_base, width=18)
-        e.grid(row=1, column=1, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(sec, text="Separador:").grid(row=1, column=2, sticky="w", pady=(6, 0))
-        ttk.Entry(sec, textvariable=self.var_sep, width=6).grid(row=1, column=3, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(sec, text="Dígitos (ceros a la izq.):").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        e.grid(row=3, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Separador:").grid(row=3, column=2, sticky="w", pady=(6, 0))
+        ttk.Entry(sec, textvariable=self.var_sep, width=6).grid(row=3, column=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Dígitos (ceros a la izq.):").grid(row=4, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(sec, from_=1, to=8, width=6, textvariable=self.var_zeros,
-                    command=self._update_name_preview).grid(row=2, column=1, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(sec, text="Empezar en:").grid(row=2, column=2, sticky="w", pady=(6, 0))
+                    command=self._update_name_preview).grid(row=4, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Empezar en:").grid(row=4, column=2, sticky="w", pady=(6, 0))
         ttk.Spinbox(sec, from_=0, to=999999, width=8, textvariable=self.var_startidx,
-                    command=self._update_name_preview).grid(row=2, column=3, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(sec, text="Numeración:").grid(row=3, column=0, sticky="w", pady=(6, 0))
+                    command=self._update_name_preview).grid(row=4, column=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Numeración:").grid(row=5, column=0, sticky="w", pady=(6, 0))
         ttk.Combobox(sec, values=core.NUMBERING, textvariable=self.var_numbering,
                      state="readonly", width=28).grid(
-            row=3, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
+            row=5, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
         for var in (self.var_base, self.var_sep, self.var_zeros, self.var_startidx,
-                    self.var_numbering):
+                    self.var_numbering, self.var_label_source):
             var.trace_add("write", lambda *_: self._update_name_preview())
         self.name_preview = ttk.Label(sec, text="", style="Info.TLabel")
-        self.name_preview.grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self.name_preview.grid(row=6, column=0, columnspan=4, sticky="w", pady=(8, 0))
         ttk.Checkbutton(
             sec, text="Usar el nombre del video automáticamente (nombre base y archivos)",
             variable=self.var_autoname, command=self._apply_autoname).grid(
-            row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
+            row=7, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
-        sec = self._section(tab, "Tipografía de los nombres")
+        sec = self.section(tab, "Tipografía de los nombres")
         ttk.Label(sec, text="Fuente:").grid(row=0, column=0, sticky="w")
         self.font_cb = ttk.Combobox(sec, textvariable=self.var_font_name,
                                     state="readonly", width=30, values=["(cargando fuentes…)"])
@@ -442,13 +439,13 @@ class App(tk.Tk):
         ttk.Spinbox(sec, from_=0, to=30, increment=0.5, width=8,
                     textvariable=self.var_label_gap).grid(row=2, column=1, sticky="w", padx=4, pady=(6, 0))
         ttk.Label(sec, text="Color del texto:").grid(row=3, column=0, sticky="w", pady=(6, 0))
-        self._color_picker(sec, self.var_label_color, row=3, col=1)
+        self.color_picker(sec, self.var_label_color, row=3, col=1)
 
     def _tab_pagenum(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
         nb.add(tab, text="5 · Nº de hoja")
 
-        sec = self._section(tab, "Número de hoja en la esquina")
+        sec = self.section(tab, "Número de hoja en la esquina")
         ttk.Checkbutton(sec, text="Mostrar el número de hoja (para organizarte mejor)",
                         variable=self.var_pagenum_on).grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(sec, text="Posición:").grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -476,13 +473,117 @@ class App(tk.Tk):
         ttk.Spinbox(sec, from_=4, to=72, increment=0.5, width=8,
                     textvariable=self.var_pagenum_size).grid(row=5, column=1, sticky="w", padx=4, pady=(6, 0))
         ttk.Label(sec, text="Color:").grid(row=6, column=0, sticky="w", pady=(6, 0))
-        self._color_picker(sec, self.var_pagenum_color, row=6, col=1)
+        self.color_picker(sec, self.var_pagenum_color, row=6, col=1)
+
+    def _tab_markers(self, nb):
+        tab = ttk.Frame(nb, padding=PAD)
+        nb.add(tab, text="6 · Marcadores")
+
+        sec = self.section(tab, "Marcadores de registro (para escanear de vuelta)")
+        ttk.Checkbutton(
+            sec, text="Añadir marcadores ArUco + códigos QR (necesario para la "
+                      "fase ② Procesar escaneos)",
+            variable=self.var_reg_on).grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(sec, text="Al activarlos también se guarda un archivo "
+                            "layout .json junto a las hojas: NO lo borres, es "
+                            "el mapa que usa el procesador de escaneos.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=1, column=0, columnspan=4, sticky="w", pady=(4, 6))
+
+        ttk.Label(sec, text="Cantidad de marcadores:").grid(row=2, column=0, sticky="w")
+        ttk.Combobox(sec, values=[str(c) for c in markers.MARKER_COUNTS],
+                     textvariable=self.var_marker_count, state="readonly",
+                     width=6).grid(row=2, column=1, sticky="w", padx=4)
+        ttk.Label(sec, text="8 recomendado: la hoja se procesa aunque fallen "
+                            "hasta 5; con 12, hasta 9.",
+                  style="Sub.TLabel").grid(row=2, column=2, columnspan=2, sticky="w")
+
+        ttk.Label(sec, text="Tamaño del marcador (mm):").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Spinbox(sec, from_=4, to=25, increment=0.5, width=8,
+                    textvariable=self.var_marker_size).grid(row=3, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Margen al borde (mm):").grid(row=3, column=2, sticky="w", pady=(6, 0))
+        ttk.Spinbox(sec, from_=2, to=20, increment=0.5, width=8,
+                    textvariable=self.var_marker_margin).grid(row=3, column=3, sticky="w", padx=4, pady=(6, 0))
+
+        sec = self.section(tab, "Códigos QR (identifican cada fotograma)")
+        ttk.Checkbutton(sec, text="Añadir un QR debajo de cada fotograma "
+                                  "(recomendado: identifica las hojas escaneadas "
+                                  "en cualquier orden)",
+                        variable=self.var_qr_on).grid(row=0, column=0,
+                                                      columnspan=3, sticky="w")
+        ttk.Label(sec, text="Tamaño del QR (mm):").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Spinbox(sec, from_=6, to=30, increment=0.5, width=8,
+                    textvariable=self.var_qr_size).grid(row=1, column=1, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Nombre del proyecto (va dentro de los QR):").grid(
+            row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(sec, textvariable=self.var_project, width=24).grid(
+            row=2, column=1, columnspan=2, sticky="w", padx=4, pady=(6, 0))
+
+        sec = self.section(tab, "Extras")
+        ttk.Checkbutton(sec, text="Tira de parches de grises en el borde (permite "
+                                  "normalizar niveles del escáner, opcional)",
+                        variable=self.var_patch_on).grid(row=0, column=0, sticky="w")
+        ttk.Label(sec, text="Consejo de flujo: cubre los marcadores y QRs con "
+                            "cinta de enmascarar antes de pintar y retírala antes "
+                            "de escanear. Con 8+ marcadores, no pasa nada si "
+                            "algunos quedan dañados.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=1, column=0, sticky="w", pady=(6, 0))
+
+    def _tab_cyanotype(self, nb):
+        tab = ttk.Frame(nb, padding=PAD)
+        nb.add(tab, text="7 · Cianotipia")
+
+        sec = self.section(tab, "Negativos para cianotipia (imprimir en acetato)")
+        ttk.Checkbutton(
+            sec, text="MODO CIANOTIPIA: generar las hojas como NEGATIVOS para "
+                      "acetato ☀️",
+            variable=self.var_cyan_on).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(sec, text="Cada hoja sale invertida (negativo), con los "
+                            "marcadores, QRs y nombres también invertidos: al "
+                            "exponer la cianotipia al sol, todo queda con la "
+                            "polaridad correcta y el escaneo de la copia azul "
+                            "se procesa normalmente en la fase ②.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(4, 6))
+
+        ttk.Checkbutton(sec, text="Espejar la hoja (imprimir en espejo, para "
+                                  "exponer emulsión contra emulsión — recomendado)",
+                        variable=self.var_cyan_mirror).grid(
+            row=2, column=0, columnspan=3, sticky="w")
+        ik = ttk.Frame(sec)
+        ik.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(ik, text="Color de tinta del negativo:").grid(row=0, column=0)
+        self.color_picker(ik, self.var_cyan_ink, row=0, col=1)
+        ttk.Label(sec, text="Negro es lo estándar; algunas impresoras bloquean "
+                            "mejor el UV con tintas cálidas (naranja/ámbar). "
+                            "Compara con la calibración de la fase ③.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
+        sec = self.section(tab, "Curva de compensación (calibración)")
+        ttk.Label(sec, text="Curva:").grid(row=0, column=0, sticky="w")
+        self.curve_cb = ttk.Combobox(sec, textvariable=self.var_cyan_curve,
+                                     state="readonly", width=28,
+                                     values=[NO_CURVE])
+        self.curve_cb.grid(row=0, column=1, sticky="w", padx=4)
+        ttk.Label(sec, text="Se crea en la fase ③ (Calibración → Cianotipia). "
+                            "Lineariza los tonos y aprovecha todo el rango "
+                            "dinámico de TU proceso (impresora + acetato + "
+                            "química + sol).",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        sec = self.section(tab, "Vista previa")
+        ttk.Checkbutton(sec, text="En la vista previa, simular la copia azul "
+                                  "final en vez del negativo",
+                        variable=self.var_cyan_sim).grid(row=0, column=0, sticky="w")
 
     def _tab_output(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="6 · Salida")
+        nb.add(tab, text="8 · Salida")
 
-        sec = self._section(tab, "Dónde guardar")
+        sec = self.section(tab, "Dónde guardar")
         ttk.Label(sec, text="Carpeta de salida:").grid(row=0, column=0, sticky="w")
         ttk.Entry(sec, textvariable=self.var_out_dir).grid(row=0, column=1, sticky="ew", padx=4)
         ttk.Button(sec, text="Examinar…", command=self._pick_outdir).grid(row=0, column=2)
@@ -490,7 +591,7 @@ class App(tk.Tk):
         ttk.Entry(sec, textvariable=self.var_out_name, width=28).grid(
             row=1, column=1, sticky="w", padx=4, pady=(6, 0))
 
-        sec = self._section(tab, "Formatos a generar")
+        sec = self.section(tab, "Formatos a generar")
         ttk.Checkbutton(sec, text="PNG por hoja (sin pérdida, recomendado)",
                         variable=self.var_png).grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(sec, text="PDF combinado (ideal para imprimir)",
@@ -499,28 +600,25 @@ class App(tk.Tk):
                         variable=self.var_tiff).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(sec, text="Además, guardar cada fotograma individual a máxima calidad (PNG con su nombre)",
                         variable=self.var_export_frames).grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(sec, text="Guardar copia de los fotogramas originales "
+                                  "(necesario para las hojas de rescate)",
+                        variable=self.var_keep_orig).grid(row=4, column=0, sticky="w", pady=(2, 0))
 
-    # ----------------------------------------------------------- widgets aux
-    def _color_picker(self, parent, var, row, col):
-        box = ttk.Frame(parent)
-        box.grid(row=row, column=col, sticky="w", padx=4, pady=(6, 0))
-        swatch = tk.Label(box, width=3, relief="solid", borderwidth=1, bg=var.get())
-        swatch.pack(side="left")
-
-        def choose():
-            c = colorchooser.askcolor(color=var.get(), title="Elegir color")
-            if c and c[1]:
-                var.set(c[1])
-                swatch.configure(bg=c[1])
-        var.trace_add("write", lambda *_: self._safe_bg(swatch, var))
-        ttk.Button(box, text="Cambiar", command=choose, width=8).pack(side="left", padx=(4, 0))
-
-    @staticmethod
-    def _safe_bg(widget, var):
-        try:
-            widget.configure(bg=var.get())
-        except tk.TclError:
-            pass
+        sec = self.section(tab, "Qué hojas producir")
+        gb = ttk.Frame(sec)
+        gb.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(gb, text="Generar solo las hojas:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(gb, textvariable=self.var_sheets_include, width=18).grid(
+            row=0, column=1, sticky="w", padx=4)
+        ttk.Label(gb, text="Excluir hojas:").grid(row=0, column=2, sticky="w", padx=(PAD, 0))
+        ttk.Entry(gb, textvariable=self.var_sheets_exclude, width=18).grid(
+            row=0, column=3, sticky="w", padx=4)
+        ttk.Label(sec, text='Por número de hoja, p. ej. "3, 5-7" (vacío = todas). '
+                            "Perfecto para reimprimir una hoja dañada sin "
+                            "regenerar todo (el layout .json sigue describiendo "
+                            "todas).",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     # ----------------------------------------------------------- fuentes
     def _load_fonts_async(self):
@@ -528,7 +626,6 @@ class App(tk.Tk):
             fmap = fontmod.discover_fonts()
             self.queue.put(("fonts", fmap))
         threading.Thread(target=work, daemon=True).start()
-        self.after(100, self._poll_queue)
 
     def _apply_fonts(self, fmap):
         self.fonts_map = fmap
@@ -556,6 +653,68 @@ class App(tk.Tk):
     def _font_path(self):
         return self.fonts_map.get(self.var_font_name.get())
 
+    # ----------------------------------------------------------- perfiles
+    def refresh_profiles(self):
+        printers = [NO_PRINTER] + config.list_profiles("impresora")
+        self.printer_cb.configure(values=printers)
+        if self.var_printer_profile.get() not in printers:
+            self.var_printer_profile.set(NO_PRINTER)
+        curves = [NO_CURVE] + config.list_profiles("cianotipia")
+        self.curve_cb.configure(values=curves)
+        if self.var_cyan_curve.get() not in curves:
+            self.var_cyan_curve.set(NO_CURVE)
+
+    def _printer_profile(self) -> dict | None:
+        name = self.var_printer_profile.get()
+        if not name or name == NO_PRINTER:
+            return None
+        return config.load_profile("impresora", name)
+
+    def _cyan_curve_lut(self):
+        name = self.var_cyan_curve.get()
+        if not name or name == NO_CURVE:
+            return None
+        prof = config.load_profile("cianotipia", name)
+        return prof.get("lut") if prof else None
+
+    def _apply_printer_sizes(self):
+        prof = self._printer_profile()
+        if not prof:
+            messagebox.showinfo("Perfil de impresora",
+                                "Elige primero un perfil (se crean en la fase "
+                                "③ Calibración).")
+            return
+        if prof.get("marker_recomendado_mm"):
+            self.var_marker_size.set(float(prof["marker_recomendado_mm"]))
+        if prof.get("qr_recomendado_mm"):
+            self.var_qr_size.set(float(prof["qr_recomendado_mm"]))
+        messagebox.showinfo(
+            "Perfil aplicado",
+            f"Marcadores: {self.var_marker_size.get():g} mm · "
+            f"QRs: {self.var_qr_size.get():g} mm\n"
+            "(medidos como seguros para tu impresora)")
+
+    # ----------------------------------------------------------- presets
+    def _save_preset(self):
+        name = self.preset_cb.get().strip()
+        if not name:
+            messagebox.showinfo("Preset", "Escribe un nombre para el preset "
+                                          "en el campo de al lado.")
+            return
+        config.save_preset(name, self.collect_vars("s1_"))
+        self.preset_cb.configure(values=config.list_presets())
+        self._set_status(f"Preset «{name}» guardado.")
+
+    def _load_preset(self):
+        name = self.preset_cb.get().strip()
+        data = config.load_preset(name) if name else None
+        if not data:
+            messagebox.showinfo("Preset", "Elige un preset de la lista.")
+            return
+        self.restore_vars("s1_", data)
+        self._after_restore()
+        self._set_status(f"Preset «{name}» cargado.")
+
     # ----------------------------------------------------------- acciones
     def _pick_video(self):
         path = filedialog.askopenfilename(title="Elegir video", filetypes=VIDEO_TYPES)
@@ -564,7 +723,6 @@ class App(tk.Tk):
         self.var_video.set(path)
         stem = Path(path).stem
         if self.var_autoname.get():
-            # Nombre base y nombre de archivo = nombre del video (+ sufijos).
             self.var_out_name.set(stem)
             self.var_base.set(stem)
         elif not self.var_out_name.get() or self.var_out_name.get() == "contact_sheet":
@@ -574,13 +732,45 @@ class App(tk.Tk):
         self._probe_async(path)
         self._update_name_preview()
 
-    def _apply_autoname(self):
-        """Si el nombre automático está activo y hay video, rellena los nombres."""
-        if self.var_autoname.get() and self.var_video.get():
-            stem = Path(self.var_video.get()).stem
+    def _pick_frames_dir(self):
+        d = filedialog.askdirectory(title="Carpeta con tus imágenes/fotogramas")
+        if not d:
+            return
+        self.var_frames_dir.set(d)
+        frames = self._folder_frames(d)
+        self._folder_count = len(frames)
+        self.folder_info_lbl.configure(
+            text=f"{len(frames)} imagen(es) encontradas."
+            if frames else "No se encontraron imágenes en esa carpeta.")
+        if self.var_autoname.get():
+            stem = Path(d).name
             self.var_out_name.set(stem)
             self.var_base.set(stem)
-            self._update_name_preview()
+        if not self.var_out_dir.get():
+            self.var_out_dir.set(str(Path(d).parent / "contact_sheets"))
+        self._update_estimate()
+
+    @staticmethod
+    def _folder_frames(d):
+        try:
+            return sorted(str(p) for p in Path(d).iterdir()
+                          if p.is_file() and p.suffix.lower() in IMG_EXTS)
+        except OSError:
+            return []
+
+    def _apply_autoname(self):
+        """Si el nombre automático está activo y hay origen, rellena los nombres."""
+        if not self.var_autoname.get():
+            return
+        if self.var_source.get() == "video" and self.var_video.get():
+            stem = Path(self.var_video.get()).stem
+        elif self.var_source.get() == "folder" and self.var_frames_dir.get():
+            stem = Path(self.var_frames_dir.get()).name
+        else:
+            return
+        self.var_out_name.set(stem)
+        self.var_base.set(stem)
+        self._update_name_preview()
 
     def _probe_async(self, path):
         self.video_info_lbl.configure(text="Leyendo el video…")
@@ -593,7 +783,6 @@ class App(tk.Tk):
             except Exception as e:
                 self.queue.put(("probe_err", str(e)))
         threading.Thread(target=work, daemon=True).start()
-        self.after(100, self._poll_queue)
 
     def _apply_probe(self, info: VideoInfo):
         self.video_info = info
@@ -609,6 +798,27 @@ class App(tk.Tk):
         d = filedialog.askdirectory(title="Elegir carpeta de salida")
         if d:
             self.var_out_dir.set(d)
+
+    def _sync_source(self):
+        video = self.var_source.get() == "video"
+        for sec, on in ((self.video_sec, video), (self.range_sec, video),
+                        (self.folder_sec, not video)):
+            for child in sec.winfo_children():
+                try:
+                    child.configure(state="normal" if on else "disabled")
+                except tk.TclError:
+                    pass
+        if video:
+            self._sync_range()
+        if hasattr(self, "extract_sec"):
+            for child in self.extract_sec.winfo_children():
+                try:
+                    child.configure(state="normal" if video else "disabled")
+                except tk.TclError:
+                    pass
+            if video:
+                self._sync_extract()
+        self._update_estimate()
 
     def _sync_range(self):
         state = "normal" if self.var_range_mode.get() == "range" else "disabled"
@@ -636,9 +846,20 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
+    def _after_restore(self):
+        self._sync_range()
+        self._sync_extract()
+        self._sync_custom()
+        self._sync_source()
+        self._update_name_preview()
+
     def _update_name_preview(self):
         if not self.var_labels_on.get():
             self.name_preview.configure(text="(nombres desactivados)")
+            return
+        if self.var_label_source.get() == LABEL_SOURCES[1]:
+            self.name_preview.configure(
+                text="Ejemplo:  el nombre de cada archivo (CLIP018, CLIP019, …)")
             return
         try:
             s = self._settings_for_preview()
@@ -655,15 +876,15 @@ class App(tk.Tk):
     def _settings_for_preview(self):
         return core.Settings(
             base_name=self.var_base.get(), separator=self.var_sep.get(),
-            leading_zeros=self._int(self.var_zeros, 1),
-            start_index=self._int(self.var_startidx, 1),
+            leading_zeros=self.to_int(self.var_zeros, 1),
+            start_index=self.to_int(self.var_startidx, 1),
         )
 
     # ----------------------------------------------------------- estimación
     def _selected_range(self):
         if self.var_range_mode.get() == "range":
-            start = max(0.0, self._float(self.var_start, 0.0))
-            end = self._float(self.var_end, 0.0)
+            start = max(0.0, self.to_float(self.var_start, 0.0))
+            end = self.to_float(self.var_end, 0.0)
             if end <= start and self.video_info.duration:
                 end = self.video_info.duration
             return start, (end if end > start else None)
@@ -671,23 +892,24 @@ class App(tk.Tk):
         return 0.0, (self.video_info.duration or None)
 
     def _update_estimate(self, *_):
-        # Puede invocarse mientras se construyen las pestañas (p. ej. desde
-        # _sync_range), antes de que existan las etiquetas de la barra inferior.
-        # En ese caso no hay nada que actualizar todavía.
         if not hasattr(self, "estimate_lbl"):
             return
-        per_page = max(1, self._int(self.var_cols, 1) * self._int(self.var_rows, 1))
+        per_page = max(1, self.to_int(self.var_cols, 1) * self.to_int(self.var_rows, 1))
         if hasattr(self, "perpage_lbl"):
             self.perpage_lbl.configure(text=f"= {per_page} imágenes por hoja")
-        start, end = self._selected_range()
+
         frames = None
-        if self.var_extract_mode.get() == "fps":
-            fps = self._float(self.var_fps, 0)
-            if end is not None and fps > 0:
-                frames = max(1, int(round((end - start) * fps)))
-        else:  # todos los fotogramas
-            if end is not None and self.video_info.fps:
-                frames = max(1, int(round((end - start) * self.video_info.fps)))
+        if self.var_source.get() == "folder":
+            frames = self._folder_count or None
+        else:
+            start, end = self._selected_range()
+            if self.var_extract_mode.get() == "fps":
+                fps = self.to_float(self.var_fps, 0)
+                if end is not None and fps > 0:
+                    frames = max(1, int(round((end - start) * fps)))
+            else:  # todos los fotogramas
+                if end is not None and self.video_info.fps:
+                    frames = max(1, int(round((end - start) * self.video_info.fps)))
         if frames:
             sel_txt = ""
             inc = core.parse_ranges(self.var_include.get(), frames)
@@ -698,52 +920,100 @@ class App(tk.Tk):
                 sel_txt = f" (de {frames} extraídos)"
                 frames = max(0, kept)
             pages = core.estimate_pages(frames, per_page)
+            extra = "  ·  los repetidos se descuentan al generar" \
+                if self.var_dedup.get() else ""
             self.estimate_lbl.configure(
                 text=f"≈ {frames} fotogramas{sel_txt}  →  {pages} hoja(s)  "
-                     f"({per_page} por hoja)")
+                     f"({per_page} por hoja){extra}")
         else:
+            origen = ("elige una carpeta" if self.var_source.get() == "folder"
+                      else "carga un video")
             self.estimate_lbl.configure(
-                text=f"{per_page} imágenes por hoja  ·  carga un video para estimar el total")
+                text=f"{per_page} imágenes por hoja  ·  {origen} para estimar el total")
 
     # ----------------------------------------------------------- ejecutar
     def _collect_settings(self) -> core.Settings:
+        prof = self._printer_profile() or {}
         return core.Settings(
             paper=self.var_paper.get(), orientation=self.var_orientation.get(),
-            dpi=self._int(self.var_dpi, 300),
-            custom_w_mm=self._float(self.var_custom_w, 210),
-            custom_h_mm=self._float(self.var_custom_h, 297),
-            margin_mm=self._float(self.var_margin, 10),
-            gutter_mm=self._float(self.var_gutter, 5),
+            dpi=self.to_int(self.var_dpi, 300),
+            custom_w_mm=self.to_float(self.var_custom_w, 210),
+            custom_h_mm=self.to_float(self.var_custom_h, 297),
+            margin_mm=self.to_float(self.var_margin, 10),
+            gutter_mm=self.to_float(self.var_gutter, 5),
             bg_color=self.var_bg.get(),
-            cols=self._int(self.var_cols, 4), rows=self._int(self.var_rows, 5),
+            cols=self.to_int(self.var_cols, 4), rows=self.to_int(self.var_rows, 5),
             labels_on=self.var_labels_on.get(), base_name=self.var_base.get(),
-            separator=self.var_sep.get(), leading_zeros=self._int(self.var_zeros, 1),
-            start_index=self._int(self.var_startidx, 1), font_path=self._font_path(),
-            font_size_pt=self._float(self.var_font_size, 9),
-            label_gap_mm=self._float(self.var_label_gap, 1.5),
+            separator=self.var_sep.get(), leading_zeros=self.to_int(self.var_zeros, 1),
+            start_index=self.to_int(self.var_startidx, 1), font_path=self._font_path(),
+            font_size_pt=self.to_float(self.var_font_size, 9),
+            label_gap_mm=self.to_float(self.var_label_gap, 1.5),
             label_color=self.var_label_color.get(),
             page_num_on=self.var_pagenum_on.get(),
             page_num_corner=self.var_pagenum_corner.get(),
             page_num_prefix=self.var_pagenum_prefix.get(),
-            page_num_start=self._int(self.var_pagenum_start, 1),
-            page_num_zeros=self._int(self.var_pagenum_zeros, 1),
-            page_num_size_pt=self._float(self.var_pagenum_size, 11),
+            page_num_start=self.to_int(self.var_pagenum_start, 1),
+            page_num_zeros=self.to_int(self.var_pagenum_zeros, 1),
+            page_num_size_pt=self.to_float(self.var_pagenum_size, 11),
             page_num_color=self.var_pagenum_color.get(),
+            registration_on=self.var_reg_on.get(),
+            marker_count=self.to_int(self.var_marker_count, 8),
+            marker_size_mm=self.to_float(self.var_marker_size, 8.0),
+            marker_margin_mm=self.to_float(self.var_marker_margin, 4.0),
+            qr_on=self.var_qr_on.get(),
+            qr_size_mm=self.to_float(self.var_qr_size, 10.0),
+            gray_patch_on=self.var_patch_on.get(),
+            project_name=self.var_project.get().strip() or self.var_out_name.get(),
+            mode="cianotipia" if self.var_cyan_on.get() else "normal",
+            cyan_mirror=self.var_cyan_mirror.get(),
+            cyan_ink=self.var_cyan_ink.get(),
+            cyan_curve=self._cyan_curve_lut(),
+            print_scale_x=float(prof.get("scale_x", 1.0) or 1.0),
+            print_scale_y=float(prof.get("scale_y", 1.0) or 1.0),
             out_dir=self.var_out_dir.get(), out_name=self.var_out_name.get() or "contact_sheet",
             fmt_png=self.var_png.get(), fmt_pdf=self.var_pdf.get(),
             fmt_tiff=self.var_tiff.get(), export_frames=self.var_export_frames.get(),
+            sheets_include=self.var_sheets_include.get(),
+            sheets_exclude=self.var_sheets_exclude.get(),
+            keep_originals=self.var_keep_orig.get(),
         )
 
     def _validate(self, s: core.Settings):
-        if not self.var_video.get() or not Path(self.var_video.get()).exists():
-            return "Elige primero un archivo de video válido."
+        if self.var_source.get() == "video":
+            if not self.var_video.get() or not Path(self.var_video.get()).exists():
+                return "Elige primero un archivo de video válido (pestaña 1)."
+            if self.var_extract_mode.get() == "fps" and self.to_float(self.var_fps, 0) <= 0:
+                return "El valor de fps debe ser mayor que 0."
+        else:
+            d = self.var_frames_dir.get()
+            if not d or not Path(d).is_dir():
+                return "Elige una carpeta de imágenes válida (pestaña 1)."
+            if not self._folder_frames(d):
+                return "La carpeta elegida no contiene imágenes."
         if not s.out_dir:
-            return "Elige una carpeta de salida (pestaña 6 · Salida)."
+            return "Elige una carpeta de salida (pestaña 8 · Salida)."
         if not (s.fmt_png or s.fmt_pdf or s.fmt_tiff):
-            return "Selecciona al menos un formato de salida (pestaña 6)."
-        if self.var_extract_mode.get() == "fps" and self._float(self.var_fps, 0) <= 0:
-            return "El valor de fps debe ser mayor que 0."
+            return "Selecciona al menos un formato de salida (pestaña 8)."
         return None
+
+    def _job_params(self):
+        start, end = self._selected_range()
+        return {
+            "source": self.var_source.get(),
+            "video": self.var_video.get(),
+            "frames_dir": self.var_frames_dir.get(),
+            "start": start, "end": end,
+            "fps": (self.to_float(self.var_fps, 0)
+                    if self.var_extract_mode.get() == "fps" else None),
+            "include": self.var_include.get(),
+            "exclude": self.var_exclude.get(),
+            "numbering_original": self.var_numbering.get().lower().startswith("original"),
+            "page_numbering_original": self.var_pagenum_order.get().lower().startswith("original"),
+            "label_from_file": self.var_label_source.get() == LABEL_SOURCES[1],
+            "dedup": self.var_dedup.get(),
+            "dedup_thr": self.to_int(self.var_dedup_thr, 4),
+            "simulate_cyan": self.var_cyan_sim.get(),
+        }
 
     def _on_run(self):
         s = self._collect_settings()
@@ -751,67 +1021,115 @@ class App(tk.Tk):
         if err:
             messagebox.showwarning("Falta algo", err)
             return
-        start, end = self._selected_range()
-        fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
-        inc, exc = self.var_include.get(), self.var_exclude.get()
-        orig = self.var_numbering.get().lower().startswith("original")
-        page_orig = self.var_pagenum_order.get().lower().startswith("original")
-
-        self._cancel = False
         self._set_busy(True)
         self.progress.configure(value=0, maximum=100)
         self._set_status("Preparando…")
+        self.start_worker(self._work, s, self._job_params())
 
-        self.worker = threading.Thread(
-            target=self._work, args=(s, start, end, fps, inc, exc, orig, page_orig),
-            daemon=True)
-        self.worker.start()
-        self.after(100, self._poll_queue)
+    # ------------------------------------------------ preparación compartida
+    def _prepare_frames(self, s, params, max_frames=None):
+        """Extrae/lista los fotogramas y aplica selección, etiquetas y dedup.
 
-    def _work(self, settings, start, end, fps, inc, exc, numbering_original,
-              page_numbering_original):
+        Corre en el hilo de trabajo: los ajustes (s) ya vienen recogidos desde
+        el hilo principal (las variables de Tk no deben tocarse desde aquí).
+
+        Devuelve dict con: rep_paths, rep_labels, positions, labels, timeline,
+        page_numbers, total_sel, tmpdir (o None), truncated, video_meta.
+        """
         tmp = None
-        try:
+        if params["source"] == "video":
             ff = find_ffmpeg()
             tmp = tempfile.mkdtemp(prefix="kamiru_")
-            self._tmpdir = tmp
             self.queue.put(("status", "Extrayendo fotogramas del video…"))
-
-            def ext_progress(done, total):
-                self.queue.put(("extract", done, total))
-
             frames = extract_frames(
-                ff, self.var_video.get(), tmp,
-                start=start, end=end, fps=fps,
-                progress_cb=ext_progress, cancel_check=lambda: self._cancel,
+                ff, params["video"], tmp,
+                start=params["start"], end=params["end"], fps=params["fps"],
+                progress_cb=lambda d, t: self.queue.put(("extract", d, t)),
+                cancel_check=self.cancelled, max_frames=max_frames,
             )
-            positions = core.select_indices(len(frames), inc, exc)
-            if not positions:
-                raise ValueError(
-                    "La selección de «Incluir/Excluir» (pestaña 2) no deja "
-                    "ningún fotograma. Revisa esos campos.")
-            sel = [frames[i - 1] for i in positions]
-            numbers = positions if numbering_original else None
-            page_numbers = (core.original_page_numbers(
-                positions, settings.per_page, settings.page_num_start)
-                if page_numbering_original else None)
-            if len(sel) != len(frames):
-                self.queue.put(("status",
-                                f"{len(sel)} de {len(frames)} fotogramas seleccionados. "
-                                "Componiendo hojas…"))
-            else:
-                self.queue.put(("status",
-                                f"{len(sel)} fotogramas. Componiendo hojas…"))
+            origen = Path(params["video"]).name
+            fps_meta = params["fps"] or self.video_info.fps or None
+        else:
+            frames = self._folder_frames(params["frames_dir"])
+            if max_frames:
+                frames = frames[:max_frames]
+            if not frames:
+                raise ValueError("La carpeta elegida no contiene imágenes.")
+            origen = Path(params["frames_dir"]).name
+            fps_meta = None
 
-            def comp_progress(done, total):
-                self.queue.put(("compose", done, total))
+        positions = core.select_indices(len(frames), params["include"],
+                                        params["exclude"])
+        if not positions:
+            raise ValueError(
+                "La selección de «Incluir/Excluir» (pestaña 2) no deja "
+                "ningún fotograma. Revisa esos campos.")
+        sel = [frames[i - 1] for i in positions]
+
+        # Etiquetas de TODOS los seleccionados.
+        if params["label_from_file"]:
+            labels = [Path(p).stem for p in sel]
+        elif params["numbering_original"]:
+            labels = [s.format_label(p) for p in positions]
+        else:
+            labels = [s.label_for(i) for i in range(len(sel))]
+
+        # Deduplicación perceptual.
+        if params["dedup"]:
+            self.queue.put(("status", "Buscando dibujos repetidos…"))
+            rep_idx, rep_of = dedup.find_duplicates(
+                sel, threshold=params["dedup_thr"],
+                cancel_check=self.cancelled)
+        else:
+            rep_idx = list(range(len(sel)))
+            rep_of = list(range(len(sel)))
+
+        rep_paths = [sel[i] for i in rep_idx]
+        rep_labels = [labels[i] for i in rep_idx]
+        rep_positions = [positions[i] for i in rep_idx]
+
+        page_numbers = None
+        if params["page_numbering_original"]:
+            page_numbers = core.original_page_numbers(
+                rep_positions, s.per_page, s.page_num_start)
+
+        timeline = [{"pos": positions[i], "etiqueta": labels[i],
+                     "rep": labels[rep_of[i]]} for i in range(len(sel))]
+        video_meta = {"origen": origen}
+        if fps_meta:
+            video_meta["fps_extraccion"] = float(fps_meta)
+
+        return {
+            "settings": s,
+            "rep_paths": rep_paths, "rep_labels": rep_labels,
+            "positions": positions, "labels": labels,
+            "page_numbers": page_numbers, "timeline": timeline,
+            "video_meta": video_meta, "total_sel": len(sel),
+            "total_frames": len(frames), "tmpdir": tmp,
+        }
+
+    def _work(self, s, params):
+        tmp = None
+        try:
+            prep = self._prepare_frames(s, params)
+            tmp = prep["tmpdir"]
+            n_rep, n_sel = len(prep["rep_paths"]), prep["total_sel"]
+            if n_rep != n_sel:
+                self.queue.put(("status",
+                                f"{n_rep} dibujos únicos de {n_sel} fotogramas "
+                                "(los repetidos se reutilizarán). Componiendo hojas…"))
+            else:
+                self.queue.put(("status", f"{n_rep} fotogramas. Componiendo hojas…"))
 
             result = core.generate(
-                settings, sel, numbers=numbers, page_numbers=page_numbers,
-                progress_cb=comp_progress, cancel_check=lambda: self._cancel)
+                prep["settings"], prep["rep_paths"],
+                page_numbers=prep["page_numbers"], labels=prep["rep_labels"],
+                timeline=prep["timeline"], video_meta=prep["video_meta"],
+                progress_cb=lambda d, t: self.queue.put(("compose", d, t)),
+                cancel_check=self.cancelled)
             self.queue.put(("done", result))
         except Exception as e:
-            if self._cancel:
+            if self.cancelled():
                 self.queue.put(("cancelled", None))
             else:
                 self.queue.put(("error", str(e)))
@@ -821,72 +1139,37 @@ class App(tk.Tk):
 
     # ----------------------------------------------------------- vista previa
     def _on_preview(self):
-        if not self.var_video.get() or not Path(self.var_video.get()).exists():
-            messagebox.showwarning("Falta algo", "Elige primero un archivo de video válido.")
-            return
-        if self.var_extract_mode.get() == "fps" and self._float(self.var_fps, 0) <= 0:
-            messagebox.showwarning("Falta algo", "El valor de fps debe ser mayor que 0.")
-            return
         s = self._collect_settings()
-        start, end = self._selected_range()
-        fps = self._float(self.var_fps, 0) if self.var_extract_mode.get() == "fps" else None
-        inc, exc = self.var_include.get(), self.var_exclude.get()
-        orig = self.var_numbering.get().lower().startswith("original")
-        page_orig = self.var_pagenum_order.get().lower().startswith("original")
-
-        self._cancel = False
+        err = self._validate(s)
+        if err:
+            messagebox.showwarning("Falta algo", err)
+            return
         self._set_busy(True)
         self.progress.configure(mode="indeterminate")
         self.progress.start(12)
         self._set_status("Preparando vista previa…")
+        self.start_worker(self._work_preview, s, self._job_params())
 
-        self.worker = threading.Thread(
-            target=self._work_preview,
-            args=(s, start, end, fps, inc, exc, orig, page_orig), daemon=True)
-        self.worker.start()
-        self.after(100, self._poll_queue)
-
-    def _work_preview(self, settings, start, end, fps, inc, exc,
-                      numbering_original, page_numbering_original):
+    def _work_preview(self, s, params):
         tmp = None
         keep_tmp = False
         try:
-            ff = find_ffmpeg()
-            tmp = tempfile.mkdtemp(prefix="kamiru_pv_")
-            self.queue.put(("status", "Extrayendo fotogramas para la vista previa…"))
-
-            def ext_progress(done, total):
-                self.queue.put(("extract", done, total))
-
-            # Extraemos todos los fotogramas del rango (hasta un tope alto) para
-            # poder previsualizar TODAS las hojas, no solo la primera.
-            frames = extract_frames(
-                ff, self.var_video.get(), tmp,
-                start=start, end=end, fps=fps, max_frames=PREVIEW_ALL_CAP,
-                progress_cb=ext_progress, cancel_check=lambda: self._cancel,
-            )
-            positions = core.select_indices(len(frames), inc, exc)
-            if not positions:
-                raise ValueError(
-                    "La selección de «Incluir/Excluir» no deja ningún fotograma "
-                    "para previsualizar.")
-            sel = [frames[i - 1] for i in positions]
-            numbers = positions if numbering_original else None
-            page_numbers = (core.original_page_numbers(
-                positions, settings.per_page, settings.page_num_start)
-                if page_numbering_original else None)
+            prep = self._prepare_frames(s, params, max_frames=PREVIEW_ALL_CAP)
+            tmp = prep["tmpdir"]
             self.queue.put(("status", "Renderizando vista previa…"))
             first_img, num_pages = core.render_preview(
-                settings, sel, 0, numbers=numbers, page_numbers=page_numbers)
-            truncated = len(frames) >= PREVIEW_ALL_CAP
-            # No borramos tmp: las demás hojas se renderizan bajo demanda al
-            # navegar. La ventana de preview limpiará la carpeta al cerrarse.
-            keep_tmp = True
+                s, prep["rep_paths"], 0, labels=prep["rep_labels"],
+                page_numbers=prep["page_numbers"],
+                simulate_cyanotype=params["simulate_cyan"])
+            truncated = prep["total_frames"] >= PREVIEW_ALL_CAP
+            keep_tmp = tmp is not None
             self.queue.put(("preview_multi",
-                            (first_img, sel, settings, num_pages, len(sel), tmp,
-                             truncated, numbers, page_numbers)))
+                            (first_img, prep["rep_paths"], s, num_pages,
+                             len(prep["rep_paths"]), tmp, truncated,
+                             prep["rep_labels"], prep["page_numbers"],
+                             params["simulate_cyan"])))
         except Exception as e:
-            if self._cancel:
+            if self.cancelled():
                 self.queue.put(("cancelled", None))
             else:
                 self.queue.put(("error", str(e)))
@@ -895,22 +1178,24 @@ class App(tk.Tk):
                 shutil.rmtree(tmp, ignore_errors=True)
 
     def _on_cancel(self):
-        self._cancel = True
+        self.cancel()
         self._set_status("Cancelando…")
 
     # ----------------------------------------------------------- cola/eventos
-    def _poll_queue(self):
+    def _poll_forever(self):
+        """La fase 1 sondea siempre (fuentes y probe llegan sin worker)."""
         try:
             while True:
                 msg = self.queue.get_nowait()
-                self._handle(msg)
-        except queue.Empty:
+                self.handle(msg)
+        except Exception:
             pass
-        # Sigue sondeando mientras haya trabajo en curso.
-        if (self.worker and self.worker.is_alive()):
-            self.after(100, self._poll_queue)
+        self.after(120, self._poll_forever)
 
-    def _handle(self, msg):
+    def poll_queue(self):  # el poller permanente ya se encarga
+        pass
+
+    def handle(self, msg):
         kind = msg[0]
         if kind == "fonts":
             self._apply_fonts(msg[1])
@@ -920,10 +1205,13 @@ class App(tk.Tk):
             self.video_info_lbl.configure(text=f"No se pudo leer el video: {msg[1]}")
         elif kind == "status":
             self._set_status(msg[1])
+        elif kind == "log":
+            self._set_status(msg[1])
         elif kind == "extract":
             done, total = msg[1], msg[2]
             if total:
-                self.progress.configure(maximum=total, value=min(done, total))
+                self.progress.configure(mode="determinate", maximum=total,
+                                        value=min(done, total))
                 self._set_status(f"Extrayendo fotogramas…  {done}/{total}")
             else:
                 self.progress.configure(mode="indeterminate")
@@ -937,11 +1225,12 @@ class App(tk.Tk):
             self._set_status(f"Componiendo hojas…  {done}/{total}")
         elif kind == "preview_multi":
             (first_img, frames, settings, num_pages, nsel, tmpdir,
-             truncated, numbers, page_numbers) = msg[1]
+             truncated, labels, page_numbers, simulate) = msg[1]
             self._reset_run()
             self._set_status(f"Vista previa lista ({num_pages} hoja(s)).")
             self._show_multi_preview(first_img, frames, settings, num_pages,
-                                     nsel, tmpdir, truncated, numbers, page_numbers)
+                                     nsel, tmpdir, truncated, labels,
+                                     page_numbers, simulate)
         elif kind == "done":
             self._finish_ok(msg[1])
         elif kind == "cancelled":
@@ -956,23 +1245,30 @@ class App(tk.Tk):
         self.progress.stop()
         self.progress.configure(mode="determinate", value=self.progress["maximum"])
         self._reset_run()
-        n = result.get("num_pages", 0)
+        n = result.get("num_generated", result.get("num_pages", 0))
         orient = result.get("orientation", "")
         self._set_status(f"¡Listo! Se generaron {n} hoja(s).")
-        self._save_config()
+        self.app.save_config()
         extra = ""
         if orient:
             suf = "  (elegida automáticamente)" if self.var_orientation.get().lower().startswith("mejor") else ""
             extra += f"\nOrientación: {orient}{suf}"
         if result.get("pdf"):
             extra += f"\nPDF: {result['pdf']}"
+        if result.get("layout"):
+            extra += f"\nLayout para escaneos: {result['layout']}"
+            try:
+                self.app.scans_phase.suggest(result["layout"])
+                self.app.video_phase.var_layout.set(result["layout"])
+            except Exception:
+                pass
         if result.get("frames_dir"):
             extra += f"\nFotogramas individuales: {result['frames_dir']}"
         if messagebox.askyesno(
-                "¡Contact sheets generados! 🎉",
+                "¡Hojas generadas! 🎉",
                 f"Se crearon {n} hoja(s) en:\n{self.var_out_dir.get()}{extra}\n\n"
                 "¿Abrir la carpeta de salida?"):
-            self._open_folder(self.var_out_dir.get())
+            self.open_folder(self.var_out_dir.get())
 
     def _set_busy(self, busy):
         state = "disabled" if busy else "normal"
@@ -990,27 +1286,24 @@ class App(tk.Tk):
         self.worker = None
 
     def _show_multi_preview(self, first_img, frames, settings, num_pages, nsel,
-                            tmpdir, truncated, numbers=None, page_numbers=None):
-        """Ventana de vista previa con navegación por TODAS las hojas.
-
-        La hoja 0 ya viene renderizada; las demás se renderizan bajo demanda al
-        navegar (y se cachean). Los fotogramas temporales viven en tmpdir hasta
-        que se cierra la ventana.
-        """
+                            tmpdir, truncated, labels=None, page_numbers=None,
+                            simulate=False):
+        """Ventana de vista previa con navegación por TODAS las hojas."""
         try:
             from PIL import ImageTk
         except Exception:
             p = Path(tempfile.mkdtemp(prefix="kamiru_pv_")) / "vista_previa.png"
             first_img.save(p)
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
             messagebox.showinfo("Vista previa", f"Se guardó la vista previa en:\n{p}")
-            self._open_folder(str(p.parent))
+            self.open_folder(str(p.parent))
             return
 
         win = tk.Toplevel(self)
         win.title("Vista previa de las hojas")
         win.configure(bg=PALETTE["bg"])
-        win.transient(self)
+        win.transient(self.app)
 
         state = {"idx": 0, "cache": {0: first_img}, "photo": None}
 
@@ -1025,8 +1318,9 @@ class App(tk.Tk):
 
         def render_pil(k):
             if k not in state["cache"]:
-                img, _ = core.render_preview(settings, frames, k, numbers=numbers,
-                                             page_numbers=page_numbers)
+                img, _ = core.render_preview(settings, frames, k, labels=labels,
+                                             page_numbers=page_numbers,
+                                             simulate_cyanotype=simulate)
                 state["cache"][k] = img
             return state["cache"][k]
 
@@ -1044,6 +1338,9 @@ class App(tk.Tk):
             img_lbl.configure(image=photo)
             note = (f"{nsel} fotograma(s) en la selección  ·  vista a baja "
                     "resolución (las hojas finales serán nítidas)")
+            if settings.is_cyanotype:
+                note += ("  ·  simulación de la copia azul" if simulate
+                         else "  ·  negativo para acetato")
             if truncated:
                 note += f"  ·  preview limitada a las primeras {PREVIEW_ALL_CAP} imágenes"
             info_lbl.configure(text=note)
@@ -1061,7 +1358,8 @@ class App(tk.Tk):
         next_btn.grid(row=0, column=4, padx=4)
 
         def on_close():
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
             win.destroy()
 
         ttk.Button(nav, text="Cerrar", command=on_close).grid(row=0, column=5, padx=(16, 4))
@@ -1078,86 +1376,96 @@ class App(tk.Tk):
     def _set_status(self, text):
         self.status_lbl.configure(text=text)
 
-    @staticmethod
-    def _open_folder(path):
-        import subprocess
-        import sys as _sys
-        try:
-            if _sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            elif _sys.platform.startswith("win"):
-                import os
-                os.startfile(path)  # type: ignore
-            else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception:
-            pass
-
     # ----------------------------------------------------------- ayuda
     def _show_help(self):
         messagebox.showinfo(
-            "Cómo usar Kamiru",
-            "1) Pestaña 1: elige el video y el rango (todo o inicio/fin en segundos).\n"
-            "2) Pestaña 2: cuántos fotogramas extraer (fps o todos), la cuadrícula "
-            "(columnas × filas = imágenes por hoja) y, si quieres, qué fotogramas "
-            "incluir o excluir (p. ej. «1, 3-5»).\n"
-            "3) Pestaña 3: tamaño de hoja (A4 u otros), orientación "
-            "(vertical, horizontal o mejor ajuste automático), DPI y márgenes.\n"
-            "4) Pestaña 4: nombre base, separador y ceros para los nombres "
-            "(abc_001, abc_002, …) y la fuente/tamaño.\n"
-            "5) Pestaña 5: numerador de hoja en la esquina, con orden continuo "
-            "u original (para conservar el número de hoja al incluir/excluir).\n"
-            "6) Pestaña 6: carpeta, nombre de archivo y formatos (PNG/PDF/TIFF).\n\n"
-            "Usa «👁 Vista previa» para ver la primera hoja antes de generar todo.\n"
-            "Pulsa «Generar contact sheets». Las imágenes se extraen en PNG sin "
-            "pérdida y sin alterar el color.")
+            "Cómo usar Kamiru Studio",
+            "FASE ① — GENERAR HOJAS\n"
+            "1) Origen: un video o una carpeta de imágenes.\n"
+            "2) Fotogramas: cuántos extraer, cuadrícula, incluir/excluir y "
+            "detección de dibujos repetidos.\n"
+            "3) Hoja: tamaño, orientación, DPI, márgenes y perfil de impresora.\n"
+            "4) Nombres y 5) Nº de hoja: etiquetas y numeración.\n"
+            "6) Marcadores: ArUco + QR para poder escanear de vuelta "
+            "(genera el layout .json).\n"
+            "7) Cianotipia: negativos para acetato (invertidos, espejados y "
+            "con curva de calibración).\n"
+            "8) Salida: formatos y QUÉ hojas producir (p. ej. «3, 5-7»).\n\n"
+            "FASE ② — PROCESAR ESCANEOS: elige los escaneos + el layout .json "
+            "y recupera cada fotograma alineado y recortado. Con informe y "
+            "hojas de rescate.\n\n"
+            "FASE ③ — CALIBRACIÓN: perfiles de impresora (escala/tamaños) y "
+            "de cianotipia (curva de compensación).\n\n"
+            "FASE ④ — VIDEO FINAL: reconstruye el video con los fotogramas "
+            "procesados en su orden original.")
+
+
+# ════════════════════════════════════════════════════════════════
+# Ventana principal
+# ════════════════════════════════════════════════════════════════
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(f"{__app_name__}  v{__version__}")
+        self.minsize(980, 860)
+        build_style(self)
+
+        head = ttk.Frame(self, padding=(PAD * 2, PAD, PAD * 2, 0))
+        head.pack(fill="x")
+        ttk.Label(head, text="Kamiru Studio", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(head, text="Hecho con cariño para Kamila 💚  ·  video → hojas → "
+                             "pintura o cianotipia ☀️ → escaneo → video  ·  sin "
+                             "Photoshop, sin pérdida de calidad",
+                  style="Sub.TLabel").pack(anchor="w")
+
+        phases = ttk.Notebook(self, style="Phase.TNotebook")
+        phases.pack(fill="both", expand=True, padx=PAD, pady=PAD)
+        self.sheets_phase = SheetsPhase(phases, self)
+        self.scans_phase = ScansPhase(phases, self)
+        self.calib_phase = CalibPhase(phases, self)
+        self.video_phase = VideoPhase(phases, self)
+        phases.add(self.sheets_phase, text="①  Generar hojas")
+        phases.add(self.scans_phase, text="②  Procesar escaneos")
+        phases.add(self.calib_phase, text="③  Calibración")
+        phases.add(self.video_phase, text="④  Video final")
+
+        self._restore_config()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._bring_to_front()
+
+    def _bring_to_front(self):
+        try:
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
 
     # ----------------------------------------------------------- config
-    def _config_dict(self) -> dict:
-        return {k: getattr(self, k).get() for k in self.__dict__
-                if k.startswith("var_")}
-
-    def _save_config(self):
-        data = self._config_dict()
-        data["font_name"] = self.var_font_name.get()
+    def save_config(self):
+        data = {}
+        data.update(self.sheets_phase.collect_vars("s1_"))
+        data.update(self.scans_phase.collect_vars("s2_"))
+        data.update(self.calib_phase.collect_vars("s3_"))
+        data.update(self.video_phase.collect_vars("s4_"))
         config.save(data)
 
     def _restore_config(self):
         data = config.load()
         if not data:
             return
-        for key, val in data.items():
-            var = getattr(self, key, None)
-            if var is not None and hasattr(var, "set"):
-                try:
-                    var.set(val)
-                except (tk.TclError, ValueError):
-                    pass
-        self._sync_range()
-        self._sync_extract()
-        self._sync_custom()
-        self._update_name_preview()
+        self.sheets_phase.restore_vars("s1_", data)
+        self.scans_phase.restore_vars("s2_", data)
+        self.calib_phase.restore_vars("s3_", data)
+        self.video_phase.restore_vars("s4_", data)
+        self.sheets_phase._after_restore()
 
     def _on_close(self):
         try:
-            self._save_config()
+            self.save_config()
         finally:
             self.destroy()
-
-    # ----------------------------------------------------------- utilidades
-    @staticmethod
-    def _int(var, default):
-        try:
-            return int(float(var.get()))
-        except (tk.TclError, ValueError):
-            return default
-
-    @staticmethod
-    def _float(var, default):
-        try:
-            return float(var.get())
-        except (tk.TclError, ValueError):
-            return default
 
 
 def main():

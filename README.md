@@ -1,134 +1,130 @@
-# Video to Contact Sheets 💚
+# Kamiru Studio 💚☀️
 
-Una app de escritorio sencilla (con ventana, **sin tocar código**) para convertir
-un video en **contact sheets** imprimibles: hojas con una cuadrícula de fotogramas
-extraídos del video, cada uno con su nombre, listas para imprimir o archivar.
+Una sola app de escritorio (con ventana, **sin tocar código, sin Photoshop**)
+para todo el flujo de animación *mixed media* y *cianotipia* de Kamila:
 
-Hecha con cariño para **Kamila**. Funciona en **Windows, macOS y Linux**, extrae
-los fotogramas **sin pérdida de calidad** (PNG) y **sin alterar el color**.
+```
+🎬 video (o carpeta de imágenes)
+   → 🖨️ hojas de contacto imprimibles (con marcadores de registro)
+      → ✋ pintar sobre el papel  /  ☀️ exponer cianotipias desde acetatos
+         → 📠 escanear todo (en cualquier orden y orientación)
+            → 🤖 la app endereza, identifica y recorta cada fotograma sola
+               → 🎬 video final reconstruido
+```
+
+Funciona en **Windows, macOS y Linux**. Extrae los fotogramas **sin pérdida de
+calidad** (PNG) y **sin alterar el color**.
+
+> 📖 **¿Primera vez?** Lee el **[MANUAL.md](MANUAL.md)** — la guía completa
+> paso a paso, escrita para usarse sin conocimientos técnicos.
+
+Esta versión 2 une en una sola app a *Video to Contact Sheets* y a
+*Kamiru MXM Scans Helper* (el repo `kamiru_mxm_scans_helper` queda jubilado).
 
 ---
 
 ## ✨ Qué puede hacer
 
+### Fase ① — Generar hojas
+- Origen: **un video** o **una carpeta de imágenes** (frames exportados, dibujos…).
 - **Todo el video** o solo un **rango** (inicio y fin en segundos).
-- Elegir **cuántos fotogramas por segundo (fps)** extraer — admite decimales
-  (p. ej. `0.5` = 1 fotograma cada 2 segundos), o **extraer TODOS los fotogramas**
-  (ideal para *mixed media*).
-- Elegir **cuántas imágenes por hoja** (columnas × filas).
-- **Vista previa** 👁 de **todas las hojas** antes de generar, con botones para
-  **navegar** entre ellas (◀ ▶ o las flechas del teclado). Respeta orientación,
-  nombres, numerador y la selección de fotogramas.
-- **Elegir qué fotogramas salen**: un campo para **incluir solo** ciertas
-  posiciones y otro para **excluir**, con sintaxis de rangos (p. ej. `1, 3-5`).
-- **Espaciado entre frames** dentro de la hoja, ajustable en milímetros.
-- Tamaño de hoja **A4** por defecto, y también **A3, A5, A6, B4, B5, Carta,
-  Oficio, Tabloide** o uno **personalizado** (ancho × alto en mm).
-- **Orientación de la hoja**: **Vertical**, **Horizontal** o **Mejor ajuste
-  (automático)** — esta última elige por ti la orientación que hace los
-  fotogramas **más grandes** (maximiza el área de impresión). Los nombres y el
-  numerador de hoja se acomodan solos a la orientación elegida.
-- **Nombres autoincrementales** para cada frame: por ejemplo `abc_1, abc_2, …`
-  o `abc_001, abc_002, …`. Puedes elegir:
-  - el **nombre base** (`abc`),
-  - el **separador** entre el nombre y el número (`_`, `-`, espacio, lo que sea),
-  - la cantidad de **ceros a la izquierda** (para tener `1` o `001`),
-  - desde qué **número empezar**.
-  - la **numeración**: **continua** (1, 2, 3…) o **original** (la posición real
-    del fotograma en el video, p. ej. `5, 10, 15` si incluyes esos), para no
-    perder el orden real cuando incluyes o excluyes fotogramas.
-  - Por defecto el **nombre base es el del video** (+ sufijos); puedes
-    desactivarlo para escribir el tuyo.
-- **Numerador de hoja** opcional en cualquier **esquina**, para organizarte
-  fácil (con texto antes del número, p. ej. `Hoja 1`), y con **ceros a la
-  izquierda** configurables (`Hoja 001`) para que las hojas se ordenen bien.
-  Además puedes elegir entre numeración de hoja **continua** u **original**: la
-  original conserva el número que la hoja tendría en el video completo (ideal si
-  regeneras solo algunas hojas tras incluir/excluir fotogramas).
-- Elegir la **fuente**, el **tamaño de fuente** y el **margen entre el frame y
-  su nombre** para las etiquetas.
-- Guarda en **PNG** (sin pérdida), **PDF** combinado (perfecto para imprimir) y/o
-  **TIFF**. Opción extra: guardar **cada fotograma individual** a máxima calidad.
-- Recuerda tus ajustes para la próxima vez.
+- **Fotogramas por segundo (fps)** con decimales (p. ej. `0.5`), o **TODOS los
+  fotogramas** (mixed media).
+- **Cuadrícula libre** (columnas × filas), espaciado en mm, márgenes, DPI,
+  tamaño de hoja (A4, A3, A5, A6, B4, B5, Carta, Oficio, Tabloide o
+  personalizado) y orientación **vertical/horizontal/mejor ajuste automático**.
+- **Incluir/excluir fotogramas** por posición (`1, 3-5`) y **elegir qué hojas
+  producir** (`3, 5-7`) — perfecto para reimprimir una hoja dañada.
+- 🆕 **Detección de dibujos repetidos** (deduplicación perceptual): los frames
+  sostenidos/repetidos se imprimen **una sola vez** y se reutilizan al armar el
+  video. Ahorra papel, tinta y horas de pintura.
+- **Nombres autoincrementales** (`abc_001…`) o el **nombre del archivo
+  original**; fuente, tamaño, color y numeración continua u original.
+- **Numerador de hoja** en cualquier esquina, con prefijo y ceros.
+- 🆕 **Marcadores de registro ArUco REDUNDANTES** (4, 8 o 12): la hoja
+  escaneada se alinea sola aunque varios marcadores queden pintados, tapados o
+  cortados (con 8, bastan 3 sanos). Más **un código QR por fotograma** que
+  identifica cada hoja aunque se escaneen desordenadas.
+- 🆕 **Modo CIANOTIPIA**: genera **negativos para acetato** — invertidos,
+  espejados (opcional), con **color de tinta configurable** y **curva de
+  compensación calibrable** (estilo *easy digital negatives*, integrado).
+  Los marcadores/QRs/nombres se invierten para que en la copia azul queden
+  con la polaridad correcta.
+- 🆕 **Tira de parches de grises** opcional para normalizar el escáner.
+- 🆕 **Presets con nombre** (guarda/carga configuraciones completas).
+- **Vista previa navegable de todas las hojas** (incluye marcadores, negativos
+  de cianotipia e incluso una **simulación de la copia azul final**).
+- Salida en **PNG**, **PDF combinado** y/o **TIFF** + copia de fotogramas
+  originales + `layout.json` (el mapa para la fase ②).
+
+### Fase ② — Procesar escaneos  🆕 (adiós Photoshop)
+- Lee los escaneos (TIFF/PNG/JPG, **8 o 16 bits**, a **cualquier resolución** —
+  la escala real se mide sola con los marcadores).
+- Endereza cada hoja con **homografía RANSAC** usando **todos** los marcadores
+  detectados; funciona con hojas **rotadas o de cabeza**.
+- Identifica la hoja con **cualquier QR legible** (¡uno basta!) y recorta cada
+  fotograma según el `layout.json`, con **bleed** ajustable.
+- **Modo cianotipia**: preprocesado especial (canal rojo + CLAHE) tolerante a
+  la variabilidad de tonos del azul de Prusia.
+- **Procesamiento en paralelo** (configurable, pensado para máquinas potentes).
+- **Modo emergencia**: si ningún QR es legible, los recortes se guardan en
+  `sin_identificar/` para no perder el arte.
+- 🆕 **Informe** HTML con miniaturas + JSON + CSV: qué se recuperó, qué falta.
+- 🆕 **Hojas de rescate**: un botón reimprime SOLO los fotogramas fallidos.
+- Compatible con los `layout.json` de la app antigua (v1).
+
+### Fase ③ — Calibración  🆕
+- **Perfil de impresora**: imprime una página de prueba, escanéala y la app
+  mide la **escala real** de tu impresora (y la compensa al generar hojas),
+  su **respuesta tonal** y el **tamaño mínimo fiable** de marcador y de QR.
+- **Perfil de cianotipia**: imprime una tira de densidades en acetato, haz tu
+  cianotipia como siempre, escanéala y la app construye la **curva de
+  compensación** que lineariza los tonos y aprovecha todo el **rango dinámico**
+  de TU proceso (impresora + acetato + química + sol), con sugerencias.
+
+### Fase ④ — Video final  🆕
+- Reconstruye el video (MP4 H.264, H.264 4:4:4 o **ProRes**) con los
+  fotogramas procesados **en su orden original**, reutilizando los
+  deduplicados en todas sus posiciones. El fps se lee del proyecto.
 
 ---
 
 ## 🚀 Cómo abrirla (doble clic, sin terminal)
 
-Solo necesitas tener **Python 3** instalado. Cada sistema tiene su forma de
-abrirla como una app de verdad. La primera vez prepara el entorno e instala las
-dependencias sola (1–2 minutos); después abre al instante.
+Solo necesitas tener **Python 3** instalado. La primera vez prepara el entorno
+e instala las dependencias sola (2–3 minutos); después abre al instante.
 
-> ⚠️ **macOS — importante:** guarda esta carpeta **fuera de Documentos, Escritorio
-> y Descargas** (por ejemplo en tu carpeta de inicio, `~/Video to Contact Sheets`).
-> macOS bloquea a las apps el acceso a esas tres carpetas protegidas, y verías un
-> error «Operation not permitted». En cualquier otra ubicación funciona sin pedir
-> permisos.
+> ⚠️ **macOS — importante:** guarda esta carpeta **fuera de Documentos,
+> Escritorio y Descargas** (por ejemplo en `~/Kamiru Studio`). macOS bloquea a
+> las apps el acceso a esas tres carpetas protegidas.
 
-### macOS  — `Video to Contact Sheets.app`
-1. Instala Python desde <https://www.python.org/downloads/> (incluye lo necesario
-   para la ventana).
-2. Haz **doble clic en `Video to Contact Sheets.app`**. Se abre como cualquier
-   app, **sin que aparezca ninguna terminal**.
+### macOS — `Video to Contact Sheets.app`
+1. Instala Python desde <https://www.python.org/downloads/>.
+2. Doble clic en la app. Primera vez: clic derecho → **Abrir** → **Abrir**.
 
-> Primera vez: clic derecho sobre la app → **Abrir** → **Abrir** (es una app sin
-> firmar). Truco: arrástrala al **Dock** para tenerla a mano.
->
-> Si ya la tenías en Documentos y daba error: muévela (con su carpeta) a `~/` y
-> vuelve a abrirla. ¿Prefieres la terminal? También existe `run.command`.
-
-### Windows  — `Abrir Video to Contact Sheets.vbs`
-1. Instala Python desde <https://www.python.org/downloads/> y **marca la casilla
+### Windows — `Abrir Video to Contact Sheets.vbs`
+1. Instala Python desde <https://www.python.org/downloads/> y **marca
    "Add Python to PATH"**.
-2. Haz **doble clic en `Abrir Video to Contact Sheets.vbs`**. Abre la app **sin
-   consola negra**. (También existe `run.bat`.)
+2. Doble clic en el `.vbs` (sin consola negra). También existe `run.bat`.
 
-### Linux  — `Instalar en Linux.sh`
-1. Instala Python y Tk:
-   - Debian/Ubuntu: `sudo apt install python3 python3-venv python3-tk`
-   - Fedora: `sudo dnf install python3 python3-tkinter`
-2. Ejecuta **una vez** `./Instalar en Linux.sh` (o doble clic → «Ejecutar»). Eso
-   añade **Video to Contact Sheets** a tu menú de aplicaciones y al Escritorio.
-3. Ábrela desde el menú/Escritorio (se abre **sin terminal**). También puedes
-   usar `./run.sh` directamente.
-
----
-
-## 🧭 Cómo usarla, paso a paso
-
-La ventana tiene pestañas numeradas:
-
-1. **Video y rango** — elige el archivo de video y si quieres *todo el video* o un
-   *inicio/fin en segundos*.
-2. **Extracción y cuadrícula** — cuántos fotogramas extraer (fps o todos), la
-   cuadrícula (columnas × filas = imágenes por hoja), **qué fotogramas incluir o
-   excluir** (p. ej. `1, 3-5`) y el espaciado entre frames.
-3. **Hoja** — tamaño (A4 u otro), **orientación** (vertical, horizontal o mejor
-   ajuste automático), DPI (300 = calidad de impresión), margen y color de fondo.
-4. **Nombres de frames** — nombre base (por defecto el del video), separador,
-   ceros a la izquierda, número inicial, fuente, tamaño y margen entre el frame y
-   su nombre.
-5. **Numerador de hoja** — número de hoja en la esquina que elijas, con ceros a
-   la izquierda configurables.
-6. **Salida** — carpeta, nombre de archivo y formatos (PNG / PDF / TIFF).
-
-Usa **«👁 Vista previa»** para ver todas las hojas (puedes navegar entre ellas)
-antes de generar. Luego pulsa **«Generar contact sheets»**. Abajo verás una
-estimación de cuántos fotogramas y hojas saldrán, y una barra de progreso.
+### Linux — `Instalar en Linux.sh`
+1. `sudo apt install python3 python3-venv python3-tk` (Debian/Ubuntu) o
+   `sudo dnf install python3 python3-tkinter` (Fedora).
+2. Ejecuta una vez `./Instalar en Linux.sh`; la app queda en tu menú.
+   También puedes usar `./run.sh`.
 
 ---
 
 ## 🎨 Sobre la calidad y el color
 
-- Los fotogramas se extraen a **PNG**, un formato **sin pérdida**: no se
-  recomprime ni se degrada la imagen.
-- **No se aplica ningún filtro de color, recorte ni corrección.** El único paso
-  inevitable es la conversión interna de YUV (cómo guarda el color el video) a RGB
-  (cómo se muestran las imágenes), que es exactamente lo que hace cualquier
-  reproductor; no es una alteración del color.
-- Las hojas se componen a alta resolución (DPI configurable) y los frames se
-  reescalan con remuestreo **LANCZOS** (alta calidad) solo para encajar en cada
-  celda, conservando su relación de aspecto.
+- Los fotogramas se extraen a **PNG sin pérdida**; no se recomprime nada.
+- **No se aplica ningún filtro de color** en modo normal. La única conversión
+  es YUV→RGB del decodificador, como en cualquier reproductor.
+- Las hojas se componen a alta resolución (DPI configurable) con remuestreo
+  **LANCZOS**; la alineación de escaneos usa interpolación **LANCZOS4** y los
+  escaneos de **16 bits se conservan de punta a punta**.
+- En modo cianotipia sí se aplica (a propósito) la inversión y la curva de
+  compensación calibrada: para eso está.
 
 ---
 
@@ -139,44 +135,42 @@ estimación de cuántos fotogramas y hojas saldrán, y una barra de progreso.
 ```bash
 python3 -m pip install -r requirements.txt
 python3 -m kamiru          # abre la app
+python3 tests/test_pipeline.py   # prueba de integración (sin GUI)
 ```
 
 No hace falta instalar `ffmpeg` aparte: viene incluido vía `imageio-ffmpeg`.
+`pyzbar` es opcional (refuerzo para QRs muy dañados; requiere libzbar).
 
 ### ¿La ventana se abre en blanco (macOS)?
 
-Es el **Tk 8.5** obsoleto que trae macOS de fábrica; dibuja la ventana vacía.
-Solución: usa el **Python de [python.org](https://www.python.org/downloads/)**
-(incluye un Tk 8.6 que sí funciona). Los lanzadores ya lo eligen
-automáticamente y, si detectan un entorno viejo, lo recrean solos. Si lo
-arreglas a mano, borra el entorno y vuelve a abrir:
-
-```bash
-rm -rf .venv
-./run.command   # o doble clic
-```
+Es el **Tk 8.5** obsoleto de macOS. Usa el Python de
+[python.org](https://www.python.org/downloads/) (trae Tk 8.6). Si lo arreglas a
+mano: `rm -rf .venv` y vuelve a abrir.
 
 ---
 
 ## 📦 Qué hay dentro
 
 ```
-kamiru/                          El código de la app (paquete Python)
-  app.py          La ventana (interfaz gráfica con Tkinter)
-  core.py         Composición de los contact sheets (Pillow)
-  ffmpeg_utils.py Extracción de fotogramas y lectura del video (ffmpeg)
+kamiru/                    El código de la app (paquete Python)
+  app.py          Ventana principal + fase ① (generar hojas)
+  gui_phases.py   Fases ② escaneos, ③ calibración y ④ video
+  gui_common.py   Estilos y utilidades compartidas de la interfaz
+  core.py         Composición de hojas (grillas, marcadores, cianotipia)
+  markers.py      Marcadores ArUco redundantes y códigos QR
+  scan.py         Procesador de escaneos (alineación, recorte, informe)
+  calibration.py  Página de prueba de impresora y tira de cianotipia
+  cyanotype.py    Negativos: inversión, curva, color de tinta, espejado
+  dedup.py        Detección de dibujos repetidos (hash perceptual)
+  rescue.py       Hojas de rescate (reimprimir solo lo fallido)
+  layoutfile.py   Lectura/escritura del layout.json (v2 + compat. v1)
+  videoout.py     Reconstrucción del video final (ffmpeg)
+  ffmpeg_utils.py Extracción de fotogramas y sondeo del video
   paper.py        Tamaños de hoja y conversiones mm/px
   fonts.py        Búsqueda de fuentes del sistema
-  config.py       Guarda/recuerda tus ajustes
-Video to Contact Sheets.app      App de macOS (doble clic, sin terminal)
-Abrir Video to Contact Sheets.vbs  App de Windows (doble clic, sin consola)
-Instalar en Linux.sh             Registra la app en Linux (ejecutar una vez)
-assets/icon.png · icon.ico       Ícono de la app
-run.command / run.bat / run.sh   Lanzadores por terminal (alternativa)
-main.py           Alternativa: python3 main.py
-requirements.txt  Dependencias (Pillow, imageio-ffmpeg)
+  config.py       Ajustes, presets y perfiles de calibración
+tests/test_pipeline.py     Prueba de integración de todo el pipeline
+MANUAL.md                  La guía completa de uso, paso a paso
 ```
-
----
 
 Hecho con cariño. 💚
