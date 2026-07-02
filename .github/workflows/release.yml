@@ -156,4 +156,4 @@ jobs:
             >
             > **Windows:** si SmartScreen avisa, pulsa «Más información» → «Ejecutar de todas formas».
 
-            La guía completa de uso está en [`MANUAL.md`](https://github.com/${{ github.repository }}/blob/${{ inputs.tag || github.ref_name }}/MANUAL.md).
+            La guía completa de uso está en [`MANUAL.md`](https://github.com/${{ github.repository }}/blob/${{ steps.tag.outputs.tag }}/MANUAL.md).
