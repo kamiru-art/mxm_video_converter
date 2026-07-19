@@ -33,7 +33,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kamiru import calibration, core, cyanotype, dedup, layoutfile, rescue, scan  # noqa: E402
+from kamiru import calibration, core, cyanotype, dedup, layoutfile, markers, rescue, scan  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="kamiru_test_"))
 PASSED = []
@@ -365,11 +365,9 @@ bb_test = {"0": [50, 50, 100, 100], "1": [900, 50, 950, 100],
 despl = {0: (6.0, 0.0), 1: (0.0, 6.0), 2: (-6.0, 0.0), 3: (0.0, -6.0)}
 ref_test = {}
 for mid, b in bb_test.items():
-    c = np.array([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]],
-                 dtype=np.float32)
     dx, dy = despl[int(mid)]
-    ref_test[int(mid)] = c + np.float32([dx, dy])
-shift_fn = scan._make_local_shift(np.eye(3), ref_test, bb_test, 1.0)
+    ref_test[int(mid)] = markers.bbox_corners(b) + np.float32([dx, dy])
+shift_fn = scan._make_local_shift(np.eye(3), ref_test, bb_test, 1.0, px_mm=1.0)
 check("corrector local activo con residuo alto", shift_fn is not None)
 sx, sy = shift_fn((60, 60, 90, 90))       # pegado al marcador 0
 cx, cy = shift_fn((480, 480, 520, 520))   # centro de la hoja
@@ -378,11 +376,31 @@ check("recorte junto a un marcador sigue a ese marcador",
 check("recorte central promedia los residuos",
       abs(cx) < 1.0 and abs(cy) < 1.0, f"({cx:.2f}, {cy:.2f})")
 # Y con residuo subpíxel no corrige nada (no mete ruido).
-ref_zero = {int(m): np.array([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]],
-                              [b[0], b[3]]], dtype=np.float32)
-            for m, b in bb_test.items()}
+ref_zero = {int(m): markers.bbox_corners(b) for m, b in bb_test.items()}
 check("corrector inactivo con residuo subpíxel",
-      scan._make_local_shift(np.eye(3), ref_zero, bb_test, 1.0) is None)
+      scan._make_local_shift(np.eye(3), ref_zero, bb_test, 1.0,
+                             px_mm=1.0) is None)
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4f. Testigo de orientación: no rompe el marcador TL ══")
+# Con marcadores de 8 mm y halo de 5 mm (ahorro), el halo del triángulo debe
+# quedar FUERA del parche TL; si lo invade, el marcador 0 pierde su borde en
+# la copia azul y deja de detectarse.
+s4f = settings_base(TMP / "hojas_testigo", mode="cianotipia", cyan_mirror=True,
+                    cyan_bg="ahorro", cyan_halo_mm=5.0, marker_size_mm=8.0,
+                    out_name="testigo", project_name="testigo")
+res4f = core.generate(s4f, frame_paths[:4], labels=labels[:4])
+check("avisos de tamaños arriesgados en cianotipia",
+      any("8" in a and "10" in a for a in res4f["avisos"]),
+      str(res4f["avisos"]))
+neg4f = cv2.flip(cv2.imread(res4f["pages"][0]), 1)
+g4f = cv2.cvtColor(neg4f, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+print4f = np.clip(paperc[None, None, :] * (1 - g4f[..., None])
+                  + bluec[None, None, :] * g4f[..., None], 0, 255).astype(np.uint8)
+_, found4f = scan._detect_markers_multi(print4f, "DICT_4X4_50",
+                                        list(range(8)), "cianotipia")
+check("marcador TL detectable junto al testigo (8 mm + halo 5 mm)",
+      0 in found4f, f"detectados: {sorted(found4f)}")
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 5. Deduplicación perceptual ══")

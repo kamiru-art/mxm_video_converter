@@ -361,6 +361,11 @@ def cyanotype_size_warnings(s: Settings) -> list[str]:
             f"Margen de marcadores de {s.marker_margin_mm:g} mm: en cianotipia "
             "conviene ≥ 6 mm porque los bordes del papel acumulan manchas de "
             "brocha y roturas.")
+    if _cyan_saving(s) and s.cyan_halo_mm < 4:
+        avisos.append(
+            f"Halo entintado de {s.cyan_halo_mm:g} mm: en modo ahorro conviene "
+            "≥ 4 mm para que marcadores y QRs queden sobre blanco garantizado "
+            "aunque el fondo se manche.")
     return avisos
 
 
@@ -664,18 +669,29 @@ def _draw_registration_frame(s: Settings, L: _Layout, canvas: Image.Image):
 
     if s.is_cyanotype:
         # Testigo de orientación: triángulo asimétrico junto al marcador TL.
-        # En la copia azul correcta apunta a la DERECHA; si apunta a la
+        # En la copia azul CORRECTA apunta a la DERECHA; si apunta a la
         # izquierda, el acetato se expuso al revés (la app lo corrige al
         # escanear, pero así se ve de un vistazo sobre el papel).
         tlx, tly = L.marker_positions[0]
         tri_h = max(8, L.marker_side // 2)
-        x0 = int(tlx + L.marker_patch + max(6, tri_h // 2))
+        # El halo del triángulo NO debe invadir el parche del marcador TL
+        # (borraría el borde del ArUco en la copia): el hueco al parche debe
+        # ser al menos el halo.
+        x0 = int(tlx + L.marker_patch + max(6, L.halo_px))
         y0 = int(tly + (L.marker_patch - tri_h) // 2)
         if saving:
             _halo_rect(draw, s, [x0, y0, x0 + tri_h, y0 + tri_h], L.halo_px)
         # Blanco = densidad 0 = transparente en el acetato → azul en la copia.
-        draw.polygon([(x0, y0), (x0 + tri_h, y0 + tri_h // 2), (x0, y0 + tri_h)],
-                     fill="#FFFFFF")
+        # El lienzo solo se espeja al guardar si cyan_mirror está activo: para
+        # que la COPIA FÍSICA correcta siempre apunte a la derecha, sin
+        # espejado el triángulo se dibuja apuntando a la izquierda (la copia
+        # de contacto lo invierte).
+        if s.cyan_mirror:
+            tri = [(x0, y0), (x0 + tri_h, y0 + tri_h // 2), (x0, y0 + tri_h)]
+        else:
+            tri = [(x0 + tri_h, y0), (x0, y0 + tri_h // 2),
+                   (x0 + tri_h, y0 + tri_h)]
+        draw.polygon(tri, fill="#FFFFFF")
     if L.patch_strip:
         if saving:
             xs = [b for b, _ in L.patch_strip]

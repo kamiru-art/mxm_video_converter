@@ -321,7 +321,14 @@ Refuerzos automáticos de la fase ② para cianotipia:
 
 Tamaños recomendados para cianotipia (la app avisa si vas por debajo):
 **ArUco ≥ 10 mm**, **QR ≥ 12 mm**, margen de marcadores **≥ 6 mm** (los bordes
-del papel acumulan manchas de brocha).
+del papel acumulan manchas de brocha), halo entintado **≥ 4 mm** en modo
+ahorro.
+
+> ⚠️ Si actualizaste la app con un proyecto de cianotipia a medio imprimir:
+> la geometría de los marcadores en hojas nuevas cambió un poco (zona de
+> silencio mayor). Procesa cada hoja con el layout `.json` que se generó
+> JUNTO a esa hoja; no mezcles hojas impresas con la versión anterior y un
+> layout regenerado con la nueva (ni al revés).
 
 > ⚠️ Escanea la **copia azul**, no el acetato. (Si por error escaneas algo en
 > espejo, la app ahora lo corrige sola, pero el acetato sigue sin ser lo que

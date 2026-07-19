@@ -68,6 +68,13 @@ SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".webp
 # Lado máximo del proxy usado para la detección rápida de marcadores.
 PROXY_MAX_SIDE = 2400
 
+# Umbrales del control de precisión de la alineación (en milímetros físicos,
+# convertidos con la escala medida de cada escaneo para que signifiquen lo
+# mismo a cualquier DPI).
+RESIDUAL_OUTLIER_MM = 2.5   # residuo a partir del cual un marcador se descarta
+RESIDUAL_WARN_MM = 1.0      # residuo mediano que dispara la advertencia
+FINE_ALIGN_MIN_MM = 0.15    # residuo mediano mínimo para corregir recortes
+
 try:  # pyzbar es OPCIONAL (requiere libzbar); OpenCV es el decodificador base.
     from pyzbar.pyzbar import decode as _pyzbar_decode  # type: ignore
     _HAS_PYZBAR = True
@@ -199,9 +206,19 @@ def _flat_field(channel: np.ndarray) -> np.ndarray:
     """Aplana la densidad de fondo no uniforme (lavados y exposiciones
     desiguales típicos de la cianotipia): divide el canal por una versión muy
     desenfocada de sí mismo y renormaliza. Los marcadores quedan con contraste
-    homogéneo aunque media hoja esté mucho más oscura que la otra."""
-    sigma = max(15.0, min(channel.shape[:2]) / 16.0)
-    fondo = cv2.GaussianBlur(channel, (0, 0), sigma)
+    homogéneo aunque media hoja esté mucho más oscura que la otra.
+
+    El fondo solo necesita las frecuencias bajas: se estima a escala reducida
+    (el blur gaussiano de sigma grande a resolución completa costaría cientos
+    de ms por variante) y se reamplía."""
+    h, w = channel.shape[:2]
+    k = max(1, min(h, w) // 256)
+    small = cv2.resize(channel, (max(1, w // k), max(1, h // k)),
+                       interpolation=cv2.INTER_AREA) if k > 1 else channel
+    fondo = cv2.GaussianBlur(small, (0, 0),
+                             max(3.0, min(small.shape[:2]) / 16.0))
+    if k > 1:
+        fondo = cv2.resize(fondo, (w, h), interpolation=cv2.INTER_LINEAR)
     flat = cv2.divide(channel, cv2.max(fondo, 1), scale=128.0)
     return cv2.normalize(flat, None, 0, 255, cv2.NORM_MINMAX)
 
@@ -236,14 +253,12 @@ def _gray_variants(bgr8: np.ndarray, mode: str):
         yield "gris_norm", cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
 
 
-def _make_detector(dict_name: str, mode: str = "normal",
-                   inverted: bool = False):
+def _make_detector(dict_name: str, mode: str = "normal"):
     """Detector ArUco configurado según el modo.
 
-    inverted=True activa detectInvertedMarker; OJO: ese flag sesga las
-    esquinas de los marcadores de polaridad NORMAL (~10-15 px hacia fuera),
-    así que solo se usa como último recurso en la recuperación guiada de
-    marcadores perdidos, nunca en la detección principal.
+    NOTA: detectInvertedMarker queda deliberadamente FUERA: sesga las esquinas
+    de los marcadores de polaridad normal ~10-15 px hacia fuera (medido), lo
+    que arruina la precisión subpíxel de la homografía.
     """
     aruco_dict = markers.get_dictionary(dict_name)
     params = cv2.aruco.DetectorParameters()
@@ -263,11 +278,6 @@ def _make_detector(dict_name: str, mode: str = "normal",
             params.minMarkerPerimeterRate = 0.015    # marcadores pequeños
             params.polygonalApproxAccuracyRate = 0.06  # cuadrados imperfectos
             params.maxErroneousBitsInBorderRate = 0.45
-        except Exception:
-            pass
-    if inverted:
-        try:
-            params.detectInvertedMarker = True
         except Exception:
             pass
     return cv2.aruco.ArucoDetector(aruco_dict, params)
@@ -299,42 +309,76 @@ def _detect_markers_multi(bgr8: np.ndarray, dict_name: str, expected_ids,
     return best_name, best
 
 
-def _detect_oriented(proxy8: np.ndarray, dict_name: str, expected_ids,
+def _detect_oriented(img: np.ndarray, dict_name: str, expected_ids,
                      mode: str):
-    """Detección en el proxy probando también la imagen ESPEJADA.
+    """Detección en un proxy pequeño, probando también la imagen ESPEJADA.
 
     Los ArUco son quirales: si la cianotipia se expuso con el acetato al revés
     (o se escaneó el propio acetato), la copia sale en espejo y los marcadores
-    no aparecen — o peor, el espejo de alguno coincide por azar con otro id y
-    produce una alineación plausible pero incorrecta. Si al derecho no
-    aparecen todos, se intenta en espejo y gana la orientación con más
-    marcadores (empate → al derecho).
+    no aparecen. La pasada en espejo solo se intenta cuando la detección al
+    derecho es débil (menos de la mitad de los esperados): con la mitad o más
+    al derecho no hay nada que ganar y se evita duplicar el coste de detección
+    en el caso común de algún marcador tapado. Gana la orientación con más
+    marcadores (empate → al derecho); los pocos alias de espejo del
+    diccionario colapsan en ids repetidos y no pueden ganar el conteo a una
+    detección genuina.
+
+    El volteo se resuelve AQUÍ, en un solo lugar: se devuelve la imagen ya
+    volteada (si tocó) y las esquinas convertidas a coordenadas de resolución
+    completa con el mapeo exacto (el redondeo del proxy introduce un sesgo
+    ≈(factor−1) px si simplemente se multiplica por factor tras el volteo).
 
     Returns:
-        (estrategia, {id: corners}, flipped) — corners en coords de la
-        orientación GANADORA (si flipped=True, del proxy volteado).
+        (img, estrategia, {id: corners_fullres}, flipped)
     """
+    H, W = img.shape[:2]
+    factor = max(1.0, max(H, W) / float(PROXY_MAX_SIDE))
+    if factor > 1.0:
+        proxy = cv2.resize(img, (int(W / factor), int(H / factor)),
+                           interpolation=cv2.INTER_AREA)
+    else:
+        proxy = img
+    proxy8 = _to_u8(proxy)
+    if proxy8.ndim == 2:
+        proxy8 = cv2.cvtColor(proxy8, cv2.COLOR_GRAY2BGR)
+    Wp = proxy8.shape[1]
+
+    expected_n = len(set(int(i) for i in expected_ids))
     estrategia, found = _detect_markers_multi(proxy8, dict_name,
                                               expected_ids, mode)
-    if len(found) >= len(set(int(i) for i in expected_ids)):
-        return estrategia, found, False
-    estrategia_f, found_f = _detect_markers_multi(
-        cv2.flip(proxy8, 1), dict_name, expected_ids, mode)
-    if len(found_f) > len(found):
-        return f"{estrategia_f}_espejado", found_f, True
-    return estrategia, found, False
+    flipped = False
+    if len(found) < max(3, expected_n // 2):
+        estrategia_f, found_f = _detect_markers_multi(
+            cv2.flip(proxy8, 1), dict_name, expected_ids, mode)
+        if len(found_f) > len(found):
+            estrategia, found = f"{estrategia_f}_espejado", found_f
+            flipped = True
+            img = cv2.flip(img, 1)
+
+    full = {}
+    for mid, c in found.items():
+        cf = c.astype(np.float32).copy()
+        if flipped:
+            # esquina en el proxy volteado → proxy original → full → volteada
+            cf[:, 0] = (W - 1) - ((Wp - 1) - cf[:, 0]) * factor
+            cf[:, 1] = cf[:, 1] * factor
+        else:
+            cf *= factor
+        full[mid] = cf
+    return img, estrategia, full, flipped
 
 
-def _refine_corners_fullres(img_full: np.ndarray, proxy_corners: dict,
-                            factor: float, dict_name: str, mode: str):
+def _refine_corners_fullres(img_full: np.ndarray, full_corners: dict,
+                            dict_name: str, mode: str):
     """Re-detecta cada marcador en un recorte a resolución completa para
-    obtener esquinas precisas. Si falla, usa las del proxy reescaladas."""
+    obtener esquinas precisas. full_corners llega ya en coordenadas de
+    img_full (las convierte _detect_oriented); si el re-detectado local
+    falla, se conservan esas esquinas aproximadas."""
     detector = _make_detector(dict_name, mode)
     H, W = img_full.shape[:2]
     refined = {}
 
-    for mid, c in proxy_corners.items():
-        c_full = c * factor
+    for mid, c_full in full_corners.items():
         x1, y1 = c_full.min(axis=0)
         x2, y2 = c_full.max(axis=0)
         side = max(x2 - x1, y2 - y1)
@@ -366,6 +410,23 @@ def _refine_corners_fullres(img_full: np.ndarray, proxy_corners: dict,
     return refined
 
 
+def _correspondences(refined: dict, layout_bboxes: dict, s: float):
+    """Pares (esquinas detectadas, esquinas teóricas×s) de los marcadores que
+    existen en el layout. Único punto donde vive la convención de ids
+    (claves str) y el orden de esquinas (markers.bbox_corners)."""
+    src_list, dst_list = [], []
+    for mid, corners in refined.items():
+        key = str(int(mid))
+        if key not in layout_bboxes:
+            continue
+        src_list.append(corners)
+        dst_list.append(markers.bbox_corners(layout_bboxes[key]) * s)
+    if not src_list:
+        return None, None
+    return (np.concatenate(src_list, axis=0),
+            np.concatenate(dst_list, axis=0))
+
+
 def _recover_missing_markers(img_full: np.ndarray, refined: dict,
                              layout_bboxes: dict, s: float, dict_name: str,
                              mode: str, thresh: float) -> dict:
@@ -385,24 +446,15 @@ def _recover_missing_markers(img_full: np.ndarray, refined: dict,
     if not missing or len(refined) < 3:
         return {}
 
-    src_list, dst_list = [], []
-    for mid, corners in refined.items():
-        key = str(int(mid))
-        if key not in layout_bboxes:
-            continue
-        src_list.append(markers.bbox_corners(layout_bboxes[key]) * s)
-        dst_list.append(corners)
-    if not src_list:
+    src_pts, dst_pts = _correspondences(refined, layout_bboxes, s)
+    if src_pts is None:
         return {}
-    M0, _ = cv2.findHomography(np.concatenate(src_list),
-                               np.concatenate(dst_list), cv2.RANSAC, thresh)
+    # Homografía preliminar en dirección layout → escaneo.
+    M0, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, thresh)
     if M0 is None:
         return {}
 
     detector = _make_detector(dict_name, mode)
-    # Último recurso por zona: detector con polaridad invertida (sus esquinas
-    # son menos precisas, pero el filtro de residuos vigila el resultado).
-    detector_inv = _make_detector(dict_name, mode, inverted=True)
     H, W = img_full.shape[:2]
     out = {}
     for mid in missing:
@@ -426,19 +478,16 @@ def _recover_missing_markers(img_full: np.ndarray, refined: dict,
             k = 3.0
             crop8 = cv2.resize(crop8, (0, 0), fx=k, fy=k,
                                interpolation=cv2.INTER_CUBIC)
-        for det in (detector, detector_inv):
-            for _, gray in _gray_variants(crop8, mode):
-                corners, ids, _ = det.detectMarkers(gray)
-                if ids is None:
-                    continue
-                for i, did in enumerate(ids.flatten()):
-                    if int(did) == mid:
-                        c = corners[i][0].astype(np.float32) / k
-                        c[:, 0] += rx1
-                        c[:, 1] += ry1
-                        out[mid] = c
-                        break
-                if mid in out:
+        for _, gray in _gray_variants(crop8, mode):
+            corners, ids, _ = detector.detectMarkers(gray)
+            if ids is None:
+                continue
+            for i, did in enumerate(ids.flatten()):
+                if int(did) == mid:
+                    c = corners[i][0].astype(np.float32) / k
+                    c[:, 0] += rx1
+                    c[:, 1] += ry1
+                    out[mid] = c
                     break
             if mid in out:
                 break
@@ -449,48 +498,17 @@ def _recover_missing_markers(img_full: np.ndarray, refined: dict,
 # Control de precisión de la alineación
 # ────────────────────────────────────────────────────────────────
 
-def _marker_residuals(M: np.ndarray, refined: dict, layout_bboxes: dict,
-                      s: float) -> dict:
-    """Error medio de reproyección de cada marcador (px del lienzo alineado):
-    distancia entre sus esquinas detectadas proyectadas con M y sus posiciones
-    teóricas del layout."""
-    out = {}
-    for mid, corners in refined.items():
-        key = str(int(mid))
-        if key not in layout_bboxes:
-            continue
-        proj = cv2.perspectiveTransform(
-            corners.reshape(1, -1, 2).astype(np.float64), M)[0]
-        dst = markers.bbox_corners(layout_bboxes[key]).astype(np.float64) * s
-        out[int(mid)] = float(np.mean(np.linalg.norm(proj - dst, axis=1)))
-    return out
+def _residual_field(M: np.ndarray, refined: dict, layout_bboxes: dict,
+                    s: float):
+    """Campo de residuos de la alineación: para cada esquina de marcador,
+    dónde cayó realmente en el lienzo alineado (proyectada con M) frente a
+    dónde debería (layout×s).
 
-
-def _px_per_mm(layout: dict, s: float) -> float:
-    """Píxeles por milímetro en el lienzo alineado (layout × escala)."""
-    dpi = float(layout.get("lienzo", {}).get("dpi")
-                or layout.get("lienzo", {}).get("ppi") or 300)
-    return max(1e-6, s * dpi / 25.4)
-
-
-def _make_local_shift(M: np.ndarray, refined: dict, layout_bboxes: dict,
-                      s: float):
-    """Corrector local de recortes para papel deformado.
-
-    El papel de cianotipia se moja, encoge y se ondula: una homografía global
-    no puede seguir esa deformación, así que el contenido queda corrido
-    respecto al layout aunque los marcadores se detecten perfectos. Aquí se
-    mide el residuo (dónde cayó realmente cada esquina de marcador en el
-    lienzo alineado vs. dónde debería) y se interpola ese campo de vectores
-    (ponderación por distancia inversa) para desplazar cada recorte hacia
-    donde el contenido quedó de verdad.
-
-    Devuelve una función bbox→(dx, dy) en px del lienzo alineado, o None si el
-    residuo es subpíxel (nada que corregir). El desplazamiento interpolado es
-    una combinación convexa de los residuos medidos, así que queda acotado por
-    el residuo máximo observado.
+    Returns:
+        (pts Nx2, errs Nx2, {id: residuo_medio_px}) — una sola definición del
+        residuo, compartida por el filtro de marcadores y el corrector local.
     """
-    pts, errs = [], []
+    pts, errs, per_marker = [], [], {}
     for mid, corners in refined.items():
         key = str(int(mid))
         if key not in layout_bboxes:
@@ -500,12 +518,48 @@ def _make_local_shift(M: np.ndarray, refined: dict, layout_bboxes: dict,
         dst = markers.bbox_corners(layout_bboxes[key]).astype(np.float64) * s
         pts.append(dst)
         errs.append(proj - dst)
-    if len(pts) < 4:
+        per_marker[int(mid)] = float(np.mean(np.linalg.norm(proj - dst,
+                                                            axis=1)))
+    if not pts:
+        return None, None, {}
+    return np.concatenate(pts), np.concatenate(errs), per_marker
+
+
+def _px_per_mm(layout: dict, s: float) -> float:
+    """Píxeles por milímetro en el lienzo alineado (layout × escala).
+
+    layoutfile.load ya normaliza los layouts v1 (clave 'ppi') a 'dpi'; el
+    encadenado cubre un layout crudo no normalizado.
+    """
+    dpi = float(layout.get("lienzo", {}).get("dpi")
+                or layout.get("lienzo", {}).get("ppi") or 300)
+    return max(1e-6, s * dpi / 25.4)
+
+
+def _make_local_shift(M: np.ndarray, refined: dict, layout_bboxes: dict,
+                      s: float, px_mm: float | None = None):
+    """Corrector local de recortes para papel deformado.
+
+    El papel de cianotipia se moja, encoge y se ondula: una homografía global
+    no puede seguir esa deformación, así que el contenido queda corrido
+    respecto al layout aunque los marcadores se detecten perfectos. Aquí se
+    interpola el campo de residuos de los marcadores (ponderación por
+    distancia inversa) para desplazar cada recorte hacia donde el contenido
+    quedó de verdad.
+
+    Devuelve una función bbox→(dx, dy) en px del lienzo alineado, o None si el
+    residuo mediano no supera FINE_ALIGN_MIN_MM (umbral físico: el ruido de
+    esquinas a DPI altos no debe disparar la corrección ni romper la
+    reproducibilidad). El desplazamiento interpolado es una combinación
+    convexa de los residuos medidos, así que queda acotado por el residuo
+    máximo observado.
+    """
+    pts, errs, _ = _residual_field(M, refined, layout_bboxes, s)
+    if pts is None or len(pts) < 16:  # al menos 4 marcadores completos
         return None
-    pts = np.concatenate(pts)
-    errs = np.concatenate(errs)
-    if float(np.median(np.linalg.norm(errs, axis=1))) < 0.75:
-        return None  # residuo subpíxel: la homografía global basta
+    umbral = max(0.75, FINE_ALIGN_MIN_MM * px_mm) if px_mm else 0.75
+    if float(np.median(np.linalg.norm(errs, axis=1))) < umbral:
+        return None  # residuo despreciable: la homografía global basta
 
     sides = [(b[2] - b[0]) * s for b in
              (layout_bboxes[str(int(m))] for m in refined
@@ -528,18 +582,26 @@ def _make_local_shift(M: np.ndarray, refined: dict, layout_bboxes: dict,
 # Lectura de códigos QR
 # ────────────────────────────────────────────────────────────────
 
+_QR_TLS = threading.local()
+
+
 def _qr_detectors():
-    """Detectores de QR disponibles, del mejor al básico.
+    """Detectores de QR disponibles, del mejor al básico (cacheados por hilo:
+    se construyen decenas de veces por escaneo y OpenCV no documenta que sean
+    seguros entre hilos).
 
     QRCodeDetectorAruco (OpenCV ≥ 4.8) localiza mucho mejor los QRs de bajo
     contraste o bordes difusos (cianotipia); el clásico queda de respaldo.
     """
-    dets = []
-    try:
-        dets.append(cv2.QRCodeDetectorAruco())
-    except Exception:
-        pass
-    dets.append(cv2.QRCodeDetector())
+    dets = getattr(_QR_TLS, "dets", None)
+    if dets is None:
+        dets = []
+        try:
+            dets.append(cv2.QRCodeDetectorAruco())
+        except Exception:
+            pass
+        dets.append(cv2.QRCodeDetector())
+        _QR_TLS.dets = dets
     return dets
 
 
@@ -579,9 +641,12 @@ def _decode_qr(crop_bgr: np.ndarray) -> str | None:
                                          np.ones((3, 3), np.uint8)))
     variants.append(255 - variants[1])  # polaridad invertida (Otsu del gris)
 
+    # El mejor detector prueba todas las variantes; el clásico solo unas
+    # pocas de respaldo (con QRCodeDetectorAruco presente casi nunca aporta,
+    # y en hojas ilegibles cada intento extra cuesta decenas de ms).
     detectors = _qr_detectors()
-    for det in detectors:
-        for v in variants:
+    for det, det_variants in zip(detectors, (variants, variants[:3])):
+        for v in det_variants:
             try:
                 data, _, _ = det.detectAndDecode(v)
             except cv2.error:
@@ -600,16 +665,6 @@ def _decode_qr(crop_bgr: np.ndarray) -> str | None:
                     return codes[0].data.decode("utf-8")
                 except Exception:
                     continue
-
-    # Último recurso: QR en espejo (hoja expuesta/escaneada al revés que no
-    # pasó por la corrección global).
-    for v in variants[:2]:
-        try:
-            data, _, _ = detectors[0].detectAndDecode(cv2.flip(v, 1))
-        except cv2.error:
-            data = ""
-        if data:
-            return data
     return None
 
 
@@ -664,7 +719,9 @@ def _spread_warning(dst_pts: np.ndarray, page_w: float, page_h: float):
 # ────────────────────────────────────────────────────────────────
 
 def _process_one(scan_path: Path, layout: dict, out_dir: Path,
-                 opts: ScanOptions, mode: str, log=None) -> ScanResult:
+                 opts: ScanOptions, mode: str, log=None,
+                 claims: dict | None = None,
+                 claims_lock: threading.Lock | None = None) -> ScanResult:
     t0 = time.time()
     res = ScanResult(scan=scan_path.name)
     _log = log or (lambda *_: None)
@@ -687,29 +744,21 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
         img = np.ascontiguousarray(img[:, :, :3])
 
     try:
-        # 1. Proxy pequeño para detección rápida.
-        H, W = img.shape[:2]
-        factor = max(1.0, max(H, W) / float(PROXY_MAX_SIDE))
-        if factor > 1.0:
-            proxy = cv2.resize(img, (int(W / factor), int(H / factor)),
-                               interpolation=cv2.INTER_AREA)
-        else:
-            proxy = img
-        proxy8 = _to_u8(proxy)
-        if proxy8.ndim == 2:
-            proxy8 = cv2.cvtColor(proxy8, cv2.COLOR_GRAY2BGR)
-
-        estrategia, found, flipped = _detect_oriented(proxy8, dict_name,
-                                                      expected_ids, mode)
+        # 1. Detección rápida en proxy, con corrección de espejo integrada.
+        img, estrategia, found, flipped = _detect_oriented(
+            img, dict_name, expected_ids, mode)
         res.estrategia = estrategia
         res.marcadores = len(found)
         res.espejado = bool(flipped)
-        del proxy, proxy8
         if flipped:
-            img = cv2.flip(img, 1)
-            res.advertencias.append(
-                "El escaneo llegó EN ESPEJO (¿acetato expuesto al revés?); "
-                "se volteó automáticamente antes de procesar.")
+            if layout.get("espejado", True):
+                res.advertencias.append(
+                    "El escaneo llegó EN ESPEJO (¿acetato expuesto al "
+                    "revés?); se volteó automáticamente antes de procesar.")
+            else:
+                res.advertencias.append(
+                    "Escaneo en espejo (esperado: el negativo se generó sin "
+                    "espejado); se volteó automáticamente.")
 
         if len(found) < max(2, int(opts.min_markers)):
             res.error = (f"Solo se detectaron {len(found)} de "
@@ -719,7 +768,7 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
             return res
 
         # 2. Afinado de esquinas a resolución completa.
-        refined = _refine_corners_fullres(img, found, factor, dict_name, mode)
+        refined = _refine_corners_fullres(img, found, dict_name, mode)
 
         # 3. Escala real del escaneo (medida, no asumida).
         s = _estimate_scale(refined, layout_bboxes)
@@ -746,18 +795,10 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
         res.escala = round(s, 4)
 
         # 4. Homografía con TODAS las esquinas de TODOS los marcadores (RANSAC).
-        def _assemble(refined_dict):
-            src_l, dst_l = [], []
-            for mid, corners in refined_dict.items():
-                key = str(int(mid))
-                if key not in layout_bboxes:
-                    continue
-                src_l.append(corners)
-                dst_l.append(markers.bbox_corners(layout_bboxes[key]) * s)
-            return (np.concatenate(src_l, axis=0),
-                    np.concatenate(dst_l, axis=0))
-
-        src_pts, dst_pts = _assemble(refined)
+        src_pts, dst_pts = _correspondences(refined, layout_bboxes, s)
+        if src_pts is None:
+            res.error = "Ningún marcador detectado existe en el layout."
+            return res
 
         warn = _spread_warning(dst_pts, page_w * s, page_h * s)
         if warn:
@@ -777,26 +818,27 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
         # umbral RANSAC sesga todos los recortes en silencio; aquí se detecta,
         # se descarta y se recalcula la homografía.
         px_mm = _px_per_mm(layout, s)
-        resid = _marker_residuals(M, refined, layout_bboxes, s)
+        _, _, resid = _residual_field(M, refined, layout_bboxes, s)
         if resid:
             med = float(np.median(list(resid.values())))
-            lim = max(2.5 * px_mm, 3.0 * med)
+            lim = max(RESIDUAL_OUTLIER_MM * px_mm, 3.0 * med)
             malos = [m for m, r in resid.items() if r > lim]
             if malos and len(refined) - len(malos) >= max(
                     3, int(opts.min_markers)):
                 for m in malos:
                     refined.pop(m, None)
+                res.marcadores = len(refined)
                 res.advertencias.append(
                     f"Marcador(es) {sorted(malos)} descartados por residuo "
                     f"inconsistente (> {lim / px_mm:.1f} mm).")
-                src_pts, dst_pts = _assemble(refined)
+                src_pts, dst_pts = _correspondences(refined, layout_bboxes, s)
                 M2, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, thresh)
                 if M2 is not None:
                     M = M2
-                resid = _marker_residuals(M, refined, layout_bboxes, s)
+                _, _, resid = _residual_field(M, refined, layout_bboxes, s)
             res.residual_mm = round(
                 float(np.median(list(resid.values()))) / px_mm, 3)
-            if res.residual_mm > 1.0:
+            if res.residual_mm > RESIDUAL_WARN_MM:
                 res.advertencias.append(
                     f"Alineación imprecisa (residuo ±{res.residual_mm:.1f} mm): "
                     "el papel probablemente se deformó al mojarse. Los "
@@ -806,7 +848,8 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
         # 4c. Corrector local de recortes (papel deformado en húmedo).
         local_shift = None
         if opts.fine_align:
-            local_shift = _make_local_shift(M, refined, layout_bboxes, s)
+            local_shift = _make_local_shift(M, refined, layout_bboxes, s,
+                                            px_mm)
 
         out_w, out_h = int(round(page_w * s)), int(round(page_h * s))
         warp = cv2.warpPerspective(img, M, (out_w, out_h),
@@ -817,17 +860,37 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
         # 5. Normalización opcional con la tira de parches de grises.
         if opts.normalize_patches and layout.get("parche_grises"):
             warp = _normalize_with_patches(warp, layout["parche_grises"], s,
-                                           res)
+                                           res, local_shift)
 
         # 6. Identificar la hoja con CUALQUIER QR legible.
         hoja, via = _identify_sheet(warp, layout, s, local_shift)
+        if hoja is not None and claims is not None:
+            # Registrar qué hoja reclamó este escaneo (identificación por QR:
+            # la fuente de verdad frente al fallback por descarte).
+            with claims_lock:
+                claims[int(hoja.get("numero") or 0)] = scan_path.name
         if hoja is None and len(layout.get("hojas", [])) == 1:
-            # Descarte: si el layout describe UNA sola hoja, tiene que ser esa.
-            hoja = layout["hojas"][0]
-            via = "única hoja del layout"
-            res.advertencias.append(
-                "Ningún QR legible: hoja identificada por descarte (el layout "
-                "tiene una sola hoja).")
+            # Descarte: si el layout describe UNA sola hoja, tiene que ser
+            # esa… salvo que otro escaneo ya la haya reclamado POR QR: en ese
+            # caso este escaneo es sospechoso (¿de otro proyecto?) y no debe
+            # sobrescribir los fotogramas buenos.
+            numero = int(layout["hojas"][0].get("numero") or 0)
+            reclamada_por = None
+            if claims is not None:
+                with claims_lock:
+                    reclamada_por = claims.get(numero)
+            if reclamada_por and reclamada_por != scan_path.name:
+                res.advertencias.append(
+                    f"Ningún QR legible y la hoja {numero} ya fue "
+                    f"identificada por QR en '{reclamada_por}': este escaneo "
+                    "va a 'sin_identificar/' para no sobrescribirla.")
+            else:
+                hoja = layout["hojas"][0]
+                via = "única hoja del layout"
+                res.advertencias.append(
+                    "Ningún QR legible: hoja identificada por descarte (el "
+                    "layout tiene una sola hoja). Verifica en el informe que "
+                    "el escaneo corresponde a este proyecto.")
         if hoja is None:
             # Modo emergencia: guardar recortes sin identidad.
             res.advertencias.append(
@@ -848,7 +911,8 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
                         res.sin_identificar.append(str(ruta))
             if opts.report:
                 _save_overlay(out_dir, scan_path, warp, s, layout,
-                              layout_bboxes, refined, plantilla, res)
+                              layout_bboxes, refined, plantilla, res,
+                              local_shift)
             res.error = "QRs ilegibles: no se pudo identificar la hoja."
             return res
 
@@ -862,7 +926,7 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
 
         if opts.report:
             _save_overlay(out_dir, scan_path, warp, s, layout, layout_bboxes,
-                          refined, hoja, res)
+                          refined, hoja, res, local_shift)
 
         # 7. Recortar y guardar cada fotograma.
         for etiqueta, info in hoja["frames"].items():
@@ -933,20 +997,8 @@ def _identify_sheet(warp: np.ndarray, layout: dict, s: float,
             if bbox in probadas:
                 continue
             probadas.add(bbox)
-            fx1, fy1, fx2, fy2 = [v * s for v in bbox]
-            if local_shift is not None:
-                dx, dy = local_shift((fx1, fy1, fx2, fy2))
-                fx1, fx2 = fx1 + dx, fx2 + dx
-                fy1, fy2 = fy1 + dy, fy2 + dy
-            x1, y1, x2, y2 = (int(round(fx1)), int(round(fy1)),
-                              int(round(fx2)), int(round(fy2)))
-            pad = int((x2 - x1) * 0.35)
-            H, W = warp.shape[:2]
-            cx1, cy1 = max(0, x1 - pad), max(0, y1 - pad)
-            cx2, cy2 = min(W, x2 + pad), min(H, y2 + pad)
-            if cx2 <= cx1 or cy2 <= cy1:
-                continue
-            texto = _decode_qr(warp[cy1:cy2, cx1:cx2])
+            # bleed negativo = ampliar un 35 % por lado alrededor del QR.
+            texto = _decode_qr(_crop_frame(warp, bbox, s, -0.35, local_shift))
             payload = markers.parse_qr_payload(texto) if texto else None
             if not payload:
                 continue
@@ -965,26 +1017,38 @@ def _identify_sheet(warp: np.ndarray, layout: dict, s: float,
 
 def _save_overlay(out_dir: Path, scan_path: Path, warp: np.ndarray, s: float,
                   layout: dict, layout_bboxes: dict, refined: dict,
-                  hoja: dict | None, res: ScanResult) -> None:
+                  hoja: dict | None, res: ScanResult,
+                  local_shift=None) -> None:
     """Miniatura de diagnóstico del escaneo alineado: marcadores detectados
     (verde) y perdidos (rojo), recortes de fotogramas (azul) y QRs (naranja).
+    Los recortes se dibujan con la misma corrección local que los recortes
+    reales, para que la miniatura muestre lo que de verdad se extrajo.
     Cuando algo mapea mal, aquí se ve dónde y por qué en dos segundos."""
     try:
+        # Reducir ANTES de convertir a 8 bits: convertir un warp uint16 de
+        # 10000 px de lado costaría cientos de MB transitorios por hilo.
         k = min(1.0, 1600.0 / max(warp.shape[:2]))
-        mini = _to_u8(warp)
+        mini = warp
         if k < 1.0:
             mini = cv2.resize(mini, (0, 0), fx=k, fy=k,
                               interpolation=cv2.INTER_AREA)
+        mini = _to_u8(mini)
         if mini.ndim == 2:
             mini = cv2.cvtColor(mini, cv2.COLOR_GRAY2BGR)
-        else:
+        elif mini is warp:
             mini = mini.copy()
         t = 2  # grosor de línea en la miniatura
 
-        def _rect(bbox, color, thick):
-            p1 = (int(round(bbox[0] * s * k)), int(round(bbox[1] * s * k)))
-            p2 = (int(round(bbox[2] * s * k)), int(round(bbox[3] * s * k)))
-            cv2.rectangle(mini, p1, p2, color, thick)
+        def _rect(bbox, color, thick, shift=False):
+            fx1, fy1, fx2, fy2 = [v * s for v in bbox]
+            if shift and local_shift is not None:
+                dx, dy = local_shift((fx1, fy1, fx2, fy2))
+                fx1, fx2 = fx1 + dx, fx2 + dx
+                fy1, fy2 = fy1 + dy, fy2 + dy
+            cv2.rectangle(mini,
+                          (int(round(fx1 * k)), int(round(fy1 * k))),
+                          (int(round(fx2 * k)), int(round(fy2 * k))),
+                          color, thick)
 
         detectados = {int(m) for m in refined}
         for mid, bbox in layout_bboxes.items():
@@ -993,9 +1057,9 @@ def _save_overlay(out_dir: Path, scan_path: Path, warp: np.ndarray, s: float,
         plantilla = hoja or (layout["hojas"][0] if layout.get("hojas") else None)
         if plantilla:
             for info in plantilla.get("frames", {}).values():
-                _rect(info["bbox"], (255, 140, 0), t)
+                _rect(info["bbox"], (255, 140, 0), t, shift=True)
             for qinfo in plantilla.get("qrs", {}).values():
-                _rect(qinfo["bbox"], (0, 165, 255), t)
+                _rect(qinfo["bbox"], (0, 165, 255), t, shift=True)
         texto = (f"{res.marcadores}/{res.marcadores_total} marcadores"
                  + (f" | residuo {res.residual_mm:g} mm" if res.residual_mm else "")
                  + (" | ESPEJADO" if res.espejado else ""))
@@ -1014,12 +1078,13 @@ def _save_overlay(out_dir: Path, scan_path: Path, warp: np.ndarray, s: float,
 
 
 def _normalize_with_patches(warp: np.ndarray, patch_info: dict, s: float,
-                            res: ScanResult):
+                            res: ScanResult, local_shift=None):
     """Normaliza niveles usando los parches negro/blanco de la tira.
 
     Corrección LINEAL por canal (mapea el negro y el blanco medidos a sus
     valores nominales). Es una ayuda opcional: apagada por defecto para
-    respetar la filosofía de "no tocar el color".
+    respetar la filosofía de "no tocar el color". Los parches se muestrean
+    con la misma corrección local que los recortes (papel deformado).
     """
     try:
         bboxes = patch_info["bboxes"]
@@ -1029,10 +1094,8 @@ def _normalize_with_patches(warp: np.ndarray, patch_info: dict, s: float,
         maxv = 65535.0 if warp.dtype == np.uint16 else 255.0
 
         def _mean(bbox):
-            x1, y1, x2, y2 = [int(round(v * s)) for v in bbox]
-            x1, y1, x2, y2 = aplicar_bleed(x1, y1, x2, y2, 0.25)
-            region = warp[max(0, y1):y2, max(0, x1):x2]
-            if region.size == 0:
+            region = _crop_frame(warp, bbox, s, 0.25, local_shift)
+            if region is None or region.size == 0:
                 return None
             return region.reshape(-1, region.shape[-1]).mean(axis=0)
 
@@ -1094,13 +1157,19 @@ def procesar_carpeta(input_dir, layout_path, output_dir,
     results: list[ScanResult] = []
     done = 0
     lock = threading.Lock()
+    # Hojas ya identificadas POR QR en este lote (nº hoja → escaneo): evita
+    # que el fallback por descarte sobrescriba fotogramas buenos con un
+    # escaneo ajeno cuyos QRs no decodifican.
+    claims: dict = {}
+    claims_lock = threading.Lock()
 
     def _run(p: Path) -> ScanResult:
         if cancel_check and cancel_check():
             r = ScanResult(scan=p.name)
             r.error = "Cancelado."
             return r
-        return _process_one(p, layout, out_dir, opts, mode, log=_log)
+        return _process_one(p, layout, out_dir, opts, mode, log=_log,
+                            claims=claims, claims_lock=claims_lock)
 
     with ThreadPoolExecutor(max_workers=max(1, int(opts.threads))) as ex:
         futures = {ex.submit(_run, p): p for p in scans}
@@ -1161,15 +1230,16 @@ def _write_report_files(reporte: dict, results: list[ScanResult],
     with open(out_dir / "informe.json", "w", encoding="utf-8") as f:
         json.dump(reporte, f, indent=2, ensure_ascii=False)
 
-    # CSV sencillo.
+    # CSV sencillo. Las columnas nuevas van AL FINAL para no romper
+    # herramientas que lean el informe por posición de columna.
     with open(out_dir / "informe.csv", "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(["escaneo", "ok", "hoja", "marcadores", "estrategia",
-                    "escala", "espejado", "residual_mm", "frames", "error"])
+                    "escala", "frames", "error", "espejado", "residual_mm"])
         for r in results:
             w.writerow([r.scan, r.ok, r.hoja_numero, f"{r.marcadores}/{r.marcadores_total}",
-                        r.estrategia, r.escala, r.espejado, r.residual_mm,
-                        len(r.frames), r.error])
+                        r.estrategia, r.escala, len(r.frames), r.error,
+                        r.espejado, r.residual_mm])
 
     # Miniaturas + HTML.
     thumb_dir = out_dir / "_informe"

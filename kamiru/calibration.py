@@ -189,7 +189,7 @@ def _align_to_canonical(scan_path, geometry, mode="normal"):
     así que sin esto la carta no se podría alinear (o, peor, se alinearía mal
     y la calibración mediría los parches cruzados).
 
-    Devuelve (warp_bgr8, escala, marcadores_detectados, refined_corners).
+    Devuelve (warp_bgr8, escala, esquinas_refinadas_por_id).
     """
     img = leer_imagen_robusta(scan_path, cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -199,25 +199,17 @@ def _align_to_canonical(scan_path, geometry, mode="normal"):
     if img.ndim == 3 and img.shape[2] == 4:
         img = np.ascontiguousarray(img[:, :, :3])
 
-    H, W = img.shape[:2]
-    factor = max(1.0, max(H, W) / 2400.0)
-    proxy = cv2.resize(img, (int(W / factor), int(H / factor)),
-                       interpolation=cv2.INTER_AREA) if factor > 1 else img
-    proxy8 = _to_u8(proxy)
-
     bboxes = {str(k): v for k, v in geometry["marker_bboxes"].items()}
     expected = [int(k) for k in bboxes]
-    _, found, flipped = _detect_oriented(proxy8, markers.DEFAULT_DICT,
-                                         expected, mode)
-    if flipped:
-        img = cv2.flip(img, 1)
+    img, _, found, _ = _detect_oriented(img, markers.DEFAULT_DICT,
+                                        expected, mode)
     if len(found) < 3:
         raise ValueError(
             f"Solo se detectaron {len(found)} marcadores de referencia en el "
             f"escaneo; se necesitan al menos 3. Asegúrate de escanear la "
             f"página completa y derecha.")
 
-    refined = _refine_corners_fullres(img, found, factor, markers.DEFAULT_DICT, mode)
+    refined = _refine_corners_fullres(img, found, markers.DEFAULT_DICT, mode)
     s = _estimate_scale(refined, bboxes)
     if not s:
         raise ValueError("No se pudo estimar la escala del escaneo.")
@@ -236,7 +228,7 @@ def _align_to_canonical(scan_path, geometry, mode="normal"):
     out_h = int(round(geometry["page_h"] * s))
     warp = cv2.warpPerspective(_to_u8(img), M, (out_w, out_h),
                                flags=cv2.INTER_CUBIC)
-    return warp, s, refined, factor
+    return warp, s, refined
 
 
 def _patch_mean(warp, bbox, s, shrink=0.25):
@@ -258,7 +250,7 @@ def analizar_prueba_impresora(scan_path, paper_name: str = "A4",
     """Analiza el escaneo de la página de prueba y devuelve un perfil."""
     _log = log or (lambda *_: None)
     g = printer_test_geometry(paper_name, dpi)
-    warp, s, refined, _ = _align_to_canonical(scan_path, g)
+    warp, s, refined = _align_to_canonical(scan_path, g)
     _log(f"Página alineada ({len(refined)} marcadores, escala {s:.3f}×).")
 
     notas = []
@@ -518,7 +510,7 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
     """
     _log = log or (lambda *_: None)
     g = cyanotype_strip_geometry(paper_name, dpi, steps, target)
-    warp, s, refined, _ = _align_to_canonical(scan_path, g, mode="cianotipia")
+    warp, s, refined = _align_to_canonical(scan_path, g, mode="cianotipia")
     _log(f"Carta alineada ({len(refined)} marcadores, escala {s:.3f}×).")
 
     # Luminancia medida de cada parche (densidad creciente → más blanco).
@@ -710,7 +702,7 @@ def analizar_colorblocker(scan_path, paper_name: str = "A4", dpi: int = 300,
     """
     _log = log or (lambda *_: None)
     g = colorblocker_geometry(paper_name, dpi)
-    warp, s, refined, _ = _align_to_canonical(scan_path, g, mode="cianotipia")
+    warp, s, refined = _align_to_canonical(scan_path, g, mode="cianotipia")
     _log(f"Carta alineada ({len(refined)} marcadores, escala {s:.3f}×).")
 
     # Medir todas las luminancias.
