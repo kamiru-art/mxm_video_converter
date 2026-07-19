@@ -35,8 +35,6 @@ jobs:
             nombre: windows
           - os: macos-latest        # Apple Silicon (M1-M4)
             nombre: macos-apple-silicon
-          - os: macos-13            # Intel
-            nombre: macos-intel
           - os: ubuntu-22.04
             nombre: linux
     steps:
@@ -150,7 +148,6 @@ jobs:
             |---|---|
             | Windows | `Kamiru-Studio-windows.zip` → descomprime y abre `Kamiru-Studio.exe` |
             | macOS con chip Apple (M1–M4) | `Kamiru-Studio-macos-apple-silicon.zip` → descomprime y abre `Kamiru-Studio.app` |
-            | macOS Intel | `Kamiru-Studio-macos-intel.zip` |
             | Linux | `Kamiru-Studio-linux.tar.gz` → descomprime y ejecuta `Kamiru-Studio/Kamiru-Studio` |
 
             > **macOS:** la primera vez, clic derecho sobre la app → **Abrir** → **Abrir**
