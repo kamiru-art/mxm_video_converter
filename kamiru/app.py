@@ -141,7 +141,7 @@ class SheetsPhase(PhaseFrame):
         v.var_cyan_curve = tk.StringVar(value=NO_CURVE)
         v.var_cyan_sim = tk.BooleanVar(value=False)
         v.var_cyan_bg = tk.StringVar(value="ahorro")  # ahorro | completo
-        v.var_cyan_halo = tk.DoubleVar(value=3.0)
+        v.var_cyan_halo = tk.DoubleVar(value=5.0)
         v.var_cyan_colorprofile = tk.StringVar(value=NO_COLOR_PROFILE)
         # Salida
         v.var_out_dir = tk.StringVar()
@@ -1013,7 +1013,7 @@ class SheetsPhase(PhaseFrame):
             cyan_ink=cyan_ink,
             cyan_curve=self._cyan_curve_lut(),
             cyan_bg=self.var_cyan_bg.get(),
-            cyan_halo_mm=self.to_float(self.var_cyan_halo, 3.0),
+            cyan_halo_mm=self.to_float(self.var_cyan_halo, 5.0),
             cyan_ink_stops=color_prof.get("stops"),
             print_scale_x=float(prof.get("scale_x", 1.0) or 1.0),
             print_scale_y=float(prof.get("scale_y", 1.0) or 1.0),
@@ -1330,6 +1330,8 @@ class SheetsPhase(PhaseFrame):
                 pass
         if result.get("frames_dir"):
             extra += f"\nFotogramas individuales: {result['frames_dir']}"
+        for aviso in result.get("avisos", []):
+            extra += f"\n⚠ {aviso}"
         if messagebox.askyesno(
                 "¡Hojas generadas! 🎉",
                 f"Se crearon {n} hoja(s) en:\n{self.var_out_dir.get()}{extra}\n\n"

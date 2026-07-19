@@ -38,7 +38,7 @@ from . import cyanotype as cyan
 from . import fonts as fontmod
 from . import markers, paper
 from .core import _load_font, _text_size
-from .scan import (_detect_markers_multi, _estimate_scale,
+from .scan import (_detect_markers_multi, _detect_oriented, _estimate_scale,
                    _refine_corners_fullres, _to_u8, leer_imagen_robusta)
 
 # Fuente del sistema para los textos de las hojas de calibración (la fuente
@@ -184,6 +184,11 @@ def generar_pagina_prueba_impresora(out_path, paper_name: str = "A4",
 def _align_to_canonical(scan_path, geometry, mode="normal"):
     """Detecta los marcadores del escaneo y lo alinea al lienzo canónico.
 
+    Si el escaneo llegó EN ESPEJO (cianotipia expuesta con el acetato al
+    revés), se detecta y se voltea automáticamente: los ArUco son quirales,
+    así que sin esto la carta no se podría alinear (o, peor, se alinearía mal
+    y la calibración mediría los parches cruzados).
+
     Devuelve (warp_bgr8, escala, marcadores_detectados, refined_corners).
     """
     img = leer_imagen_robusta(scan_path, cv2.IMREAD_UNCHANGED)
@@ -202,7 +207,10 @@ def _align_to_canonical(scan_path, geometry, mode="normal"):
 
     bboxes = {str(k): v for k, v in geometry["marker_bboxes"].items()}
     expected = [int(k) for k in bboxes]
-    _, found = _detect_markers_multi(proxy8, markers.DEFAULT_DICT, expected, mode)
+    _, found, flipped = _detect_oriented(proxy8, markers.DEFAULT_DICT,
+                                         expected, mode)
+    if flipped:
+        img = cv2.flip(img, 1)
     if len(found) < 3:
         raise ValueError(
             f"Solo se detectaron {len(found)} marcadores de referencia en el "

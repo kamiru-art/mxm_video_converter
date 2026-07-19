@@ -257,7 +257,7 @@ activado (fase ①, pestaña 7):
 - **Fondo del negativo (consumo de tinta)**, a elegir:
   - **AHORRO DE TINTA** (por defecto): las zonas muertas quedan
     **transparentes** (sin tinta) y solo los marcadores, QRs y nombres llevan
-    un **halo entintado** (margen configurable, 3 mm por defecto) para
+    un **halo entintado** (margen configurable, 5 mm por defecto) para
     distinguirse. En la copia azul el fondo queda **azul** y cada marcador/QR
     flota en su islita blanca. Gasta una fracción de la tinta.
   - **Fondo COMPLETO**: toda la zona muerta va entintada; en la copia azul el
@@ -294,11 +294,38 @@ activado (fase ①, pestaña 7):
 
 > 💡 La app tolera la **variabilidad de tonos** del azul (exposiciones
 > distintas, lavados distintos): la detección usa el canal rojo del escaneo,
-> donde el azul de Prusia es casi negro, más mejora local de contraste. Aun
-> así, intenta escanear las copias bien secas y planas.
+> donde el azul de Prusia es casi negro, más mejora local de contraste y un
+> **aplanado de fondo** que neutraliza los lavados desiguales (media hoja más
+> oscura que la otra). Aun así, intenta escanear las copias bien secas y
+> planas.
 
-> ⚠️ Escanea la **copia azul**, no el acetato: el acetato está espejado y sus
-> marcadores no son detectables (es lo esperado).
+Refuerzos automáticos de la fase ② para cianotipia:
+
+- **Copia en espejo**: si expusiste el acetato al revés (tinta hacia arriba),
+  la copia sale espejada y los marcadores serían indetectables. La app lo
+  detecta, voltea el escaneo sola y lo avisa en el informe. Junto al marcador
+  superior-izquierdo se imprime un **triángulo testigo**: en la copia correcta
+  apunta a la **derecha**; si apunta a la izquierda, esa hoja se expuso al
+  revés (se procesa igual).
+- **Marcadores lavados**: los que la primera pasada no ve se re-buscan
+  localmente justo donde deberían estar (segunda pasada guiada).
+- **Papel deformado**: el papel se moja y encoge; la app mide el **residuo de
+  alineación** de cada marcador (sale en el informe, en mm), descarta
+  marcadores inconsistentes y corrige cada recorte con los marcadores
+  cercanos.
+- **Sin QRs legibles**: si el layout tiene una sola hoja, se identifica por
+  descarte en vez de ir a `sin_identificar/`.
+- **Diagnóstico visual**: el informe incluye una miniatura de alineación por
+  escaneo (marcadores detectados en verde, perdidos en rojo, recortes en azul,
+  QRs en naranja) para ver de un vistazo dónde falló algo.
+
+Tamaños recomendados para cianotipia (la app avisa si vas por debajo):
+**ArUco ≥ 10 mm**, **QR ≥ 12 mm**, margen de marcadores **≥ 6 mm** (los bordes
+del papel acumulan manchas de brocha).
+
+> ⚠️ Escanea la **copia azul**, no el acetato. (Si por error escaneas algo en
+> espejo, la app ahora lo corrige sola, pero el acetato sigue sin ser lo que
+> quieres medir: escanea siempre el resultado azul.)
 
 ---
 

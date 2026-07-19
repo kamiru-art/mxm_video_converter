@@ -241,6 +241,148 @@ check("cianotipia procesada (modo auto)", rep2["escaneos_ok"] == 1,
       str([r["error"] for r in rep2["resultados"]]))
 check("4/4 frames de cianotipia", rep2["frames_extraidos"] == 4,
       f"faltan: {rep2['etiquetas_faltantes']}")
+r2 = rep2["resultados"][0]
+# El escaneo simulado es una homografía pura: el residuo debe ser casi nulo.
+# (Vigila regresiones de precisión de esquinas, p. ej. detectInvertedMarker.)
+check("informe con residuo de alineación subpíxel", "residual_mm" in r2
+      and 0.0 <= r2["residual_mm"] < 0.3, str(r2.get("residual_mm")))
+check("overlay de diagnóstico generado", r2.get("overlay")
+      and (outp2 / r2["overlay"]).is_file(), str(r2.get("overlay")))
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4b. Cianotipia ESPEJADA (acetato expuesto al revés) ══")
+# El negativo se imprime espejado; si se expone con la tinta hacia arriba, la
+# copia azul sale EN ESPEJO (el caso real que rompía la segmentación: los
+# ArUco son quirales). Aquí NO se des-espeja antes de simular la copia.
+neg_m = cv2.imread(res2["pages"][0], cv2.IMREAD_COLOR)  # sin cv2.flip
+gray_m = cv2.cvtColor(neg_m, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+expo_m = gray_m[..., None]
+print_m = np.clip(paperc[None, None, :] * (1 - expo_m)
+                  + bluec[None, None, :] * expo_m, 0, 255).astype(np.uint8)
+pm_path = TMP / "cyano_espejo.png"
+cv2.imwrite(str(pm_path), print_m)
+scans2b = TMP / "scans_cyano_espejo"
+scans2b.mkdir()
+fake_scan(pm_path, scans2b / "scan_espejo.png", angle_deg=2.1, scale=2.6,
+          tint=(1.06, 0.97, 0.9), seed=23)
+proc2b = TMP / "proc_espejo"
+rep2b = scan.procesar_carpeta(scans2b, res2["layout"], proc2b,
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+check("cianotipia espejada procesada", rep2b["escaneos_ok"] == 1,
+      str([r["error"] for r in rep2b["resultados"]]))
+check("espejado detectado y corregido", rep2b["resultados"][0]["espejado"])
+check("4/4 frames de la copia espejada", rep2b["frames_extraidos"] == 4,
+      f"faltan: {rep2b['etiquetas_faltantes']}")
+# El contenido recuperado debe estar al DERECHO (no en espejo).
+orig_g = cv2.cvtColor(cv2.resize(cv2.imread(frame_paths[0]), (160, 90)),
+                      cv2.COLOR_BGR2GRAY).astype(np.float32)
+rec_m = cv2.imread(str(list(proc2b.glob("test_001*.tif"))[0]))
+rec_g = cv2.cvtColor(cv2.resize(rec_m, (160, 90)),
+                     cv2.COLOR_BGR2GRAY).astype(np.float32)
+corr_ok = float(np.corrcoef(orig_g.ravel(), rec_g.ravel())[0, 1])
+corr_mir = float(np.corrcoef(orig_g[:, ::-1].ravel(), rec_g.ravel())[0, 1])
+check("contenido recuperado al derecho", corr_ok > 0.5 and corr_ok > corr_mir,
+      f"corr={corr_ok:.3f} vs espejo={corr_mir:.3f}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4c. Fondo desigual (lavado/exposición no uniforme) ══")
+# Como en las copias reales: media hoja mucho más oscura que la otra, con los
+# marcadores del borde inferior casi ahogados en azul.
+h_p, w_p = cyano_print.shape[:2]
+sombra = (np.linspace(1.30, 0.40, h_p)[:, None]
+          * np.linspace(1.05, 0.85, w_p)[None, :])[..., None].astype(np.float32)
+uneven = np.clip(cyano_print.astype(np.float32) * sombra, 0, 255).astype(np.uint8)
+un_path = TMP / "cyano_desigual.png"
+cv2.imwrite(str(un_path), uneven)
+scans2c = TMP / "scans_cyano_desigual"
+scans2c.mkdir()
+fake_scan(un_path, scans2c / "scan_desigual.png", angle_deg=-2.6, scale=2.5,
+          tint=(1.04, 0.97, 0.92), seed=29)
+rep2c = scan.procesar_carpeta(scans2c, res2["layout"], TMP / "proc_desigual",
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+check("fondo desigual procesado", rep2c["escaneos_ok"] == 1,
+      str([r["error"] for r in rep2c["resultados"]]))
+check("4/4 frames con fondo desigual", rep2c["frames_extraidos"] == 4,
+      f"faltan: {rep2c['etiquetas_faltantes']}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4d. QRs ilegibles + layout de una sola hoja (descarte) ══")
+lay2 = layoutfile.load(res2["layout"])
+qr_occ = []
+for q in lay2["hojas"][0]["qrs"].values():
+    x1, y1, x2, y2 = [int(v) for v in q["bbox"]]
+    pad = (x2 - x1) // 2
+    qr_occ.append((x1 - pad, y1 - pad, x2 + pad, y2 + pad))
+scans2d = TMP / "scans_cyano_noqr"
+scans2d.mkdir()
+fake_scan(cyano_path, scans2d / "scan_noqr.png", angle_deg=1.7, scale=2.4,
+          occlude_bboxes=qr_occ, tint=(1.05, 0.97, 0.91), seed=37)
+rep2d = scan.procesar_carpeta(scans2d, res2["layout"], TMP / "proc_noqr",
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+check("hoja única identificada por descarte (sin QRs)",
+      rep2d["escaneos_ok"] == 1,
+      str([r["error"] for r in rep2d["resultados"]]))
+check("4/4 frames sin QRs legibles", rep2d["frames_extraidos"] == 4,
+      f"faltan: {rep2d['etiquetas_faltantes']}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4e. Papel deformado (encogimiento húmedo) ══")
+# Deformación suave no proyectiva sobre la copia: el procesado debe seguir
+# funcionando y el residuo debe aparecer en el informe.
+h_p, w_p = cyano_print.shape[:2]
+yy, xx = np.meshgrid(np.arange(h_p, dtype=np.float32),
+                     np.arange(w_p, dtype=np.float32), indexing="ij")
+amp = 14.0  # px a 200 dpi ≈ 1.8 mm de ondulación
+map_x = xx + amp * np.sin(2 * np.pi * xx / w_p)
+map_y = yy + amp * np.sin(2 * np.pi * yy / h_p)
+deform = cv2.remap(cyano_print, map_x, map_y, cv2.INTER_LINEAR,
+                   borderMode=cv2.BORDER_REPLICATE)
+df_path = TMP / "cyano_deforme.png"
+cv2.imwrite(str(df_path), deform)
+scans2e = TMP / "scans_cyano_deforme"
+scans2e.mkdir()
+fake_scan(df_path, scans2e / "scan_deforme.png", angle_deg=1.9, scale=2.5,
+          tint=(1.05, 0.97, 0.92), seed=43)
+rep2e = scan.procesar_carpeta(scans2e, res2["layout"], TMP / "proc_deforme",
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+r2e = rep2e["resultados"][0]
+check("papel deformado procesado", rep2e["escaneos_ok"] == 1
+      and rep2e["frames_extraidos"] == 4,
+      str([r["error"] for r in rep2e["resultados"]]))
+check("la deformación se mide y reporta", r2e["residual_mm"] > 0.1,
+      f"residuo={r2e['residual_mm']}")
+
+# Corrector local: con desplazamientos conocidos en los marcadores, el
+# recorte cercano a un marcador debe moverse ≈ como ese marcador, y el del
+# centro ≈ como la media.
+page = 1000.0
+bb_test = {"0": [50, 50, 100, 100], "1": [900, 50, 950, 100],
+           "2": [900, 900, 950, 950], "3": [50, 900, 100, 950]}
+despl = {0: (6.0, 0.0), 1: (0.0, 6.0), 2: (-6.0, 0.0), 3: (0.0, -6.0)}
+ref_test = {}
+for mid, b in bb_test.items():
+    c = np.array([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]],
+                 dtype=np.float32)
+    dx, dy = despl[int(mid)]
+    ref_test[int(mid)] = c + np.float32([dx, dy])
+shift_fn = scan._make_local_shift(np.eye(3), ref_test, bb_test, 1.0)
+check("corrector local activo con residuo alto", shift_fn is not None)
+sx, sy = shift_fn((60, 60, 90, 90))       # pegado al marcador 0
+cx, cy = shift_fn((480, 480, 520, 520))   # centro de la hoja
+check("recorte junto a un marcador sigue a ese marcador",
+      abs(sx - 6.0) < 1.5 and abs(sy) < 1.5, f"({sx:.2f}, {sy:.2f})")
+check("recorte central promedia los residuos",
+      abs(cx) < 1.0 and abs(cy) < 1.0, f"({cx:.2f}, {cy:.2f})")
+# Y con residuo subpíxel no corrige nada (no mete ruido).
+ref_zero = {int(m): np.array([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]],
+                              [b[0], b[3]]], dtype=np.float32)
+            for m, b in bb_test.items()}
+check("corrector inactivo con residuo subpíxel",
+      scan._make_local_shift(np.eye(3), ref_zero, bb_test, 1.0) is None)
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 5. Deduplicación perceptual ══")
@@ -302,6 +444,27 @@ check("rango dinámico medido", 0.2 < prof_c["rango_dinamico"] <= 1.0,
       str(prof_c["rango_dinamico"]))
 # La curva debe compensar la gamma: en el medio debe apartarse de la identidad.
 check("curva no trivial (compensa)", abs(lut[128] - 128) > 10, f"lut[128]={lut[128]}")
+
+print("\n══ 7b. Calibración con la carta EN ESPEJO ══")
+# La carta expuesta con el acetato al revés: la copia sale espejada. Sin la
+# corrección, la alineación fallaría (o mediría los parches cruzados).
+grayn_m = cv2.cvtColor(cv2.imread(str(strip)), cv2.COLOR_BGR2GRAY)
+expo_tm = (grayn_m.astype(np.float32) / 255.0) ** 1.8
+tira_m = (paperc[None, None, :] * (1 - expo_tm[..., None])
+          + bluec[None, None, :] * expo_tm[..., None]).astype(np.uint8)
+tm_path = TMP / "tira_espejo.png"
+cv2.imwrite(str(tm_path), tira_m)
+scan_tm = TMP / "scan_tira_espejo.png"
+fake_scan(tm_path, scan_tm, angle_deg=-1.1, scale=2.0, noise=3, seed=17)
+prof_m = calibration.analizar_tira_cianotipia(scan_tm, "A4", 200,
+                                              log=lambda t: print("   ", t))
+lut_m = prof_m["lut"]
+check("carta espejada: LUT monótona y compensadora",
+      len(lut_m) == 256 and all(lut_m[i] <= lut_m[i + 1] for i in range(255))
+      and abs(lut_m[128] - 128) > 10, f"lut[128]={lut_m[128]}")
+check("carta espejada ≈ carta al derecho",
+      abs(lut_m[128] - lut[128]) < 25,
+      f"espejo={lut_m[128]} vs derecho={lut[128]}")
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 8. Hojas de rescate ══")

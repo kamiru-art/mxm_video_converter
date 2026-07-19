@@ -135,7 +135,10 @@ class Settings:
         # cianotipia queda azul); "completo" = todo el fondo entintado (el
         # fondo de la cianotipia queda blanco papel).
         self.cyan_bg = kw.get("cyan_bg", "ahorro")
-        self.cyan_halo_mm = float(kw.get("cyan_halo_mm", 3.0))
+        # Halo por defecto de 5 mm: las manchas de brocha y los lavados
+        # desiguales comen los bordes; un halo generoso mantiene los
+        # marcadores/QRs sobre blanco garantizado en la copia azul.
+        self.cyan_halo_mm = float(kw.get("cyan_halo_mm", 5.0))
         # Degradado de tinta opcional (perfil ColorBlocker):
         # [[densidad, "#RRGGBB"], ...]. None = color simple (cyan_ink).
         self.cyan_ink_stops = kw.get("cyan_ink_stops") or None
@@ -333,6 +336,34 @@ def settings_snapshot(s: Settings) -> dict:
     return {k: getattr(s, k, None) for k in _SNAPSHOT_FIELDS}
 
 
+def cyanotype_size_warnings(s: Settings) -> list[str]:
+    """Avisos de tamaños arriesgados para el proceso de cianotipia.
+
+    El proceso químico degrada los elementos pequeños: en las pruebas reales
+    los ArUco de menos de 10 mm y los QR de menos de 12 mm sobreviven mal a la
+    exposición/lavado, y los bordes del papel se llevan las manchas de brocha.
+    No se fuerza nada (las hojas de un proyecto en curso deben mantener su
+    geometría): solo se avisa.
+    """
+    avisos = []
+    if not (s.is_cyanotype and s.registration_on):
+        return avisos
+    if s.marker_size_mm < 10:
+        avisos.append(
+            f"Marcadores de {s.marker_size_mm:g} mm: para cianotipia se "
+            "recomiendan ≥ 10 mm (los pequeños se degradan con la química).")
+    if s.qr_on and s.qr_size_mm < 12:
+        avisos.append(
+            f"QRs de {s.qr_size_mm:g} mm: para cianotipia se recomiendan "
+            "≥ 12 mm para que sigan siendo legibles tras exponer y lavar.")
+    if s.marker_margin_mm < 6:
+        avisos.append(
+            f"Margen de marcadores de {s.marker_margin_mm:g} mm: en cianotipia "
+            "conviene ≥ 6 mm porque los bordes del papel acumulan manchas de "
+            "brocha y roturas.")
+    return avisos
+
+
 def _meta_content_height(s: Settings, label_h: int, dpi: int) -> int:
     """Alto del contenido de la fila de metadatos bajo cada frame
     (etiqueta y/o QR), sin contar el margen frame<->metadatos."""
@@ -420,9 +451,13 @@ def resolve_landscape(s, frame_paths, meta_h=0, label_gap=0) -> bool:
 
 
 def _marker_dims(s: Settings, dpi: int):
-    """(lado_px, quiet_px, patch_px) del marcador a la resolución dada."""
+    """(lado_px, quiet_px, patch_px) del marcador a la resolución dada.
+
+    En cianotipia la zona de silencio es mayor: el proceso químico mancha y
+    difumina alrededor de los marcadores, y ese borde claro extra es lo que
+    mantiene el contraste detectable en la copia azul."""
     side = max(8, paper.mm_to_px(s.marker_size_mm, dpi))
-    quiet = max(2, side // 7)
+    quiet = max(2, side // (4 if s.is_cyanotype else 7))
     return side, quiet, side + 2 * quiet
 
 
@@ -626,6 +661,21 @@ def _draw_registration_frame(s: Settings, L: _Layout, canvas: Image.Image):
                            L.halo_px)
             patch = cyan.colorize_gray_patch(patch, s.cyan_ink, s.cyan_ink_stops)
         canvas.paste(patch, (int(px), int(py)))
+
+    if s.is_cyanotype:
+        # Testigo de orientación: triángulo asimétrico junto al marcador TL.
+        # En la copia azul correcta apunta a la DERECHA; si apunta a la
+        # izquierda, el acetato se expuso al revés (la app lo corrige al
+        # escanear, pero así se ve de un vistazo sobre el papel).
+        tlx, tly = L.marker_positions[0]
+        tri_h = max(8, L.marker_side // 2)
+        x0 = int(tlx + L.marker_patch + max(6, tri_h // 2))
+        y0 = int(tly + (L.marker_patch - tri_h) // 2)
+        if saving:
+            _halo_rect(draw, s, [x0, y0, x0 + tri_h, y0 + tri_h], L.halo_px)
+        # Blanco = densidad 0 = transparente en el acetato → azul en la copia.
+        draw.polygon([(x0, y0), (x0 + tri_h, y0 + tri_h // 2), (x0, y0 + tri_h)],
+                     fill="#FFFFFF")
     if L.patch_strip:
         if saving:
             xs = [b for b, _ in L.patch_strip]
@@ -1062,6 +1112,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
         "orientation": "Horizontal" if L.landscape else "Vertical",
         "grid": f"{L.cols}×{L.rows}",
         "grid_swapped": (L.cols, L.rows) != (s.cols, s.rows),
+        "avisos": cyanotype_size_warnings(s),
     }
 
 
