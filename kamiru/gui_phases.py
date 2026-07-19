@@ -270,6 +270,8 @@ class ScansPhase(PhaseFrame):
             res = msg[1]
             self.log(f"🛟 Hojas de rescate generadas: {res['num_generated']} "
                      f"hoja(s). Layout: {res.get('layout')}")
+            for aviso in res.get("avisos", []):
+                self.log(f"⚠ {aviso}")
             if messagebox.askyesno(
                     "Hojas de rescate listas",
                     f"Se generaron {res['num_generated']} hoja(s) de rescate.\n"
