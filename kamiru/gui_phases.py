@@ -357,6 +357,8 @@ class CalibPhase(PhaseFrame):
         self.var_c_name = tk.StringVar(value="Mi cianotipia")
         self.var_c_target = tk.StringVar(value=CYANO_TARGET_LABELS[0])
         self.var_c_colorprofile = tk.StringVar(value=NO_COLOR_PROFILE)
+        self.var_c_block_on = tk.BooleanVar(value=False)
+        self.var_c_block_color = tk.StringVar(value="#000000")
 
     def _build_ui(self):
         cols = ttk.Frame(self)
@@ -453,23 +455,35 @@ class CalibPhase(PhaseFrame):
         ttk.Checkbutton(sec, text="Espejar (imprimir en espejo, recomendado)",
                         variable=self.var_c_mirror).grid(
             row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        bk = ttk.Frame(sec)
+        bk.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Checkbutton(bk, text="Color del fondo de la carta:",
+                        variable=self.var_c_block_on).pack(side="left")
+        self.color_picker(bk, self.var_c_block_color, row=0, col=1)
+        ttk.Label(sec, text="Por defecto el fondo va a densidad máxima (negro "
+                            "con degradado): si tu impresora imprime mal los "
+                            "campos grandes de negro 100 %, elige aquí un "
+                            "color denso que sí imprima bien (el fondo no se "
+                            "mide, solo bloquea el UV).",
+                  style="Sub.TLabel", wraplength=380).grid(
+            row=8, column=0, columnspan=3, sticky="w", pady=(2, 0))
         ttk.Button(sec, text="Generar carta de calibración…",
                    command=self._gen_cyano_strip).grid(
-            row=7, column=0, columnspan=3, sticky="w", pady=(8, 4))
+            row=9, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
         ttk.Label(sec, text="2. Analiza el escaneo de la CIANOTIPIA (no del acetato):",
                   style="Sub.TLabel", wraplength=380).grid(
-            row=8, column=0, columnspan=3, sticky="w")
+            row=10, column=0, columnspan=3, sticky="w")
         ttk.Entry(sec, textvariable=self.var_c_scan).grid(
-            row=9, column=0, columnspan=2, sticky="ew", padx=(0, 4), pady=(4, 0))
+            row=11, column=0, columnspan=2, sticky="ew", padx=(0, 4), pady=(4, 0))
         ttk.Button(sec, text="Examinar…",
                    command=lambda: self._pick(self.var_c_scan)).grid(
-            row=9, column=2, pady=(4, 0))
+            row=11, column=2, pady=(4, 0))
         ttk.Button(sec, text="Analizar cianotipia", command=self._analyze_cyano).grid(
-            row=10, column=0, columnspan=3, sticky="w", pady=(8, 4))
+            row=12, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
         nn = ttk.Frame(sec)
-        nn.grid(row=11, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        nn.grid(row=13, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Label(nn, text="Nombre del perfil:").pack(side="left")
         ttk.Entry(nn, textvariable=self.var_c_name, width=18).pack(side="left", padx=4)
         self.c_save_btn = ttk.Button(nn, text="Guardar perfil", state="disabled",
@@ -479,7 +493,7 @@ class CalibPhase(PhaseFrame):
 
         self.build_log(self, height=10)
         self._append_log(
-            "Los perfiles guardados aquí aparecen en la fase «① Generar hojas» "
+            "Los perfiles guardados aquí aparecen en la fase «② Generar hojas» "
             "(perfil de impresora en la pestaña Hoja; curva de cianotipia en la "
             "pestaña Cianotipia).")
 
@@ -558,17 +572,20 @@ class CalibPhase(PhaseFrame):
         if not path:
             return
         try:
+            block = (self.var_c_block_color.get()
+                     if self.var_c_block_on.get() else None)
             if target == "colorblocker":
                 out = calibration.generar_colorblocker(
                     path, self.var_c_paper.get(),
                     self.to_int(self.var_c_dpi, 300),
-                    self.var_c_mirror.get())
+                    self.var_c_mirror.get(), block_color=block)
             else:
                 out = calibration.generar_tira_cianotipia(
                     path, self.var_c_paper.get(),
                     self.to_int(self.var_c_dpi, 300),
                     self.var_c_ink.get(), self.var_c_mirror.get(),
-                    target=target, ink_stops=self._color_stops())
+                    target=target, ink_stops=self._color_stops(),
+                    block_color=block)
             self.log(f"✅ Carta de calibración guardada: {out}")
             self.log("   Imprímela en acetato, haz tu cianotipia como siempre "
                      "y escanea el resultado azul seco.")

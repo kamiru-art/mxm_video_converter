@@ -361,6 +361,14 @@ activado (fase ②, pestaña 7):
   la imagen. Evita que la luz se cuele por los cantos del acetato durante la
   exposición y vele los bordes. Usa automáticamente tu color/degradado
   ColorBlocker si hay perfil elegido. Ponlo en 0 para desactivarlo.
+- **Color del bloqueador** 🆕: todo lo externo a los fotogramas (fondo
+  completo, halos y borde bloqueador) se imprime por defecto con la tinta a
+  densidad máxima — con un degradado ColorBlocker, negro puro. Si tu
+  impresora imprime mal los campos grandes de negro 100 % (bandas), activa
+  «Color del bloqueador personalizado» y elige un color denso que sí imprima
+  bien: solo tiene que bloquear el UV, no afecta a los tonos de las
+  imágenes. La misma opción existe en la fase ① para el fondo de las cartas
+  de calibración («Color del fondo de la carta»).
 - **Color de tinta**: negro por defecto, PERO el negro no siempre es lo que
   mejor bloquea el UV. La carta **EDN ColorBlocker** (fase ①) mide qué color
   bloquea mejor en TU impresora y crea un **perfil de color** (con degradado

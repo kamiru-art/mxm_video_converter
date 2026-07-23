@@ -450,16 +450,23 @@ def generar_tira_cianotipia(out_path, paper_name: str = "A4", dpi: int = 300,
                             ink_color: str = "#000000", mirror: bool = True,
                             steps: int = CYANO_STEPS,
                             target: str = "kamiru21",
-                            ink_stops=None) -> str:
+                            ink_stops=None, block_color: str | None = None) -> str:
     """Genera el negativo de la carta de calibración para imprimir en acetato.
 
     IMPORTANTE: usa el mismo color/degradado de tinta y el mismo espejado que
     se usarán en los negativos reales, para que la medición represente el
     proceso completo de verdad.
+
+    block_color: color del FONDO (todo lo externo a los parches). Por defecto
+    es la tinta a densidad máxima — que con un degradado ColorBlocker termina
+    en negro puro, y hay impresoras que imprimen mal los campos grandes de
+    negro 100 % (bandas). Con este parámetro se elige un color denso que la
+    impresora sí imprima bien; el fondo no se mide, solo debe bloquear el UV.
     """
     g = cyanotype_strip_geometry(paper_name, dpi, steps, target)
     ramp = cyan.ink_ramp(ink_color, ink_stops)
-    bg = tuple(int(v) for v in ramp[255])  # tinta plena de fondo
+    bg = (cyan.hex_to_rgb(block_color) if block_color
+          else tuple(int(v) for v in ramp[255]))  # tinta plena de fondo
     canvas = Image.new("RGB", (g["page_w"], g["page_h"]), bg)
     draw = ImageDraw.Draw(canvas)
     font = _get_font( _mm(4, dpi))
@@ -766,17 +773,23 @@ def colorblocker_geometry(paper_name: str = "A4", dpi: int = 300) -> dict:
 
 
 def generar_colorblocker(out_path, paper_name: str = "A4", dpi: int = 300,
-                         mirror: bool = True) -> str:
+                         mirror: bool = True,
+                         block_color: str | None = None) -> str:
     """Genera la carta ColorBlocker para imprimir en acetato.
 
     Los parches van con sus colores DIRECTOS (sin mapear por tinta): la
     gracia es medir cómo bloquea el UV cada color real de la impresora.
+
+    block_color: color del fondo (fuera de los parches); por defecto negro.
+    Para impresoras que imprimen mal el negro 100 % en campos grandes.
     """
     g = colorblocker_geometry(paper_name, dpi)
-    canvas = Image.new("RGB", (g["page_w"], g["page_h"]), "#000000")
+    bg = cyan.hex_to_rgb(block_color) if block_color else (0, 0, 0)
+    canvas = Image.new("RGB", (g["page_w"], g["page_h"]), bg)
     draw = ImageDraw.Draw(canvas)
     font = _get_font( _mm(3.6, dpi))
     font_small = _get_font( _mm(2.2, dpi))
+    text_color = "#FFFFFF" if sum(bg) < 420 else "#000000"
 
     for mid, (px, py) in g["marker_positions"].items():
         patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
@@ -786,11 +799,11 @@ def generar_colorblocker(out_path, paper_name: str = "A4", dpi: int = 300,
     x0 = g["patches"][0]["bbox"][0]
     draw.text((x0, g["patches"][0]["bbox"][1] - _mm(11, dpi)),
               "Kamiru Studio — EDN ColorBlocker (elige el color que mejor "
-              "bloquea el UV)", fill="#FFFFFF", font=font)
+              "bloquea el UV)", fill=text_color, font=font)
     draw.text((x0, g["patches"][0]["bbox"][1] - _mm(6, dpi)),
               "Imprime en acetato al 100 % en MÁXIMA calidad, expón tu "
               "cianotipia como siempre, revela, seca y escanea el resultado azul.",
-              fill="#FFFFFF", font=font_small)
+              fill=text_color, font=font_small)
 
     for p in g["patches"]:
         draw.rectangle(p["bbox"], fill=_cb_patch_rgb(p["col"], p["fila"]))

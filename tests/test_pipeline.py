@@ -431,6 +431,75 @@ check("borde bloqueador desactivable (0 mm)", franja0.mean() > 220,
       f"media={franja0.mean():.0f}")
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 4h. Color del bloqueador personalizado (impresoras que odian el negro) ══")
+# Con degradado ColorBlocker el bloqueador termina en negro puro; el color
+# personalizado debe reemplazarlo en TODO lo externo: fondo completo, halos
+# y borde bloqueador — sin tocar la tinta de las imágenes.
+BLOQ = "#20304A"          # azul denso, BGR en cv2 = (74, 48, 32)
+bloq_bgr = np.array([0x4A, 0x30, 0x20])
+s4h = settings_base(TMP / "hojas_bloq", mode="cianotipia", cyan_mirror=True,
+                    cyan_bg="completo", cyan_block_color=BLOQ,
+                    cyan_frame_border_mm=0.8, out_name="bloq",
+                    project_name="bloq")
+res4h = core.generate(s4h, frame_paths[:4], labels=labels[:4])
+neg_h = cv2.flip(cv2.imread(res4h["pages"][0]), 1)
+check("fondo completo usa el color del bloqueador",
+      np.abs(neg_h[4, neg_h.shape[1] // 2].astype(int) - bloq_bgr).max() <= 2,
+      f"pixel={neg_h[4, neg_h.shape[1] // 2].tolist()}")
+lay_h = layoutfile.load(res4h["layout"])
+hx1, hy1, hx2, hy2 = list(lay_h["hojas"][0]["frames"].values())[0]["bbox"]
+borde_px = neg_h[hy1 - 2, (hx1 + hx2) // 2].astype(int)
+check("borde bloqueador usa el color del bloqueador",
+      np.abs(borde_px - bloq_bgr).max() <= 2, f"pixel={borde_px.tolist()}")
+# En modo ahorro, el halo del marcador también usa el color.
+s4h2 = settings_base(TMP / "hojas_bloq2", mode="cianotipia", cyan_mirror=True,
+                     cyan_bg="ahorro", cyan_block_color=BLOQ,
+                     out_name="bloq2", project_name="bloq2")
+res4h2 = core.generate(s4h2, frame_paths[:4], labels=labels[:4])
+neg_h2 = cv2.flip(cv2.imread(res4h2["pages"][0]), 1)
+lay_h2 = layoutfile.load(res4h2["layout"])
+mk0 = lay_h2["marcadores"]["bboxes"]["0"]
+lado0 = lay_h2["marcadores"]["lado_px"]
+halo_px = round(5.0 / 25.4 * 200)
+halo_pixel = neg_h2[(mk0[1] + mk0[3]) // 2,
+                    mk0[0] - lado0 // 4 - halo_px // 2].astype(int)
+check("halo del marcador usa el color del bloqueador",
+      np.abs(halo_pixel - bloq_bgr).max() <= 2, f"pixel={halo_pixel.tolist()}")
+# Y el escaneo de esa hoja se sigue procesando (el bloqueador azul denso es
+# oscuro: bloquea el UV y mantiene el contraste de los marcadores).
+neg_h2f = cv2.imread(res4h2["pages"][0])
+neg_h2f = cv2.flip(neg_h2f, 1)
+g4h = cv2.cvtColor(neg_h2f, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+p4h = np.clip(paperc[None, None, :] * (1 - g4h[..., None])
+              + bluec[None, None, :] * g4h[..., None], 0, 255).astype(np.uint8)
+p4h_path = TMP / "bloq_print.png"
+cv2.imwrite(str(p4h_path), p4h)
+scans4h = TMP / "scans_bloq"
+scans4h.mkdir()
+fake_scan(p4h_path, scans4h / "scan_bloq.png", angle_deg=1.4, scale=2.5,
+          tint=(1.05, 0.97, 0.92), seed=47)
+rep4h = scan.procesar_carpeta(scans4h, res4h2["layout"], TMP / "proc_bloq",
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+check("hoja con bloqueador de color se procesa (4/4)",
+      rep4h["escaneos_ok"] == 1 and rep4h["frames_extraidos"] == 4,
+      str([r["error"] for r in rep4h["resultados"]]))
+# Carta de calibración con fondo personalizado.
+carta_bloq = TMP / "tira_bloq.png"
+calibration.generar_tira_cianotipia(carta_bloq, "A4", 200, "#000000",
+                                    mirror=False, block_color=BLOQ)
+tb = cv2.imread(str(carta_bloq))
+check("carta de calibración con fondo personalizado",
+      np.abs(tb[4, tb.shape[1] // 2].astype(int) - bloq_bgr).max() <= 2,
+      f"pixel={tb[4, tb.shape[1] // 2].tolist()}")
+# Aviso si el color de bloqueador es demasiado claro.
+s4h3 = settings_base(TMP / "hojas_bloq3", mode="cianotipia",
+                     cyan_block_color="#DDDDCC", out_name="bloq3")
+check("aviso con bloqueador demasiado claro",
+      any("claro" in a for a in core.cyanotype_size_warnings(s4h3)),
+      str(core.cyanotype_size_warnings(s4h3)))
+
+# ════════════════════════════════════════════════════════════════
 print("\n══ 5. Deduplicación perceptual ══")
 dup_dir = TMP / "frames_dup"
 dup_paths = make_frames(dup_dir, n=6, dup_pairs=((0, 1), (0, 2), (3, 5)))

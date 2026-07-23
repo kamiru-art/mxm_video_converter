@@ -143,6 +143,8 @@ class SheetsPhase(PhaseFrame):
         v.var_cyan_bg = tk.StringVar(value="ahorro")  # ahorro | completo
         v.var_cyan_halo = tk.DoubleVar(value=5.0)
         v.var_cyan_border = tk.DoubleVar(value=0.8)
+        v.var_cyan_block_on = tk.BooleanVar(value=False)
+        v.var_cyan_block_color = tk.StringVar(value="#000000")
         v.var_cyan_colorprofile = tk.StringVar(value=NO_COLOR_PROFILE)
         # Salida
         v.var_out_dir = tk.StringVar()
@@ -583,6 +585,20 @@ class SheetsPhase(PhaseFrame):
         ttk.Label(hh, text="Halo entintado alrededor de marcadores/QRs/nombres (mm):").pack(side="left")
         ttk.Spinbox(hh, from_=1.0, to=10.0, increment=0.5, width=6,
                     textvariable=self.var_cyan_halo).pack(side="left", padx=4)
+        bk = ttk.Frame(sec)
+        bk.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(bk, text="Color del bloqueador personalizado:",
+                        variable=self.var_cyan_block_on).pack(side="left")
+        self.color_picker(bk, self.var_cyan_block_color, row=0, col=1)
+        ttk.Label(sec, text="Lo externo a los fotogramas (fondo completo, halos "
+                            "y borde bloqueador) se imprime por defecto con la "
+                            "tinta a DENSIDAD MÁXIMA — con un degradado "
+                            "ColorBlocker eso es negro puro, y hay impresoras "
+                            "que imprimen mal los campos grandes de negro "
+                            "100 %. Aquí eliges un color denso que tu "
+                            "impresora sí imprima bien.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
         sec = self.section(tab, "Color de la tinta del negativo")
         ik = ttk.Frame(sec)
@@ -1026,6 +1042,8 @@ class SheetsPhase(PhaseFrame):
             cyan_bg=self.var_cyan_bg.get(),
             cyan_halo_mm=self.to_float(self.var_cyan_halo, 5.0),
             cyan_frame_border_mm=self.to_float(self.var_cyan_border, 0.8),
+            cyan_block_color=(self.var_cyan_block_color.get()
+                              if self.var_cyan_block_on.get() else None),
             cyan_ink_stops=color_prof.get("stops"),
             print_scale_x=float(prof.get("scale_x", 1.0) or 1.0),
             print_scale_y=float(prof.get("scale_y", 1.0) or 1.0),

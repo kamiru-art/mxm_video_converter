@@ -144,6 +144,12 @@ class Settings:
         # ColorBlocker) que evita que la luz se cuele por los cantos del
         # acetato y vele los bordes de la imagen durante la exposición.
         self.cyan_frame_border_mm = float(kw.get("cyan_frame_border_mm", 0.8))
+        # Color del BLOQUEADOR: lo que se pinta a densidad máxima FUERA de los
+        # fotogramas (fondo completo, halos y borde bloqueador). None = tinta
+        # plena (con un degradado ColorBlocker eso termina en negro puro, y
+        # hay impresoras que imprimen mal los campos grandes de negro 100 %:
+        # aquí se elige un color denso que la impresora sí imprima bien).
+        self.cyan_block_color = kw.get("cyan_block_color") or None
         # Degradado de tinta opcional (perfil ColorBlocker):
         # [[densidad, "#RRGGBB"], ...]. None = color simple (cyan_ink).
         self.cyan_ink_stops = kw.get("cyan_ink_stops") or None
@@ -330,7 +336,8 @@ _SNAPSHOT_FIELDS = [
     "page_num_color", "registration_on", "marker_count", "marker_size_mm",
     "marker_margin_mm", "marker_dict", "qr_on", "qr_size_mm", "gray_patch_on",
     "project_name", "mode", "cyan_mirror", "cyan_ink", "cyan_curve",
-    "cyan_bg", "cyan_halo_mm", "cyan_frame_border_mm", "cyan_ink_stops",
+    "cyan_bg", "cyan_halo_mm", "cyan_frame_border_mm", "cyan_block_color",
+    "cyan_ink_stops",
     "print_scale_x", "print_scale_y", "out_name", "fmt_png", "fmt_pdf",
     "fmt_tiff",
 ]
@@ -371,6 +378,14 @@ def cyanotype_size_warnings(s: Settings) -> list[str]:
             f"Halo entintado de {s.cyan_halo_mm:g} mm: en modo ahorro conviene "
             "≥ 4 mm para que marcadores y QRs queden sobre blanco garantizado "
             "aunque el fondo se manche.")
+    if s.cyan_block_color:
+        r, g, b = cyan.hex_to_rgb(s.cyan_block_color)
+        if (r + g + b) / 3 > 160:
+            avisos.append(
+                f"El color del bloqueador ({s.cyan_block_color}) es muy "
+                "claro: puede dejar pasar UV y velar los fondos/halos de la "
+                "copia. Usa un color denso que tu impresora imprima bien "
+                "(idealmente el mejor color del ColorBlocker).")
     return avisos
 
 
@@ -597,7 +612,12 @@ def _patch_strip_geometry(s: Settings, L: _Layout):
 # ────────────────────────────────────────────────────────────────
 
 def _ink_full_color(s: Settings):
-    """Color de la tinta plena (densidad máxima) del negativo."""
+    """Color del BLOQUEADOR: lo que se pinta donde el negativo debe bloquear
+    el UV por completo (fondo completo, halos, borde bloqueador). Por defecto
+    la tinta a densidad máxima; con cyan_block_color, el color elegido por la
+    usuaria (impresoras que imprimen mal el negro 100 % en campos grandes)."""
+    if s.cyan_block_color:
+        return cyan.hex_to_rgb(s.cyan_block_color)
     return cyan.solid_density_color(255, s.cyan_ink, s.cyan_ink_stops)
 
 
