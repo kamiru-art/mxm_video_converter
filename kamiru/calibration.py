@@ -500,6 +500,91 @@ def generar_tira_cianotipia(out_path, paper_name: str = "A4", dpi: int = 300,
     return str(out_path)
 
 
+def _promediar_duplicados(d: np.ndarray, y: np.ndarray):
+    """Promedia las medidas con la misma densidad nominal (cartas con
+    parches repetidos o medidas por duplicado)."""
+    d_u, inv = np.unique(d, return_inverse=True)
+    y_u = np.bincount(inv, weights=y) / np.bincount(inv)
+    return d_u.astype(np.float64), y_u.astype(np.float64)
+
+
+def _suavizar(y: np.ndarray) -> np.ndarray:
+    """Suavizado por media móvil con ventana ADAPTATIVA al número de parches
+    (bordes por reflexión, extremos originales conservados).
+
+    Una carta de 21 parches casi no necesita suavizado (ventana 3); la carta
+    EDN de 256 parches trae mucho más ruido de medición por parche y sin una
+    ventana proporcional el ruido llega a la regresión isotónica y reaparece
+    como bloques (escalones) en la curva.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    n = len(y)
+    if n < 3:
+        return y.copy()
+    ventana = max(3, (n // 16) | 1)  # impar: 21→3, 256→17
+    medio = ventana // 2
+    ext = np.concatenate([y[medio:0:-1], y, y[-2:-medio - 2:-1]])
+    kernel = np.ones(ventana) / ventana
+    s = np.convolve(ext, kernel, mode="valid")
+    s[0], s[-1] = y[0], y[-1]  # anclar negro y blanco medidos
+    return s
+
+
+def _isotonica(y: np.ndarray) -> np.ndarray:
+    """Regresión isotónica no-decreciente (algoritmo PAVA).
+
+    A diferencia de np.maximum.accumulate (que proyecta cada bajada HACIA
+    ARRIBA creando mesetas largas), PAVA reemplaza cada tramo que viola la
+    monotonía por su promedio: la curva monótona más cercana a los datos, sin
+    mesetas artificiales que luego se convierten en escalones al invertir.
+    """
+    bloques = [[float(v), 1.0] for v in np.asarray(y, dtype=np.float64)]
+    out: list = []
+    for b in bloques:
+        out.append(b)
+        while len(out) > 1 and out[-2][0] > out[-1][0]:
+            v2, n2 = out.pop()
+            v1, n1 = out.pop()
+            out.append([(v1 * n1 + v2 * n2) / (n1 + n2), n1 + n2])
+    res: list = []
+    for v, n in out:
+        res.extend([v] * int(n))
+    return np.array(res, dtype=np.float64)
+
+
+def _pchip(x: np.ndarray, y: np.ndarray, xq: np.ndarray) -> np.ndarray:
+    """Interpolación cúbica monótona (PCHIP, pendientes de Fritsch–Carlson).
+
+    Pasa por todos los puntos, es C¹ (suave, sin esquinas como la lineal) y
+    NUNCA sobrepasa ni oscila entre puntos: ideal para curvas de respuesta.
+    Implementada a mano para no depender de scipy.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if len(x) < 2:
+        return np.full_like(np.asarray(xq, dtype=np.float64), y[0])
+    h = np.diff(x)
+    delta = np.diff(y) / h
+    m = np.zeros_like(y)
+    m[0], m[-1] = delta[0], delta[-1]
+    for i in range(1, len(y) - 1):
+        if delta[i - 1] * delta[i] <= 0:
+            m[i] = 0.0
+        else:
+            w1 = 2 * h[i] + h[i - 1]
+            w2 = h[i] + 2 * h[i - 1]
+            m[i] = (w1 + w2) / (w1 / delta[i - 1] + w2 / delta[i])
+    xq = np.asarray(xq, dtype=np.float64)
+    idx = np.clip(np.searchsorted(x, xq) - 1, 0, len(x) - 2)
+    t = (xq - x[idx]) / h[idx]
+    h00 = (1 + 2 * t) * (1 - t) ** 2
+    h10 = t * (1 - t) ** 2
+    h01 = t * t * (3 - 2 * t)
+    h11 = t * t * (t - 1)
+    return (h00 * y[idx] + h10 * h[idx] * m[idx]
+            + h01 * y[idx + 1] + h11 * h[idx] * m[idx + 1])
+
+
 def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
                              steps: int = CYANO_STEPS,
                              target: str = "kamiru21", log=None) -> dict:
@@ -528,13 +613,42 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
     d = np.array([r[0] for r in respuesta], dtype=np.float64)
     y = np.array([r[1] for r in respuesta], dtype=np.float64)
 
-    # La física dice que Y crece con la densidad (más tinta = menos exposición
-    # = más claro). El ruido de medición puede romper la monotonía: se fuerza.
+    # ── Curva SUAVE (estilo EDN, sin escalones) ──────────────────
+    # El enfoque antiguo (np.maximum.accumulate + interp lineal sobre los
+    # parches crudos) convertía el ruido de medición en mesetas, y la
+    # inversión convertía cada meseta en un SALTO: los degradados corregidos
+    # salían escalonados (posterizados). Ahora:
+    #   1. promedio de densidades duplicadas,
+    #   2. suavizado ligero 1-2-1 (quita ruido del escáner),
+    #   3. regresión isotónica PAVA (monótona SIN mesetas de proyección),
+    #   4. interpolación cúbica monótona PCHIP sobre una malla fina,
+    #   5. inversión numérica → LUT flotante continua (la cuantización final
+    #      se hace con dithering al generar el negativo).
     orden = np.argsort(d)
     d, y = d[orden], y[orden]
-    y_mono = np.maximum.accumulate(y)
+    d_u, y_u = _promediar_duplicados(d, y)
+    y_iso = _isotonica(_suavizar(y_u))
+    # Estrictamente creciente (mínimo epsilon) para que la inversa exista.
+    epsy = max(1e-6, (y_iso[-1] - y_iso[0]) * 1e-4)
+    for i in range(1, len(y_iso)):
+        if y_iso[i] <= y_iso[i - 1]:
+            y_iso[i] = y_iso[i - 1] + epsy
+    dd = np.linspace(0.0, 255.0, 2048)
+    yy = np.maximum.accumulate(_pchip(d_u, y_iso, dd))
+    # Pulido final sobre la malla fina: media móvil con bordes por reflexión
+    # IMPAR (continúa la pendiente: no sesga los extremos como la reflexión
+    # par). Una secuencia monótona suavizada así sigue siendo monótona, y
+    # desaparecen los quiebres residuales entre nudos que la inversión
+    # amplificaría como saltos.
+    vf = 31
+    medio_f = vf // 2
+    izq = 2.0 * yy[0] - yy[medio_f:0:-1]
+    der = 2.0 * yy[-1] - yy[-2:-medio_f - 2:-1]
+    ext = np.concatenate([izq, yy, der])
+    yy = np.maximum.accumulate(np.convolve(ext, np.ones(vf) / vf,
+                                           mode="valid"))
 
-    y_min, y_max = float(y_mono[0]), float(y_mono[-1])
+    y_min, y_max = float(yy[0]), float(yy[-1])
     rango = (y_max - y_min) / 255.0
     notas = []
     _log(f"Rango dinámico medido: {rango * 100:.0f} % "
@@ -554,9 +668,9 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
     # linealmente repartido entre el azul más oscuro y el blanco papel.
     g_in = np.arange(256, dtype=np.float64)
     y_target = y_min + (g_in / 255.0) * (y_max - y_min)
-    # Interpolación inversa Y→densidad (y_mono es no-decreciente).
-    lut = np.interp(y_target, y_mono, d)
-    lut = np.clip(np.round(lut), 0, 255).astype(int).tolist()
+    # Interpolación inversa Y→densidad sobre la malla fina (yy no-decreciente).
+    lut_f = np.clip(np.interp(y_target, yy, dd), 0.0, 255.0)
+    lut = [round(float(v), 2) for v in lut_f]
 
     return {
         "tipo": "cianotipia",

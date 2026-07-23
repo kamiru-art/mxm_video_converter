@@ -139,6 +139,11 @@ class Settings:
         # desiguales comen los bordes; un halo generoso mantiene los
         # marcadores/QRs sobre blanco garantizado en la copia azul.
         self.cyan_halo_mm = float(kw.get("cyan_halo_mm", 5.0))
+        # Borde bloqueador alrededor de cada fotograma (mm, 0 = sin borde):
+        # un marco de tinta a densidad MÁXIMA (respeta el color/degradado del
+        # ColorBlocker) que evita que la luz se cuele por los cantos del
+        # acetato y vele los bordes de la imagen durante la exposición.
+        self.cyan_frame_border_mm = float(kw.get("cyan_frame_border_mm", 0.8))
         # Degradado de tinta opcional (perfil ColorBlocker):
         # [[densidad, "#RRGGBB"], ...]. None = color simple (cyan_ink).
         self.cyan_ink_stops = kw.get("cyan_ink_stops") or None
@@ -325,7 +330,7 @@ _SNAPSHOT_FIELDS = [
     "page_num_color", "registration_on", "marker_count", "marker_size_mm",
     "marker_margin_mm", "marker_dict", "qr_on", "qr_size_mm", "gray_patch_on",
     "project_name", "mode", "cyan_mirror", "cyan_ink", "cyan_curve",
-    "cyan_bg", "cyan_halo_mm", "cyan_ink_stops",
+    "cyan_bg", "cyan_halo_mm", "cyan_frame_border_mm", "cyan_ink_stops",
     "print_scale_x", "print_scale_y", "out_name", "fmt_png", "fmt_pdf",
     "fmt_tiff",
 ]
@@ -674,10 +679,13 @@ def _draw_registration_frame(s: Settings, L: _Layout, canvas: Image.Image):
         # escanear, pero así se ve de un vistazo sobre el papel).
         tlx, tly = L.marker_positions[0]
         tri_h = max(8, L.marker_side // 2)
-        # El halo del triángulo NO debe invadir el parche del marcador TL
-        # (borraría el borde del ArUco en la copia): el hueco al parche debe
-        # ser al menos el halo.
-        x0 = int(tlx + L.marker_patch + max(6, L.halo_px))
+        # El triángulo debe quedar en su PROPIA isla, separada de la del
+        # marcador TL. OJO con la geometría de las islas en modo ahorro: el
+        # parche lleva su halo (halo_px más allá del parche) y el triángulo
+        # lleva el suyo (halo_px antes de x0); si solo se separa del parche,
+        # los dos halos se funden y la flecha parece parte del marcador.
+        x0 = int(tlx + L.marker_patch + 2 * L.halo_px
+                 + max(6, L.marker_quiet))
         y0 = int(tly + (L.marker_patch - tri_h) // 2)
         if saving:
             _halo_rect(draw, s, [x0, y0, x0 + tri_h, y0 + tri_h], L.halo_px)
@@ -773,6 +781,15 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
         py = int(round(block_top))
         canvas.paste(resized, (px, py))
 
+        if s.is_cyanotype and s.cyan_frame_border_mm > 0:
+            # Borde bloqueador: marco de densidad máxima POR FUERA del frame
+            # (no tapa imagen). En la copia queda un filo blanco que impide
+            # que la luz se cuele por los cantos y vele los bordes.
+            bw = max(1, paper.mm_to_px(s.cyan_frame_border_mm, L.dpi))
+            draw.rectangle([px - bw, py - bw,
+                            px + new_w - 1 + bw, py + new_h - 1 + bw],
+                           outline=_ink_full_color(s), width=bw)
+
         text = _label_text_for(s, labels, numbers, global_idx)
 
         # Fila de metadatos: [QR] [texto], centrada bajo el frame.
@@ -829,16 +846,44 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
     if s.page_num_on and L.page_font is not None:
         pno = s.format_page_label(sheet_num)
         tw, th = _text_size(draw, pno, L.page_font)
-        pad = max(L.margin // 3, paper.mm_to_px(3, L.dpi))
         corner = s.page_num_corner
-        if corner == "Inferior derecha":
-            pos = (L.page_w - pad - tw, L.page_h - pad - th)
-        elif corner == "Inferior izquierda":
-            pos = (pad, L.page_h - pad - th)
-        elif corner == "Superior derecha":
-            pos = (L.page_w - pad - tw, pad)
-        else:  # Superior izquierda
-            pos = (pad, pad)
+        if s.registration_on:
+            # Con marcadores activos, las esquinas están ocupadas por los
+            # parches ArUco: el numerador se corre hacia dentro del borde
+            # horizontal. Su isla (halo//2) debe quedar separada de la isla
+            # del marcador (parche + halo_px en modo ahorro); si no, los
+            # halos se funden y el número parece parte del marcador.
+            sep = (L.halo_px + max(4, L.halo_px // 2)
+                   + max(8, L.marker_quiet))
+            clear = L.marker_margin + L.marker_patch + sep
+            if s.is_cyanotype and corner == "Superior izquierda":
+                # El triángulo testigo vive junto al marcador TL: saltar su
+                # isla completa (gap + triángulo + halo propio).
+                tri_h = max(8, L.marker_side // 2)
+                clear = (L.marker_margin + L.marker_patch + 2 * L.halo_px
+                         + max(6, L.marker_quiet) + tri_h + L.halo_px
+                         + max(4, L.halo_px // 2) + max(8, L.marker_quiet))
+            y_top = L.marker_margin + (L.marker_patch - th) // 2
+            y_bot = (L.page_h - L.marker_margin - L.marker_patch
+                     + (L.marker_patch - th) // 2)
+            if corner == "Inferior derecha":
+                pos = (L.page_w - clear - tw, y_bot)
+            elif corner == "Inferior izquierda":
+                pos = (clear, y_bot)
+            elif corner == "Superior derecha":
+                pos = (L.page_w - clear - tw, y_top)
+            else:  # Superior izquierda
+                pos = (clear, y_top)
+        else:
+            pad = max(L.margin // 3, paper.mm_to_px(3, L.dpi))
+            if corner == "Inferior derecha":
+                pos = (L.page_w - pad - tw, L.page_h - pad - th)
+            elif corner == "Inferior izquierda":
+                pos = (pad, L.page_h - pad - th)
+            elif corner == "Superior derecha":
+                pos = (L.page_w - pad - tw, pad)
+            else:  # Superior izquierda
+                pos = (pad, pad)
         if saving:
             _halo_rect(draw, s, [pos[0], pos[1], pos[0] + tw, pos[1] + th],
                        max(4, L.halo_px // 2))

@@ -401,6 +401,34 @@ _, found4f = scan._detect_markers_multi(print4f, "DICT_4X4_50",
                                         list(range(8)), "cianotipia")
 check("marcador TL detectable junto al testigo (8 mm + halo 5 mm)",
       0 in found4f, f"detectados: {sorted(found4f)}")
+# El numerador de hoja se corre hacia dentro y no debe romper el marcador de
+# su esquina (por defecto «Inferior derecha» = id 2).
+check("marcador de la esquina del numerador intacto", 2 in found4f,
+      f"detectados: {sorted(found4f)}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4g. Borde bloqueador alrededor de los frames ══")
+s4g = settings_base(TMP / "hojas_borde", mode="cianotipia", cyan_mirror=True,
+                    cyan_bg="ahorro", cyan_frame_border_mm=0.8,
+                    out_name="borde", project_name="borde")
+res4g = core.generate(s4g, frame_paths[:1], labels=labels[:1])
+neg_b = cv2.flip(cv2.imread(res4g["pages"][0]), 1)  # coords del layout
+lay_b = layoutfile.load(res4g["layout"])
+fx1, fy1, fx2, fy2 = list(lay_b["hojas"][0]["frames"].values())[0]["bbox"]
+bpx = max(1, round(0.8 / 25.4 * 200))
+franja = neg_b[fy1 - bpx:fy1, fx1 + 5:fx2 - 5]  # justo encima del frame
+check("borde bloqueador de tinta plena presente", franja.mean() < 40,
+      f"media={franja.mean():.0f}")
+s4g0 = settings_base(TMP / "hojas_borde0", mode="cianotipia", cyan_mirror=True,
+                     cyan_bg="ahorro", cyan_frame_border_mm=0.0,
+                     out_name="borde0", project_name="borde0")
+res4g0 = core.generate(s4g0, frame_paths[:1], labels=labels[:1])
+neg_b0 = cv2.flip(cv2.imread(res4g0["pages"][0]), 1)
+lay_b0 = layoutfile.load(res4g0["layout"])
+gx1, gy1, gx2, gy2 = list(lay_b0["hojas"][0]["frames"].values())[0]["bbox"]
+franja0 = neg_b0[gy1 - bpx:gy1, gx1 + 5:gx2 - 5]
+check("borde bloqueador desactivable (0 mm)", franja0.mean() > 220,
+      f"media={franja0.mean():.0f}")
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 5. Deduplicación perceptual ══")
@@ -462,6 +490,13 @@ check("rango dinámico medido", 0.2 < prof_c["rango_dinamico"] <= 1.0,
       str(prof_c["rango_dinamico"]))
 # La curva debe compensar la gamma: en el medio debe apartarse de la identidad.
 check("curva no trivial (compensa)", abs(lut[128] - 128) > 10, f"lut[128]={lut[128]}")
+# Y debe ser SUAVE en los medios tonos: sin saltos de escalera entre valores
+# consecutivos (vigila la regresión del cummax crudo, que posterizaba los
+# degradados). Los extremos se excluyen: donde la respuesta física es plana,
+# la inversa exacta es vertical y un salto ahí no es escalonado visible.
+saltos = [lut[i + 1] - lut[i] for i in range(8, 247)]
+check("curva suave en medios tonos, sin escalones", max(saltos) < 5.0,
+      f"salto_max={max(saltos):.2f}")
 
 print("\n══ 7b. Calibración con la carta EN ESPEJO ══")
 # La carta expuesta con el acetato al revés: la copia sale espejada. Sin la
@@ -578,6 +613,9 @@ lut_e = prof_e["lut"]
 check("EDN 256: LUT monótona y compensadora",
       all(lut_e[i] <= lut_e[i + 1] for i in range(255))
       and abs(lut_e[128] - 128) > 8, f"lut[128]={lut_e[128]}")
+saltos_e = [lut_e[i + 1] - lut_e[i] for i in range(8, 247)]
+check("EDN 256: curva suave en medios tonos", max(saltos_e) < 6.0,
+      f"salto_max={max(saltos_e):.2f}")
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 9d. EDN ColorBlocker (elección del color de tinta) ══")

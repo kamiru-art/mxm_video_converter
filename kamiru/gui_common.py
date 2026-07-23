@@ -13,6 +13,8 @@ import threading
 import tkinter as tk
 from tkinter import colorchooser, ttk
 
+from .guides import GUIDES
+
 PAD = 10
 
 # Paleta de la interfaz (look limpio y cálido, con verde como acento 💚).
@@ -131,6 +133,75 @@ def build_style(root: tk.Tk):
                     bordercolor=p["border"], lightcolor=p["accent"],
                     darkcolor=p["accent"])
 
+    # Botón de ayuda «?» (pequeño, redondeado visualmente por el padding).
+    style.configure("Help.TButton", padding=(4, 0),
+                    background=p["accent"], foreground=p["accent_text"])
+    style.map("Help.TButton",
+              background=[("active", p["accent_dark"])])
+
+
+def show_guide(parent, guide_key: str):
+    """Abre la guía paso a paso `guide_key` (ver guides.py) en una ventana
+    con scroll: número + emoji + título en negrita + explicación por paso."""
+    guia = GUIDES.get(guide_key)
+    if not guia:
+        return
+    p = PALETTE
+    win = tk.Toplevel(parent)
+    win.title(f"❓ {guia['titulo']}")
+    win.configure(bg=p["bg"])
+    win.transient(parent.winfo_toplevel())
+    ancho = 660
+    win.geometry(f"{ancho}x640")
+
+    canvas = tk.Canvas(win, bg=p["bg"], highlightthickness=0)
+    vs = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=vs.set)
+    vs.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+    inner = ttk.Frame(canvas, padding=PAD * 2)
+    inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    ttk.Label(inner, text=guia["titulo"], style="Header.TLabel",
+              wraplength=ancho - 70).pack(anchor="w")
+    ttk.Label(inner, text=guia["intro"], style="Sub.TLabel",
+              wraplength=ancho - 70).pack(anchor="w", pady=(6, 10))
+
+    for i, (emoji, titulo, texto) in enumerate(guia["pasos"]):
+        card = tk.Frame(inner, bg=p["card"], highlightbackground=p["border"],
+                        highlightthickness=1)
+        card.pack(fill="x", pady=(0, 8))
+        fila = tk.Frame(card, bg=p["card"])
+        fila.pack(fill="x", padx=12, pady=(10, 2))
+        tk.Label(fila, text=emoji, bg=p["card"],
+                 font=("TkDefaultFont", 20)).pack(side="left", padx=(0, 10))
+        tk.Label(fila, text=titulo, bg=p["card"], fg=p["accent_dark"],
+                 font=("TkDefaultFont", 13, "bold"), justify="left",
+                 wraplength=ancho - 150, anchor="w").pack(
+            side="left", fill="x", expand=True)
+        tk.Label(card, text=texto, bg=p["card"], fg=p["text"], justify="left",
+                 wraplength=ancho - 110, anchor="w").pack(
+            fill="x", padx=(58, 14), pady=(0, 10))
+
+    ttk.Button(inner, text="Entendido 💚", command=win.destroy).pack(
+        anchor="e", pady=(6, 0))
+
+    def _on_resize(_evt=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.itemconfigure(inner_id, width=canvas.winfo_width())
+    inner.bind("<Configure>", _on_resize)
+    canvas.bind("<Configure>", _on_resize)
+
+    def _wheel(evt):
+        delta = -1 if getattr(evt, "delta", 0) > 0 or evt.num == 4 else 1
+        canvas.yview_scroll(delta, "units")
+    for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+        canvas.bind_all(ev, _wheel)
+    win.bind("<Destroy>", lambda e: [canvas.unbind_all(ev) for ev in
+                                     ("<MouseWheel>", "<Button-4>", "<Button-5>")]
+             if e.widget is win else None)
+    win.focus_set()
+
 
 class PhaseFrame(ttk.Frame):
     """Base para las fases: hilo de trabajo + cola + log + progreso."""
@@ -143,8 +214,18 @@ class PhaseFrame(ttk.Frame):
         self._cancel = False
 
     # ------------------------------------------------------------- helpers
-    def section(self, parent, title):
-        lf = ttk.LabelFrame(parent, text=title, padding=PAD)
+    def section(self, parent, title, guide: str | None = None):
+        """Sección con marco y título; con `guide` añade un botón «?» que
+        abre la guía paso a paso correspondiente (ver guides.py)."""
+        if guide:
+            head = ttk.Frame(parent)
+            ttk.Label(head, text=title).pack(side="left")
+            ttk.Button(head, text="?", width=2, style="Help.TButton",
+                       command=lambda g=guide: show_guide(self, g)).pack(
+                side="left", padx=(6, 0))
+            lf = ttk.LabelFrame(parent, labelwidget=head, padding=PAD)
+        else:
+            lf = ttk.LabelFrame(parent, text=title, padding=PAD)
         lf.pack(fill="x", padx=PAD, pady=(PAD, 0))
         lf.columnconfigure(1, weight=1)
         return lf
