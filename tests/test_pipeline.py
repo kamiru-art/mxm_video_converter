@@ -757,6 +757,34 @@ check("layout v1 se convierte a v2", lv1["version"] == 2
       and lv1["hojas"][0]["frames"]["CLIP018"]["bbox"] == [300, 300, 1100, 800])
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 11. Humo de la GUI (construcción completa de la app) ══")
+# Construye la App real con TODAS sus fases y pestañas: detecta errores que
+# solo aparecen al montar la interfaz (p. ej. mezclar pack y grid en un mismo
+# frame → TclError al arrancar el ejecutable). En los builds de Windows y
+# macOS del workflow hay display y este test corre de verdad; en entornos
+# sin display (runner Linux, contenedores) se salta sin fallar.
+_tk_ok = False
+try:
+    import tkinter as _tk_mod
+    _probe = _tk_mod.Tk()
+    _probe.destroy()
+    _tk_ok = True
+except Exception as _e:
+    print(f"  [SKIP] tkinter/display no disponible ({type(_e).__name__}): "
+          "los builds de Windows/macOS sí ejecutan este test")
+if _tk_ok:
+    try:
+        from kamiru import app as _app_mod
+        _a = _app_mod.App()
+        _a.update_idletasks()
+        _a.update()
+        _a.destroy()
+        check("la app construye todas las fases y pestañas", True)
+    except Exception as _e:
+        check("la app construye todas las fases y pestañas", False,
+              f"{type(_e).__name__}: {_e}")
+
+# ════════════════════════════════════════════════════════════════
 fails = [n for n, ok in PASSED if not ok]
 print(f"\n{'=' * 56}\nResultado: {len(PASSED) - len(fails)}/{len(PASSED)} pruebas OK")
 if fails:
