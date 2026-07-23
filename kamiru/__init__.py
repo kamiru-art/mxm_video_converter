@@ -8,5 +8,5 @@ calibración de impresora y de proceso de cianotipia, y reconstrucción del
 video final.
 """
 
-__version__ = "2.4.0"
+__version__ = "2.4.1"
 __app_name__ = "Kamiru Studio"
