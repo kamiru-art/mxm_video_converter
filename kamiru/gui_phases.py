@@ -33,7 +33,7 @@ def _target_key(label: str) -> str:
 
 
 # ════════════════════════════════════════════════════════════════
-# FASE 2 · PROCESAR ESCANEOS
+# FASE ③ · PROCESAR ESCANEOS
 # ════════════════════════════════════════════════════════════════
 
 class ScansPhase(PhaseFrame):
@@ -58,7 +58,7 @@ class ScansPhase(PhaseFrame):
         self.var_report = tk.BooleanVar(value=True)
 
     def _build_ui(self):
-        sec = self.section(self, "Archivos")
+        sec = self.section(self, "Archivos", guide="escaneos")
         self._row_dir(sec, 0, "Carpeta con los escaneos:", self.var_scans_dir,
                       "Selecciona la carpeta con los escaneos")
         self._row_file(sec, 1, "Archivo layout (.json):", self.var_layout,
@@ -330,7 +330,7 @@ class ScansPhase(PhaseFrame):
 
 
 # ════════════════════════════════════════════════════════════════
-# FASE 3 · CALIBRACIÓN
+# FASE ① · CALIBRACIÓN
 # ════════════════════════════════════════════════════════════════
 
 class CalibPhase(PhaseFrame):
@@ -367,7 +367,8 @@ class CalibPhase(PhaseFrame):
         right.pack(side="left", fill="both", expand=True)
 
         # ── Impresora ────────────────────────────────────────────
-        sec = self.section(left, "🖨  Impresora")
+        sec = self.section(left, "🖨  Impresora",
+                           guide="calibracion_impresora")
         ttk.Label(sec, text="1. Genera la página de prueba, imprímela al 100 % "
                             "(sin «ajustar a página») y escanéala completa.",
                   style="Sub.TLabel", wraplength=380).grid(
@@ -408,7 +409,8 @@ class CalibPhase(PhaseFrame):
         self.p_save_btn.pack(side="left", padx=4)
 
         # ── Cianotipia ───────────────────────────────────────────
-        sec = self.section(right, "☀️  Cianotipia")
+        sec = self.section(right, "☀️  Cianotipia",
+                           guide="calibracion_cianotipia")
         ttk.Label(sec, text="1. Elige la carta, genérala, imprímela en ACETATO "
                             "(mismo color de tinta y espejado que usarás), expón "
                             "tu cianotipia como siempre, revela, seca y escanea "
@@ -661,7 +663,7 @@ class CalibPhase(PhaseFrame):
 
 
 # ════════════════════════════════════════════════════════════════
-# FASE 4 · VIDEO FINAL
+# FASE ④ · VIDEO FINAL
 # ════════════════════════════════════════════════════════════════
 
 class VideoPhase(PhaseFrame):

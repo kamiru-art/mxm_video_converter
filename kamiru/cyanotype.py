@@ -45,13 +45,16 @@ def default_lut() -> list[int]:
 
 
 def _as_lut_array(lut) -> np.ndarray:
-    """Valida/convierte una LUT (lista de 256 enteros 0-255) a numpy uint8."""
+    """Valida/convierte una LUT (256 valores 0-255, enteros o flotantes) a
+    numpy float64. Se conserva en flotante para poder aplicar dithering al
+    cuantizar: redondear directamente una curva comprimida produce mesetas y
+    saltos visibles (posterización) en los degradados."""
     if lut is None:
-        return np.arange(256, dtype=np.uint8)
+        return np.arange(256, dtype=np.float64)
     arr = np.asarray(lut, dtype=np.float64)
     if arr.shape != (256,):
         raise ValueError("La curva de cianotipia debe tener exactamente 256 valores.")
-    return np.clip(np.round(arr), 0, 255).astype(np.uint8)
+    return np.clip(arr, 0, 255)
 
 
 def hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -119,10 +122,21 @@ def make_negative(img: Image.Image, lut=None, ink_color: str = "#000000",
     1. Pasa a escala de grises (la cianotipia es monocroma).
     2. Aplica la curva de compensación (LUT) para obtener la densidad.
     3. Colorea la densidad con el color/degradado de tinta elegido.
+
+    Con curva de calibración, la cuantización a 8 bits se hace con DITHERING
+    (ruido uniforme ±0.5 antes de redondear, semilla fija): una curva que
+    comprime el rango deja menos densidades distintas y sin dithering los
+    degradados salen ESCALONADOS (bandas). El ruido subcuántico reparte cada
+    salto entre píxeles vecinos y el degradado impreso vuelve a verse continuo.
+    Sin curva (identidad) no se toca ni un píxel.
     """
     gray = np.asarray(img.convert("L"))
     lut_arr = _as_lut_array(lut)
-    density = lut_arr[gray]
+    density_f = lut_arr[gray]
+    if lut is not None:
+        rng = np.random.default_rng(12345)  # determinista: hojas reproducibles
+        density_f = density_f + rng.uniform(-0.5, 0.5, size=density_f.shape)
+    density = np.clip(np.round(density_f), 0, 255).astype(np.uint8)
     return Image.fromarray(apply_ramp(density, ink_ramp(ink_color, stops)), "RGB")
 
 

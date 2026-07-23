@@ -31,7 +31,7 @@ from . import __app_name__, __version__, config, core, dedup
 from . import fonts as fontmod
 from . import markers, paper
 from .ffmpeg_utils import VideoInfo, extract_frames, find_ffmpeg, probe
-from .gui_common import PAD, PALETTE, PhaseFrame, build_style
+from .gui_common import PAD, PALETTE, PhaseFrame, build_style, show_guide
 from .gui_phases import NO_COLOR_PROFILE, CalibPhase, ScansPhase, VideoPhase
 
 VIDEO_TYPES = [
@@ -55,7 +55,7 @@ LABEL_SOURCES = [
 
 
 class SheetsPhase(PhaseFrame):
-    """Fase ①: de un video (o carpeta de imágenes) a hojas imprimibles."""
+    """Fase ②: de un video (o carpeta de imágenes) a hojas imprimibles."""
 
     def __init__(self, master, app):
         super().__init__(master, app)
@@ -142,6 +142,7 @@ class SheetsPhase(PhaseFrame):
         v.var_cyan_sim = tk.BooleanVar(value=False)
         v.var_cyan_bg = tk.StringVar(value="ahorro")  # ahorro | completo
         v.var_cyan_halo = tk.DoubleVar(value=5.0)
+        v.var_cyan_border = tk.DoubleVar(value=0.8)
         v.var_cyan_colorprofile = tk.StringVar(value=NO_COLOR_PROFILE)
         # Salida
         v.var_out_dir = tk.StringVar()
@@ -375,7 +376,7 @@ class SheetsPhase(PhaseFrame):
         ttk.Label(sec, text="Color de fondo:").grid(row=2, column=0, sticky="w", pady=(6, 0))
         self.color_picker(sec, self.var_bg, row=2, col=1)
 
-        sec = self.section(tab, "Perfil de impresora (de la fase ③ Calibración)")
+        sec = self.section(tab, "Perfil de impresora (de la fase ① Calibración)")
         ttk.Label(sec, text="Perfil:").grid(row=0, column=0, sticky="w")
         self.printer_cb = ttk.Combobox(sec, textvariable=self.var_printer_profile,
                                        state="readonly", width=26,
@@ -482,10 +483,11 @@ class SheetsPhase(PhaseFrame):
         tab = ttk.Frame(nb, padding=PAD)
         nb.add(tab, text="6 · Marcadores")
 
-        sec = self.section(tab, "Marcadores de registro (para escanear de vuelta)")
+        sec = self.section(tab, "Marcadores de registro (para escanear de vuelta)",
+                           guide="marcadores")
         ttk.Checkbutton(
             sec, text="Añadir marcadores ArUco + códigos QR (necesario para la "
-                      "fase ② Procesar escaneos)",
+                      "fase ③ Procesar escaneos)",
             variable=self.var_reg_on).grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(sec, text="Al activarlos también se guarda un archivo "
                             "layout .json junto a las hojas: NO lo borres, es "
@@ -537,7 +539,8 @@ class SheetsPhase(PhaseFrame):
         tab = ttk.Frame(nb, padding=PAD)
         nb.add(tab, text="7 · Cianotipia")
 
-        sec = self.section(tab, "Negativos para cianotipia (imprimir en acetato)")
+        sec = self.section(tab, "Negativos para cianotipia (imprimir en acetato)",
+                           guide="cianotipia")
         ttk.Checkbutton(
             sec, text="MODO CIANOTIPIA: generar las hojas como NEGATIVOS para "
                       "acetato ☀️",
@@ -546,7 +549,7 @@ class SheetsPhase(PhaseFrame):
                             "marcadores, QRs y nombres también invertidos: al "
                             "exponer la cianotipia al sol, todo queda con la "
                             "polaridad correcta y el escaneo de la copia azul "
-                            "se procesa normalmente en la fase ②.",
+                            "se procesa normalmente en la fase ③.",
                   style="Sub.TLabel", wraplength=740).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(4, 6))
 
@@ -554,6 +557,14 @@ class SheetsPhase(PhaseFrame):
                                   "exponer emulsión contra emulsión — recomendado)",
                         variable=self.var_cyan_mirror).grid(
             row=2, column=0, columnspan=3, sticky="w")
+        bb = ttk.Frame(sec)
+        bb.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(bb, text="Borde bloqueador alrededor de cada frame (mm):").pack(side="left")
+        ttk.Spinbox(bb, from_=0.0, to=1.0, increment=0.1, width=6,
+                    textvariable=self.var_cyan_border).pack(side="left", padx=4)
+        ttk.Label(bb, text="marco de tinta a densidad máxima: evita que la luz "
+                           "se cuele por los cantos y vele los bordes (0 = sin borde)",
+                  style="Sub.TLabel").pack(side="left")
 
         sec = self.section(tab, "Fondo del negativo (consumo de tinta)")
         ttk.Radiobutton(
@@ -586,7 +597,7 @@ class SheetsPhase(PhaseFrame):
                                             values=[NO_COLOR_PROFILE])
         self.colorprofile_cb.pack(side="left", padx=4)
         ttk.Label(sec, text="El negro no siempre es lo que mejor bloquea el UV. "
-                            "El perfil ColorBlocker (fase ③, método "
+                            "El perfil ColorBlocker (fase ①, método "
                             "easydigitalnegatives.com) usa el color/degradado "
                             "medido como MEJOR bloqueador en TU impresora; si "
                             "eliges uno, reemplaza al color simple.",
@@ -599,7 +610,7 @@ class SheetsPhase(PhaseFrame):
                                      state="readonly", width=28,
                                      values=[NO_CURVE])
         self.curve_cb.grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(sec, text="Se crea en la fase ③ (Calibración → Cianotipia). "
+        ttk.Label(sec, text="Se crea en la fase ① (Calibración → Cianotipia). "
                             "Lineariza los tonos y aprovecha todo el rango "
                             "dinámico de TU proceso (impresora + acetato + "
                             "química + sol).",
@@ -1014,6 +1025,7 @@ class SheetsPhase(PhaseFrame):
             cyan_curve=self._cyan_curve_lut(),
             cyan_bg=self.var_cyan_bg.get(),
             cyan_halo_mm=self.to_float(self.var_cyan_halo, 5.0),
+            cyan_frame_border_mm=self.to_float(self.var_cyan_border, 0.8),
             cyan_ink_stops=color_prof.get("stops"),
             print_scale_x=float(prof.get("scale_x", 1.0) or 1.0),
             print_scale_y=float(prof.get("scale_y", 1.0) or 1.0),
@@ -1074,7 +1086,7 @@ class SheetsPhase(PhaseFrame):
                 "Cianotipia sin calibrar",
                 "No has elegido una curva de calibración de cianotipia, así "
                 "que los tonos pueden salir aplastados.\n\n"
-                "¿Quieres ir a la fase ③ Calibración para generar e imprimir "
+                "¿Quieres ir a la fase ① Calibración para generar e imprimir "
                 "primero una hoja de calibración (tira Kamiru, carta EDN 2.2 "
                 "o ColorBlocker)?\n\n"
                 "Sí = ir a Calibración   ·   No = continuar sin curva")
@@ -1448,7 +1460,12 @@ class SheetsPhase(PhaseFrame):
     def _show_help(self):
         messagebox.showinfo(
             "Cómo usar Kamiru Studio",
-            "FASE ① — GENERAR HOJAS\n"
+            "FASE ① — CALIBRACIÓN (una sola vez): perfiles de impresora "
+            "(escala/tamaños) y de cianotipia (color de tinta y curva de "
+            "compensación). Hazla ANTES de generar hojas: el resto de la "
+            "app usa estos perfiles. Cada sección tiene un botón «?» con "
+            "el paso a paso.\n\n"
+            "FASE ② — GENERAR HOJAS\n"
             "1) Origen: un video o una carpeta de imágenes.\n"
             "2) Fotogramas: cuántos extraer, cuadrícula, incluir/excluir y "
             "detección de dibujos repetidos.\n"
@@ -1456,16 +1473,16 @@ class SheetsPhase(PhaseFrame):
             "4) Nombres y 5) Nº de hoja: etiquetas y numeración.\n"
             "6) Marcadores: ArUco + QR para poder escanear de vuelta "
             "(genera el layout .json).\n"
-            "7) Cianotipia: negativos para acetato (invertidos, espejados y "
-            "con curva de calibración).\n"
+            "7) Cianotipia: negativos para acetato (invertidos, espejados, "
+            "con borde bloqueador y curva de calibración).\n"
             "8) Salida: formatos y QUÉ hojas producir (p. ej. «3, 5-7»).\n\n"
-            "FASE ② — PROCESAR ESCANEOS: elige los escaneos + el layout .json "
+            "FASE ③ — PROCESAR ESCANEOS: elige los escaneos + el layout .json "
             "y recupera cada fotograma alineado y recortado. Con informe y "
             "hojas de rescate.\n\n"
-            "FASE ③ — CALIBRACIÓN: perfiles de impresora (escala/tamaños) y "
-            "de cianotipia (curva de compensación).\n\n"
             "FASE ④ — VIDEO FINAL: reconstruye el video con los fotogramas "
-            "procesados en su orden original.")
+            "procesados en su orden original.\n\n"
+            "Los botones «?» repartidos por la app abren guías paso a paso "
+            "de cada parte.")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1481,10 +1498,16 @@ class App(tk.Tk):
 
         head = ttk.Frame(self, padding=(PAD * 2, PAD, PAD * 2, 0))
         head.pack(fill="x")
-        ttk.Label(head, text="Kamiru Studio", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(head, text="Hecho con cariño para Kamila 💚  ·  video → hojas → "
-                             "pintura o cianotipia ☀️ → escaneo → video  ·  sin "
-                             "Photoshop, sin pérdida de calidad",
+        fila = ttk.Frame(head)
+        fila.pack(fill="x")
+        ttk.Label(fila, text="Kamiru Studio", style="Header.TLabel").pack(side="left")
+        ttk.Button(fila, text="?  ¿Cómo es el flujo?", style="Help.TButton",
+                   command=lambda: show_guide(self, "flujo")).pack(
+            side="left", padx=(12, 0))
+        ttk.Label(head, text="Hecho con cariño para Kamila 💚  ·  ① calibra → "
+                             "② genera hojas → pinta o expón ☀️ → ③ procesa "
+                             "escaneos → ④ video  ·  sin Photoshop, sin "
+                             "pérdida de calidad",
                   style="Sub.TLabel").pack(anchor="w")
 
         phases = ttk.Notebook(self, style="Phase.TNotebook")
@@ -1494,9 +1517,12 @@ class App(tk.Tk):
         self.scans_phase = ScansPhase(phases, self)
         self.calib_phase = CalibPhase(phases, self)
         self.video_phase = VideoPhase(phases, self)
-        phases.add(self.sheets_phase, text="①  Generar hojas")
-        phases.add(self.scans_phase, text="②  Procesar escaneos")
-        phases.add(self.calib_phase, text="③  Calibración")
+        # Calibración PRIMERO: el flujo ideal es calibrar impresora y
+        # proceso antes de generar hojas (las demás fases usan sus perfiles).
+        # Los prefijos de config (s1_..s4_) se conservan por compatibilidad.
+        phases.add(self.calib_phase, text="①  Calibración")
+        phases.add(self.sheets_phase, text="②  Generar hojas")
+        phases.add(self.scans_phase, text="③  Procesar escaneos")
         phases.add(self.video_phase, text="④  Video final")
 
         self._restore_config()
@@ -1512,7 +1538,7 @@ class App(tk.Tk):
             pass
 
     def goto_calibration(self):
-        """Salta a la fase ③ (usado cuando falta un perfil de calibración)."""
+        """Salta a la fase ① (usado cuando falta un perfil de calibración)."""
         try:
             self.phases_nb.select(self.calib_phase)
         except tk.TclError:

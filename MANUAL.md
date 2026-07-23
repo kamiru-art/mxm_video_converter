@@ -9,11 +9,11 @@
 1. [¿Qué hace esta app?](#1-qué-hace-esta-app)
 2. [Instalación (solo la primera vez)](#2-instalación-solo-la-primera-vez)
 3. [Conceptos en 1 minuto](#3-conceptos-en-1-minuto)
-4. [Fase ① — Generar hojas](#4-fase--generar-hojas)
-5. [El trabajo físico: imprimir, pintar, escanear](#5-el-trabajo-físico-imprimir-pintar-escanear)
-6. [Fase ② — Procesar escaneos](#6-fase--procesar-escaneos)
-7. [Modo cianotipia ☀️](#7-modo-cianotipia-)
-8. [Fase ③ — Calibración](#8-fase--calibración)
+4. [Fase ① — Calibración (empieza aquí)](#4-fase--calibración-empieza-aquí)
+5. [Fase ② — Generar hojas](#5-fase--generar-hojas)
+6. [El trabajo físico: imprimir, pintar, escanear](#6-el-trabajo-físico-imprimir-pintar-escanear)
+7. [Fase ③ — Procesar escaneos](#7-fase--procesar-escaneos)
+8. [Modo cianotipia ☀️](#8-modo-cianotipia-)
 9. [Fase ④ — Video final](#9-fase--video-final)
 10. [Recetas rápidas](#10-recetas-rápidas)
 11. [Solución de problemas](#11-solución-de-problemas)
@@ -27,7 +27,10 @@ Kamiru Studio automatiza todo tu flujo de animación *mixed media* y de
 *cianotipia*, sin Photoshop:
 
 ```
-①  La app convierte tu video en HOJAS imprimibles
+①  (Una sola vez) CALIBRAS tu impresora y tu proceso de cianotipia
+    (la app mide cómo imprime y cómo responde tu química, y lo compensa)
+        │
+②  La app convierte tu video en HOJAS imprimibles
     (una cuadrícula de fotogramas por hoja, con marcadores en los bordes
      y un código QR bajo cada fotograma)
         │
@@ -36,14 +39,16 @@ Kamiru Studio automatiza todo tu flujo de animación *mixed media* y de
         │
 📠  Escaneas todas las hojas (da igual el orden, la rotación o la resolución)
         │
-②  La app endereza cada escaneo con los marcadores, lee los QR para saber
+③  La app endereza cada escaneo con los marcadores, lee los QR para saber
     qué hoja es, y recorta cada fotograma perfecto, con su nombre correcto
         │
 ④  La app vuelve a unir los fotogramas en un VIDEO
 ```
 
 La ventana tiene **4 pestañas grandes** (fases), en el orden del flujo:
-**① Generar hojas · ② Procesar escaneos · ③ Calibración · ④ Video final**.
+**① Calibración · ② Generar hojas · ③ Procesar escaneos · ④ Video final**.
+Cada sección importante tiene un botón **«?»** que abre una guía visual
+paso a paso: si dudas, púlsalo.
 
 ---
 
@@ -77,7 +82,7 @@ La ventana tiene **4 pestañas grandes** (fases), en el orden del flujo:
    abre al instante.
 
 La app **recuerda todos tus ajustes** al cerrarla. Además puedes guardar
-**presets** con nombre (abajo a la izquierda en la fase ①): por ejemplo un
+**presets** con nombre (abajo a la izquierda en la fase ②): por ejemplo un
 preset "MXM 2×2" y otro "Cianotipia A4".
 
 ---
@@ -92,17 +97,102 @@ preset "MXM 2×2" y otro "Cianotipia A4".
   hoja Y del proyecto Z". Con **un solo QR legible** en la hoja, la app ya
   sabe qué hoja es. Puedes escanear las hojas en cualquier orden.
 - **`layout.json`**: un archivito que se guarda junto a las hojas generadas.
-  Es el **mapa** con las coordenadas exactas de todo. La fase ② lo necesita.
+  Es el **mapa** con las coordenadas exactas de todo. La fase ③ lo necesita.
   **No lo borres ni lo edites.** (Si usas varias tandas, cada una tiene el
   suyo: `nombre_layout.json`.)
 - **Bleed (sangrado)**: cuánto se recorta "hacia adentro" cada fotograma al
   procesarlo, para que no queden bordes de papel blanco. Se ajusta en %.
-- **Perfil**: el resultado de una calibración (fase ③), guardado con nombre.
+- **Perfil**: el resultado de una calibración (fase ①), guardado con nombre.
   Hay perfiles de **impresora** y de **cianotipia**.
 
 ---
 
-## 4. Fase ① — Generar hojas
+## 4. Fase ① — Calibración (empieza aquí)
+
+### ¿Por qué calibrar PRIMERO?
+
+Porque **todo lo demás usa los resultados**. La fase ② te pedirá un perfil de
+impresora (pestaña Hoja) y, si haces cianotipia, un perfil de color y una
+curva (pestaña Cianotipia). Si calibras al principio, esos desplegables ya
+tendrán tus perfiles y no habrá que volver atrás.
+
+Es trabajo de **una sola vez** (por impresora, y por proceso de cianotipia):
+
+- La **impresora** miente en dos cosas: escala la página un poco (2-4 % es
+  normal) y aplasta tonos. El perfil lo mide y la app lo compensa al generar
+  cada hoja. También descubre el **tamaño mínimo** de marcador ArUco y de QR
+  que TU combinación impresora+escáner reproduce de forma fiable.
+- La **cianotipia** no responde de forma lineal a la tinta del negativo: sin
+  curva, los medios tonos se aplastan y las copias salen chatas. La curva se
+  mide con TU proceso completo real: tu impresora + tu acetato + tu emulsión
+  + tu sol + tu lavado.
+
+> 💡 En la app, cada sección de calibración tiene un botón **«?»** con esta
+> misma guía paso a paso, siempre a un clic.
+>
+> ¿Solo quieres probar la app o pintar sobre papel sin escanear de vuelta?
+> Puedes saltarte esta fase y volver cuando quieras precisión.
+
+### Impresora 🖨 (paso a paso)
+
+1. **Genera la página de prueba**: elige papel y DPI (los mismos que usarás
+   para tus hojas) → **Generar página de prueba**. Se guarda un PNG/TIFF.
+2. **Imprímela al 100 %**: en el diálogo de impresión desactiva «ajustar a
+   página»/«fit to page». Es el paso donde más gente se equivoca.
+3. **Escanéala completa** (los 4 bordes visibles), a 300 DPI o más. Si tu
+   escáner no guarda el DPI en el archivo, anótalo y escríbelo en la casilla
+   «DPI del escaneo».
+4. **Analizar escaneo**. La app mide:
+   - **Escala real** de impresión (¿tu impresora encoge la página un 3 %?).
+     Con el perfil activo, la fase ② lo compensa automáticamente.
+   - **Respuesta tonal** (cómo salen los grises).
+   - **Tamaño mínimo fiable de marcador ArUco y de QR** para TU combinación
+     impresora+escáner, con recomendación de tamaño seguro.
+5. Ponle nombre y **Guardar perfil** → aparece en la fase ②, pestaña Hoja,
+   junto con el botón «Aplicar tamaños recomendados».
+
+### Cianotipia ☀️
+
+Elige primero la **carta** en el desplegable:
+
+| Carta | Para qué sirve |
+|---|---|
+| **Tira Kamiru (21 parches)** | Curva de compensación rápida. Ideal para empezar. |
+| **Carta EDN 2.2 (256 tonos)** | Curva de compensación FINA con los 256 valores, según el método [Easy Digital Negatives](http://www.easydigitalnegatives.com/) de Peter Mrhar. Aquí viene con el marco de marcadores de Kamiru: el análisis del escaneo es automático (no hay que recortar ni subir nada a ninguna web). |
+| **EDN ColorBlocker 3** | Descubre **qué color de tinta bloquea mejor el UV** en tu impresora (36 matices × 21 variantes + grises). Produce un **perfil de color** con el mejor color y un degradado de 3 paradas. |
+
+El flujo es el mismo para las tres (paso a paso):
+
+1. **Genera la carta**: elige color de tinta/perfil de color y espejado (los
+   MISMOS que usarás de verdad) → **Generar carta de calibración**.
+2. **Imprímela en ACETATO al 100 %**, en la calidad más alta de tu impresora
+   (más tinta = mejor bloqueo del UV). La carta sale en espejo: es correcto.
+3. **Haz la cianotipia de esa carta exactamente con tu proceso normal**:
+   acetato con la tinta CONTRA el papel emulsionado, tu tiempo de exposición
+   habitual, revelado, buen lavado… y **secado completo** (el azul se oscurece
+   al secar: medir húmedo falsea la curva).
+4. **Escanea la copia azul seca** (NO el acetato), completa y plana.
+5. **Analizar cianotipia**. Según la carta, la app construye la **curva de
+   compensación** (con rango dinámico y sugerencias) o el **perfil de color**
+   (mejor bloqueador + degradado).
+6. **Guardar perfil** → aparece en la fase ②, pestaña Cianotipia.
+
+Orden recomendado: primero el **ColorBlocker** (una vez, para conocer tu mejor
+tinta) y después la **curva** (tira Kamiru o EDN 2.2) usando ese perfil de
+color, para que la curva mida tu proceso real completo.
+
+> 💡 **Curva suave, sin escalones**: la curva se construye con suavizado +
+> regresión isotónica + interpolación monótona (estilo Easy Digital
+> Negatives), y al generar los negativos se aplica con un difuminado fino
+> (dithering). Resultado: degradados continuos en la copia, sin los saltos
+> "de escalera" que produce una curva cruda medida con ruido.
+
+> Recalibra si cambias de impresora, tinta, acetato, papel, química o si la
+> luz de tu proceso cambia mucho (verano/invierno).
+
+---
+
+## 5. Fase ② — Generar hojas
 
 ### Pestaña 1 · Origen
 - **De un video**: elige el archivo. La app muestra duración/resolución/fps.
@@ -127,7 +217,7 @@ preset "MXM 2×2" y otro "Cianotipia A4".
   elige la combinación que deja los fotogramas más grandes — siempre igual o
   mejor que eligiendo a mano. Si intercambió la cuadrícula, te lo dice al
   terminar.
-- **Perfil de impresora**: si ya calibraste (fase ③), elígelo aquí. La app
+- **Perfil de impresora**: si ya calibraste (fase ①), elígelo aquí. La app
   compensará la escala real de tu impresora y con el botón
   *"Aplicar tamaños recomendados"* usará los tamaños de marcador/QR que se
   midieron como seguros.
@@ -144,17 +234,17 @@ preset "MXM 2×2" y otro "Cianotipia A4".
   (`Hoja 001`), continuo u original.
 
 ### Pestaña 6 · Marcadores  ← **actívala si vas a escanear de vuelta**
-- **Añadir marcadores ArUco + QR**: imprescindible para la fase ②.
+- **Añadir marcadores ArUco + QR**: imprescindible para la fase ③.
   Genera además el `layout.json`.
 - **Cantidad**: 8 recomendado (funciona aunque fallen hasta 5).
   12 si sueles pintar muy al borde.
 - **Tamaño**: 8 mm por defecto. Si calibras tu impresora, usa el recomendado.
 - **QR**: 10-12 mm. El "nombre del proyecto" viaja dentro de cada QR.
 - **Tira de parches de grises** (opcional): permite normalizar niveles del
-  escáner en la fase ② (apagado por defecto: no se toca el color).
+  escáner en la fase ③ (apagado por defecto: no se toca el color).
 
 ### Pestaña 7 · Cianotipia
-Ver la [sección 7](#7-modo-cianotipia-).
+Ver la [sección 8](#8-modo-cianotipia-).
 
 ### Pestaña 8 · Salida
 - Carpeta, nombre, formatos (**PNG** y/o **TIFF** por hoja + **PDF combinado**
@@ -171,16 +261,16 @@ teclado) tal como saldrán: con marcadores, QRs y, en modo cianotipia, el
 negativo o una **simulación de la copia azul** (pestaña 7).
 
 Cuando todo te guste: **Generar hojas** 🎉. Al terminar, la app rellena sola
-el layout en las fases ② y ④.
+el layout en las fases ③ y ④.
 
 ---
 
-## 5. El trabajo físico: imprimir, pintar, escanear
+## 6. El trabajo físico: imprimir, pintar, escanear
 
 ### Imprimir
 - Imprime **al 100 %**: en el diálogo de impresión desactiva
   **"ajustar a página" / "fit to page"**. (Si tu impresora escala sin
-  permiso, la calibración de la fase ③ lo compensa.)
+  permiso, la calibración de la fase ① lo compensa.)
 - Papel y DPI: los mismos que configuraste.
 
 ### Pintar (mixed media)
@@ -200,7 +290,7 @@ el layout en las fases ② y ④.
 
 ---
 
-## 6. Fase ② — Procesar escaneos
+## 7. Fase ③ — Procesar escaneos
 
 1. **Carpeta con los escaneos**: la de arriba.
 2. **Archivo layout (.json)**: el que se generó junto a las hojas
@@ -240,7 +330,7 @@ arte: puedes renombrarlos a mano.
 
 ---
 
-## 7. Modo cianotipia ☀️
+## 8. Modo cianotipia ☀️
 
 ### La idea
 Para cianotipia no se imprime la imagen: se imprime su **NEGATIVO en un
@@ -249,11 +339,11 @@ emulsionado y exponerlo al sol, la luz UV pasa por las zonas transparentes
 (→ azul de Prusia) y se bloquea en las zonas con tinta (→ blanco papel).
 
 Kamiru Studio hace todo el trabajo raro por ti. Con el **modo cianotipia**
-activado (fase ①, pestaña 7):
+activado (fase ②, pestaña 7):
 
 - Cada hoja sale como **negativo**: imágenes invertidas y los **marcadores,
   QRs y nombres también invertidos** — así, en la copia azul final, todo queda
-  con la polaridad normal y la fase ② la procesa como cualquier hoja.
+  con la polaridad normal y la fase ③ la procesa como cualquier hoja.
 - **Fondo del negativo (consumo de tinta)**, a elegir:
   - **AHORRO DE TINTA** (por defecto): las zonas muertas quedan
     **transparentes** (sin tinta) y solo los marcadores, QRs y nombres llevan
@@ -266,30 +356,35 @@ activado (fase ①, pestaña 7):
 - **Espejado** (activado por defecto): el negativo se imprime en espejo para
   exponer "cara impresa contra papel" (más nitidez). La copia azul queda
   derecha sola.
+- **Borde bloqueador** 🆕 (0.8 mm por defecto, regulable 0–1 mm): un marco
+  fino de tinta a densidad MÁXIMA alrededor de cada fotograma, por fuera de
+  la imagen. Evita que la luz se cuele por los cantos del acetato durante la
+  exposición y vele los bordes. Usa automáticamente tu color/degradado
+  ColorBlocker si hay perfil elegido. Ponlo en 0 para desactivarlo.
 - **Color de tinta**: negro por defecto, PERO el negro no siempre es lo que
-  mejor bloquea el UV. La carta **EDN ColorBlocker** (fase ③) mide qué color
+  mejor bloquea el UV. La carta **EDN ColorBlocker** (fase ①) mide qué color
   bloquea mejor en TU impresora y crea un **perfil de color** (con degradado
   de 3 paradas). Si eliges un perfil de color en la pestaña 7, reemplaza al
   color simple.
 - **Curva de compensación**: la joya. La química de la cianotipia no responde
   de forma lineal; sin corrección, los medios tonos se aplastan. La curva se
-  crea con la calibración (fase ③, tira Kamiru o carta EDN 2.2) y se aplica
+  crea con la calibración (fase ①, tira Kamiru o carta EDN 2.2) y se aplica
   sola al generar los negativos. Si generas negativos sin curva, la app te
   ofrece crear la hoja de calibración primero.
 
 ### Receta completa de cianotipia
-1. **(Una vez, opcional pero muy recomendado)** Fase ③ → carta
+1. **(Una vez, opcional pero muy recomendado)** Fase ① → carta
    **EDN ColorBlocker** → imprímela en acetato → cianotipia → escanea → analiza
    → guarda el **perfil de color** (descubre tu mejor tinta).
-2. **(Una vez)** Fase ③ → carta de curva (**tira Kamiru** o **EDN 2.2 de 256
+2. **(Una vez)** Fase ① → carta de curva (**tira Kamiru** o **EDN 2.2 de 256
    tonos**), con tu perfil de color elegido → imprime en acetato → cianotipia
    → escanea la copia azul seca → analiza → guarda el **perfil de curva**.
-3. Fase ① → pestaña 7: activa **modo cianotipia**, elige **fondo ahorro o
+3. Fase ② → pestaña 7: activa **modo cianotipia**, elige **fondo ahorro o
    completo**, tu **perfil de color** y tu **curva**. Marcadores activados
    (pestaña 6).
 4. Genera las hojas → imprímelas en **acetato** al 100 %.
 5. Expón tus cianotipias al sol, revela, lava y **seca**.
-6. **Escanea las copias azules** (no los acetatos) → fase ② en modo
+6. **Escanea las copias azules** (no los acetatos) → fase ③ en modo
    "Automático" → fotogramas azules perfectos → fase ④ → video de cianotipia.
 
 > 💡 La app tolera la **variabilidad de tonos** del azul (exposiciones
@@ -299,7 +394,7 @@ activado (fase ①, pestaña 7):
 > oscura que la otra). Aun así, intenta escanear las copias bien secas y
 > planas.
 
-Refuerzos automáticos de la fase ② para cianotipia:
+Refuerzos automáticos de la fase ③ para cianotipia:
 
 - **Copia en espejo**: si expusiste el acetato al revés (tinta hacia arriba),
   la copia sale espejada y los marcadores serían indetectables. La app lo
@@ -336,52 +431,10 @@ ahorro.
 
 ---
 
-## 8. Fase ③ — Calibración
-
-### Impresora 🖨
-1. Elige papel y DPI → **Generar página de prueba** → imprímela **al 100 %**.
-2. Escanéala completa (anota el DPI del escaneo si tu escáner no lo guarda).
-3. **Analizar escaneo**. La app mide:
-   - **Escala real** de impresión (¿tu impresora encoge la página un 3 %?).
-     Con el perfil activo, la fase ① lo compensa automáticamente.
-   - **Respuesta tonal** (cómo salen los grises).
-   - **Tamaño mínimo fiable de marcador ArUco y de QR** para TU combinación
-     impresora+escáner, con recomendación de tamaño seguro.
-4. Ponle nombre y **Guardar perfil** → aparece en la fase ①, pestaña Hoja.
-
-### Cianotipia ☀️
-
-Elige primero la **carta** en el desplegable:
-
-| Carta | Para qué sirve |
-|---|---|
-| **Tira Kamiru (21 parches)** | Curva de compensación rápida. Ideal para empezar. |
-| **Carta EDN 2.2 (256 tonos)** | Curva de compensación FINA con los 256 valores, según el método [Easy Digital Negatives](http://www.easydigitalnegatives.com/) de Peter Mrhar. Aquí viene con el marco de marcadores de Kamiru: el análisis del escaneo es automático (no hay que recortar ni subir nada a ninguna web). |
-| **EDN ColorBlocker 3** | Descubre **qué color de tinta bloquea mejor el UV** en tu impresora (36 matices × 21 variantes + grises). Produce un **perfil de color** con el mejor color y un degradado de 3 paradas. |
-
-El flujo es el mismo para las tres:
-1. Elige color de tinta/perfil de color y espejado (los MISMOS que usarás de
-   verdad) → **Generar carta de calibración** → imprímela en acetato al 100 %
-   en calidad máxima.
-2. Haz la cianotipia de esa carta exactamente con tu proceso normal.
-3. Escanea la copia azul seca → **Analizar cianotipia**. Según la carta, la
-   app construye la **curva de compensación** (con rango dinámico y
-   sugerencias) o el **perfil de color** (mejor bloqueador + degradado).
-4. **Guardar perfil** → aparece en la fase ①, pestaña Cianotipia.
-
-Orden recomendado: primero el **ColorBlocker** (una vez, para conocer tu mejor
-tinta) y después la **curva** (tira Kamiru o EDN 2.2) usando ese perfil de
-color, para que la curva mida tu proceso real completo.
-
-> Recalibra si cambias de impresora, tinta, acetato, papel, química o si la
-> luz de tu proceso cambia mucho (verano/invierno).
-
----
-
 ## 9. Fase ④ — Video final
 
 1. **Layout (.json)** del proyecto (se rellena solo tras procesar).
-2. **Carpeta con los fotogramas procesados** (la salida de la fase ②).
+2. **Carpeta con los fotogramas procesados** (la salida de la fase ③).
 3. **fps**: se lee del proyecto; cámbialo si quieres otro ritmo.
 4. **Códec**:
    - *MP4 (H.264)* — para compartir, compatible con todo.
@@ -401,19 +454,19 @@ app te avisa y arma el video con los disponibles.
 ## 10. Recetas rápidas
 
 ### Mixed media clásico (pintar sobre papel)
-> ① Origen: video → Fotogramas: TODOS + cuadrícula 2×2 + duplicados ON →
+> ② Origen: video → Fotogramas: TODOS + cuadrícula 2×2 + duplicados ON →
 > Hoja: A4 300 DPI + perfil de impresora → Marcadores: ON (8) →
 > Salida: TIFF + PDF → imprimir → cinta → pintar → escanear 1200 PPI 16 bits →
-> ② procesar → ④ video ProRes.
+> ③ procesar → ④ video ProRes.
 
 ### Cianotipia
-> ③ calibrar cianotipia (una vez) → ① origen + cuadrícula deseada +
+> ① calibrar cianotipia (una vez) → ② origen + cuadrícula deseada +
 > Marcadores ON + Cianotipia ON (curva + espejo) → imprimir en acetato →
-> exponer al sol → escanear las copias azules → ② procesar (auto) →
+> exponer al sol → escanear las copias azules → ③ procesar (auto) →
 > ④ video.
 
 ### Reimprimir una sola hoja dañada
-> ① Salida → "Generar solo las hojas: 5" → Generar. (Mismos ajustes ⇒ misma
+> ② Salida → "Generar solo las hojas: 5" → Generar. (Mismos ajustes ⇒ misma
 > geometría; su escaneo se procesa con el layout de siempre.)
 
 ### Contact sheets "de toda la vida" (solo para archivar)
@@ -462,7 +515,7 @@ con todo"; el 4:4:4 y ProRes son para edición.
 
 La app está pensada para aprovechar máquinas potentes:
 
-- **Escaneos en paralelo** (fase ②): cada escaneo grande (1200 PPI, 16 bits)
+- **Escaneos en paralelo** (fase ③): cada escaneo grande (1200 PPI, 16 bits)
   usa ~2–3 GB de RAM mientras se procesa.
   - PC con 48 GB (Ryzen 9900X): 6–8 en paralelo van sobrados.
   - MacBook M4 Max con 32 GB: 4–6.
