@@ -457,8 +457,10 @@ class CalibPhase(PhaseFrame):
             row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
         bk = ttk.Frame(sec)
         bk.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        # color_picker usa grid: nada de pack en este frame (TclError).
         ttk.Checkbutton(bk, text="Color del fondo de la carta:",
-                        variable=self.var_c_block_on).pack(side="left")
+                        variable=self.var_c_block_on).grid(
+            row=0, column=0, sticky="w")
         self.color_picker(bk, self.var_c_block_color, row=0, col=1)
         ttk.Label(sec, text="Por defecto el fondo va a densidad máxima (negro "
                             "con degradado): si tu impresora imprime mal los "
