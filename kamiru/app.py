@@ -587,8 +587,11 @@ class SheetsPhase(PhaseFrame):
                     textvariable=self.var_cyan_halo).pack(side="left", padx=4)
         bk = ttk.Frame(sec)
         bk.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        # OJO: color_picker usa grid; dentro de un mismo frame no se puede
+        # mezclar pack y grid (TclError al arrancar la app).
         ttk.Checkbutton(bk, text="Color del bloqueador personalizado:",
-                        variable=self.var_cyan_block_on).pack(side="left")
+                        variable=self.var_cyan_block_on).grid(
+            row=0, column=0, sticky="w")
         self.color_picker(bk, self.var_cyan_block_color, row=0, col=1)
         ttk.Label(sec, text="Lo externo a los fotogramas (fondo completo, halos "
                             "y borde bloqueador) se imprime por defecto con la "
