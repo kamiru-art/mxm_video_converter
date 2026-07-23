@@ -105,8 +105,11 @@ GUIDES = {
              "Elige la carta («tira Kamiru» de 21 parches para empezar, o "
              "«EDN 2.2» de 256 tonos para máxima finura), el papel, el DPI, "
              "y el color de tinta (o tu perfil ColorBlocker). Deja el "
-             "espejado activado si así imprimirás tus negativos. Pulsa "
-             "«Generar carta de calibración…»."),
+             "espejado activado si así imprimirás tus negativos. Si tu "
+             "impresora imprime mal los campos grandes de negro 100 %, "
+             "activa «Color del fondo de la carta» y elige un color denso "
+             "que sí imprima bien (el fondo no se mide, solo bloquea el "
+             "UV). Pulsa «Generar carta de calibración…»."),
             ("🖨️", "2 · Imprime en ACETATO",
              "Imprime la carta al 100 % en una hoja de acetato/transparencia "
              "para inyección de tinta, en la calidad MÁS ALTA que tenga tu "
@@ -230,6 +233,15 @@ GUIDES = {
              "copia) y cada marcador/QR/nombre lleva su isla entintada "
              "(queda blanca) para ser legible. El halo de 5 mm aguanta "
              "manchas de brocha."),
+            ("🖤", "Color del bloqueador (si tu impresora odia el negro 100 %)",
+             "Todo lo externo a los fotogramas (fondo completo, halos y "
+             "borde bloqueador) se imprime por defecto con la tinta a "
+             "densidad máxima — que con un degradado ColorBlocker es negro "
+             "puro. Algunas impresoras imprimen mal los campos grandes de "
+             "negro 100 % (bandas, tinta a rayas): activa «Color del "
+             "bloqueador personalizado» y elige un color denso que tu "
+             "impresora sí imprima bien. Solo tiene que bloquear el UV; "
+             "no afecta a los tonos de las imágenes."),
             ("📈", "Curva de compensación",
              "Si elegiste un perfil de curva (fase ① Calibración), cada "
              "fotograma se corrige para que la química no aplaste los "
