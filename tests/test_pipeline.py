@@ -854,6 +854,223 @@ if _tk_ok:
               f"{type(_e).__name__}: {_e}")
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 12. Saneado de nombres y contención de rutas ══")
+
+# sanitize_label es la ÚNICA defensa contra que una etiqueta de un layout
+# compartido escriba fuera de la carpeta de salida.
+check("sanitize_label neutraliza separadores de ruta",
+      "/" not in core.sanitize_label("../../etc/passwd")
+      and "\\" not in core.sanitize_label("..\\..\\windows")
+      and ":" not in core.sanitize_label("C:/temp/x"))
+check("sanitize_label nunca devuelve vacío",
+      core.sanitize_label("") == "frame" and core.sanitize_label("   ") == "frame")
+
+# Etiquetas repetidas: antes la segunda pisaba a la primera en el layout.json
+# y ese fotograma no se podía recuperar nunca del escaneo.
+_labs = core.uniquify_labels(["toma", "toma", "otra", "toma", "toma_2"])
+check("uniquify_labels no deja duplicados",
+      len(_labs) == len(set(_labs)) == 5, str(_labs))
+check("uniquify_labels conserva la primera aparición intacta",
+      _labs[0] == "toma" and _labs[2] == "otra", str(_labs))
+
+# Dos archivos con el mismo nombre sin extensión deben acabar en DOS entradas
+# del layout (el bug real: 'toma.png' y 'toma.jpg' colisionaban).
+_col_dir = TMP / "colision"
+_col_dir.mkdir(parents=True, exist_ok=True)
+for _ext in (".png", ".jpg"):
+    _im = Image.new("RGB", (120, 90), (200, 60, 60) if _ext == ".png" else (60, 60, 200))
+    _im.save(_col_dir / f"toma{_ext}")
+_col_paths = [str(_col_dir / "toma.png"), str(_col_dir / "toma.jpg")]
+_s_col = settings_base(TMP / "hojas_colision", out_name="colision",
+                       project_name="colision")
+_res_col = core.generate(_s_col, _col_paths, labels=["toma", "toma"])
+_lay_col = layoutfile.load(_res_col["layout"])
+_n_frames_col = sum(len(h.get("frames", {})) for h in _lay_col["hojas"])
+check("etiquetas repetidas no pierden fotogramas en el layout",
+      _n_frames_col == 2, f"frames en el layout={_n_frames_col} (esperado 2)")
+
+# out_name viene de 'ajustes' de un layout compartido en el flujo de rescate.
+_ev_out = TMP / "evasion" / "salida"
+_s_ev = settings_base(_ev_out, out_name="../../fuera_evil", project_name="ev")
+_res_ev = core.generate(_s_ev, frame_paths[:2], labels=labels[:2])
+_generados = list(_res_ev["pages"]) + [_res_ev["layout"]]
+_escapados = [p for p in _generados if p and
+              _ev_out.resolve() != Path(p).resolve().parent]
+check("out_name con '..' no escribe fuera de la carpeta de salida",
+      not _escapados, f"escaparon: {_escapados}")
+
+# rescue._safe_join: contención de las rutas que vienen del layout.
+check("_safe_join rechaza rutas absolutas",
+      rescue._safe_join(TMP, "/etc/passwd") is None)
+check("_safe_join rechaza el salto con '..'",
+      rescue._safe_join(TMP, "../../secreto.png") is None)
+check("_safe_join acepta una relativa contenida",
+      rescue._safe_join(TMP, "sub/x.png") == (TMP / "sub" / "x.png").resolve())
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 13. Robustez ante layouts y escaneos hostiles ══")
+
+_scan_cualquiera = Path(res["pages"][0])
+
+# Un layout.json malformado tumbaba la tanda ENTERA de escaneos.
+for _nombre, _mal in (
+    ("sin lienzo", {"marcadores": {"bboxes": {}}, "hojas": []}),
+    ("ancho no numérico", {"lienzo": {"ancho_px": "x", "alto_px": 100},
+                           "marcadores": {"bboxes": {}}, "hojas": []}),
+    ("sin marcadores", {"lienzo": {"ancho_px": 100, "alto_px": 100},
+                        "hojas": []}),
+):
+    try:
+        _r = scan._process_one(_scan_cualquiera, _mal, TMP / "hostil_out",
+                               scan.ScanOptions(report=False), "normal")
+        _ok_mal = bool(_r.error)
+    except Exception as _e:
+        _ok_mal = False
+        _r = None
+    check(f"layout malformado ({_nombre}) falla solo ese escaneo", _ok_mal,
+          "lanzó excepción en vez de devolver error" if _r is None else "sin error")
+
+# Lienzo desproporcionado: reserva de memoria descomunal al enderezar.
+_bomba_layout = {"lienzo": {"ancho_px": 10 ** 6, "alto_px": 10 ** 6},
+                 "marcadores": {"dict": "DICT_4X4_50",
+                                "bboxes": {"0": [0, 0, 10, 10]}},
+                 "hojas": []}
+try:
+    _r_bomba = scan._process_one(_scan_cualquiera, _bomba_layout,
+                                 TMP / "hostil_out",
+                                 scan.ScanOptions(report=False), "normal")
+    _ok_bomba = bool(_r_bomba.error)
+except Exception:
+    _ok_bomba = False
+check("lienzo desproporcionado se rechaza sin reservar memoria", _ok_bomba)
+
+# Bomba de descompresión: se comprueba el tope bajando el umbral.
+_max_orig = scan.MAX_IMAGE_PIXELS
+try:
+    scan.MAX_IMAGE_PIXELS = 100          # 10×10 px como máximo
+    _leida = scan.leer_imagen_robusta(_scan_cualquiera)
+    check("imagen por encima del tope de píxeles se rechaza", _leida is None)
+finally:
+    scan.MAX_IMAGE_PIXELS = _max_orig
+check("con el tope normal la misma imagen se lee bien",
+      scan.leer_imagen_robusta(_scan_cualquiera) is not None)
+
+# QR de OTRO proyecto: antes se aceptaba y se recortaba con esta geometría.
+_page0 = cv2.imread(res["pages"][0], cv2.IMREAD_COLOR)
+_hoja_ok, _via_ok = scan._identify_sheet(_page0, layout, 1.0, None)
+check("el QR identifica la hoja dentro del mismo proyecto",
+      _hoja_ok is not None, f"via={_via_ok}")
+_layout_otro = json.loads(json.dumps(layout))
+_layout_otro["proyecto"] = "PROYECTO_COMPLETAMENTE_DISTINTO"
+_hoja_x, _ = scan._identify_sheet(_page0, _layout_otro, 1.0, None)
+check("un QR de otro proyecto NO identifica la hoja", _hoja_x is None)
+
+# parse_qr_payload: decodifica texto que viene de un QR (entrada no confiable).
+check("parse_qr_payload lee el formato v2",
+      markers.parse_qr_payload(markers.qr_payload("proy", 3, 2, "et"))
+      == {"proyecto": "proy", "hoja": 3, "celda": 2, "etiqueta": "et"})
+check("parse_qr_payload trata el texto suelto como QR v1",
+      markers.parse_qr_payload("solo_etiqueta")["etiqueta"] == "solo_etiqueta")
+check("parse_qr_payload devuelve None con texto vacío",
+      markers.parse_qr_payload("") is None)
+check("parse_qr_payload no revienta con basura",
+      markers.parse_qr_payload("K2|p|no_numero|x|et") is None
+      and markers.parse_qr_payload("|||||||") is not None)
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 14. ffmpeg: sondeo, extracción y manejo de errores ══")
+try:
+    from kamiru import ffmpeg_utils
+
+    _ff = ffmpeg_utils.find_ffmpeg()
+    check("se localiza un ffmpeg utilizable", bool(_ff))
+
+    _vid_path = str(TMP / "final.mp4")
+    _info = ffmpeg_utils.probe(_ff, _vid_path)
+    check("probe mide la resolución del video",
+          _info.width > 0 and _info.height > 0,
+          f"{_info.width}×{_info.height}")
+    check("probe mide una duración positiva", _info.duration > 0,
+          f"duracion={_info.duration}")
+
+    _ex_dir = TMP / "extraidos"
+    _got = ffmpeg_utils.extract_frames(_ff, _vid_path, str(_ex_dir))
+    # El video se armó con 7 imágenes; el demuxer concat repite la última sin
+    # 'duration' (ver videoout.build_video), así que salen 7 u 8 fotogramas.
+    check("extract_frames recupera todos los fotogramas del video",
+          7 <= len(_got) <= 8, f"extraídos={len(_got)}")
+    check("los fotogramas extraídos son imágenes legibles",
+          all(cv2.imread(p) is not None for p in _got[:3]))
+
+    # max_frames corta antes (vista previa rápida).
+    _got2 = ffmpeg_utils.extract_frames(_ff, _vid_path, str(TMP / "extraidos2"),
+                                        max_frames=3)
+    check("extract_frames respeta max_frames", len(_got2) <= 3,
+          f"extraídos={len(_got2)}")
+
+    # Un archivo que no es video debe dar FFmpegError, no colgarse ni pasar.
+    _no_video = TMP / "no_es_video.mp4"
+    _no_video.write_bytes(b"esto no es un video" * 100)
+    try:
+        ffmpeg_utils.extract_frames(_ff, str(_no_video), str(TMP / "extraidos3"))
+        _ok_err = False
+    except ffmpeg_utils.FFmpegError:
+        _ok_err = True
+    except Exception:
+        _ok_err = False
+    check("un archivo que no es video lanza FFmpegError", _ok_err)
+except Exception as _e:
+    check("pruebas de ffmpeg", False, f"{type(_e).__name__}: {_e}")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 15. Dedup → video: «pintar una vez, reutilizar» ══")
+try:
+    from kamiru import videoout as _vo
+
+    # La línea de tiempo de la sección 9 tenía rep == etiqueta en todas las
+    # posiciones, así que NUNCA se ejercitaba la reutilización: un dibujo
+    # pintado una sola vez debe reaparecer en todas sus posiciones del video.
+    _lay_reuse = json.loads(json.dumps(layout))
+    _lay_reuse["timeline"] = [
+        {"pos": 1, "etiqueta": labels[0], "rep": labels[0]},
+        {"pos": 2, "etiqueta": labels[1], "rep": labels[0]},   # reutilizado
+        {"pos": 3, "etiqueta": labels[2], "rep": labels[2]},
+        {"pos": 4, "etiqueta": labels[3], "rep": labels[0]},   # reutilizado
+    ]
+    _files_r, _miss_r = _vo.frames_from_timeline(_lay_reuse, outp1)
+    check("el representante deduplicado se reutiliza en cada posición",
+          len(_files_r) == 4 and not _miss_r
+          and _files_r[0] == _files_r[1] == _files_r[3]
+          and _files_r[2] != _files_r[0],
+          f"files={len(_files_r)} missing={_miss_r}")
+
+    # El orden lo manda 'pos', no el orden de aparición en la lista.
+    _lay_orden = json.loads(json.dumps(layout))
+    _lay_orden["timeline"] = [
+        {"pos": 2, "etiqueta": labels[1], "rep": labels[1]},
+        {"pos": 1, "etiqueta": labels[0], "rep": labels[0]},
+    ]
+    _files_o, _ = _vo.frames_from_timeline(_lay_orden, outp1)
+    check("la línea de tiempo se ordena por 'pos'",
+          len(_files_o) == 2 and Path(_files_o[0]).stem.startswith(labels[0]),
+          f"primero={Path(_files_o[0]).stem if _files_o else None}")
+
+    # Un representante sin archivo procesado se reporta como faltante.
+    _lay_falta = json.loads(json.dumps(layout))
+    _lay_falta["timeline"] = [{"pos": 1, "etiqueta": "no_existe",
+                               "rep": "no_existe"}]
+    _f2, _m2 = _vo.frames_from_timeline(_lay_falta, outp1)
+    check("un representante sin archivo se reporta como faltante",
+          not _f2 and _m2 == ["no_existe"], f"files={_f2} missing={_m2}")
+
+    # Y el video se arma de verdad con archivos repetidos (demuxer concat).
+    _vid_r = _vo.build_video(_files_r, 6.0, TMP / "reuso.mp4", _vo.CODECS[0])
+    check("se construye el video con fotogramas repetidos",
+          Path(_vid_r).stat().st_size > 5000)
+except Exception as _e:
+    check("dedup → video", False, f"{type(_e).__name__}: {_e}")
+
+# ════════════════════════════════════════════════════════════════
 fails = [n for n, ok in PASSED if not ok]
 print(f"\n{'=' * 56}\nResultado: {len(PASSED) - len(fails)}/{len(PASSED)} pruebas OK")
 if fails:

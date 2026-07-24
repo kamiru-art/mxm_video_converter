@@ -17,11 +17,50 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
 class FFmpegError(RuntimeError):
     pass
+
+
+class _StderrDrain:
+    """Vacía stderr de ffmpeg en segundo plano.
+
+    ffmpeg escribe diagnósticos del decodificador por stderr. Si nadie lee esa
+    tubería, el sistema operativo la llena (~64 KB) y ffmpeg se BLOQUEA al
+    escribir; como está bloqueado deja de emitir el progreso por stdout y el
+    bucle lector se queda esperando una línea que no llega nunca (deadlock
+    clásico de tuberías: colgaba la app con un video corrupto y dejaba el
+    botón de cancelar inservible).
+
+    Este hilo lee continuamente y conserva solo la cola del texto, que es lo
+    que se muestra al usuario si ffmpeg termina con error.
+    """
+
+    _MAX_LINES = 400
+
+    def __init__(self, stream, keep_chars: int = 1500):
+        self._stream = stream
+        self._keep = keep_chars
+        self._lines: list[str] = []
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        try:
+            for line in self._stream:
+                self._lines.append(line)
+                if len(self._lines) > self._MAX_LINES:
+                    del self._lines[: self._MAX_LINES // 2]
+        except (OSError, ValueError):
+            pass
+
+    def text(self, timeout: float = 2.0) -> str:
+        """Texto final de stderr (espera brevemente a que el hilo termine)."""
+        self._thread.join(timeout)
+        return "".join(self._lines)[-self._keep:]
 
 
 def _no_window_kwargs():
@@ -171,6 +210,9 @@ def extract_frames(
         bufsize=1,
         **_no_window_kwargs(),
     )
+    # stderr se vacía en paralelo: si no, ffmpeg se bloquea al llenarlo y el
+    # bucle de abajo espera para siempre un progreso que ya no llega.
+    errdrain = _StderrDrain(proc.stderr)
 
     reached_max = False
     try:
@@ -197,12 +239,9 @@ def extract_frames(
     # Si paramos a propósito por max_frames, el código de salida no es 0 y es
     # esperado; no se trata como error.
     if not reached_max and proc.returncode not in (0, None):
-        err = ""
-        try:
-            err = (proc.stderr.read() or "")[-1500:]
-        except Exception:
-            pass
-        raise FFmpegError(f"ffmpeg terminó con error (código {proc.returncode}).\n{err}")
+        raise FFmpegError(
+            f"ffmpeg terminó con error (código {proc.returncode}).\n"
+            f"{errdrain.text()}")
 
     frames = sorted(str(p) for p in out.glob("frame_*.png"))
     if max_frames:

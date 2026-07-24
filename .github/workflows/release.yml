@@ -17,8 +17,10 @@ on:
         required: false
         default: ""
 
+# Permiso MÍNIMO por defecto: solo el job que publica el release necesita
+# escribir en el repositorio; los de construcción no.
 permissions:
-  contents: write
+  contents: read
 
 env:
   PYTHONUTF8: "1"   # consola UTF-8 también en Windows (emojis del test/log)
@@ -106,6 +108,8 @@ jobs:
     name: Publicar Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # crear el tag y publicar los binarios
     # Se publica al empujar un tag v*, una rama release/vX.Y.Z, o al lanzarlo
     # a mano indicando el tag (la action crea el tag si no existe).
     if: >-
