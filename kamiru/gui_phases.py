@@ -142,6 +142,7 @@ class ScansPhase(PhaseFrame):
         ttk.Checkbutton(sec, text="Generar informe (HTML con miniaturas + JSON + CSV)",
                         variable=self.var_report).grid(
             row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.enable_autowrap()
 
     # ------------------------------------------------------------ widgets
     def _row_dir(self, sec, row, label, var, title):
@@ -501,6 +502,7 @@ class CalibPhase(PhaseFrame):
                                      command=self._save_cyano)
         self.c_save_btn.pack(side="left", padx=4)
         self.refresh_color_profiles()
+        self.enable_autowrap()
 
     def _pick(self, var):
         f = filedialog.askopenfilename(title="Elegir escaneo", filetypes=_IMG_TYPES)
@@ -759,6 +761,7 @@ class VideoPhase(PhaseFrame):
         self.build_log(self, side="bottom")
         self._append_log("El último paso: convierte los fotogramas recuperados "
                          "de nuevo en video, en el orden original.")
+        self.enable_autowrap()
 
     def _pick_layout(self):
         f = filedialog.askopenfilename(title="Elegir layout",

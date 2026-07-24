@@ -214,6 +214,7 @@ class SheetsPhase(PhaseFrame):
         self._tab_markers(nb)
         self._tab_cyanotype(nb)
         self._tab_output(nb)
+        self.enable_autowrap()
 
     def _tab_source(self, nb):
         tab = ttk.Frame(nb, padding=PAD)

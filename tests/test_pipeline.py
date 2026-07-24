@@ -798,9 +798,43 @@ if _tk_ok:
                        <= _a.winfo_rooty() + _a.winfo_height())
             if not _dentro:
                 _fuera.append(f"{type(_fase).__name__}.{_nombre}")
-        _a.destroy()
         check("botones de acción visibles en ventana mínima (1100x860)",
               not _fuera, f"fuera de pantalla: {_fuera}")
+        # Campo hex de los selectores de color: acepta lo que reporta el
+        # ColorBlocker (#B2FF66, b2ff66, #fa0…).
+        _PF = _app_mod.PhaseFrame
+        check("normalización de códigos hex en selectores de color",
+              _PF.hex_normalizado("b2ff66") == "#B2FF66"
+              and _PF.hex_normalizado("#fa0") == "#FFAA00"
+              and _PF.hex_normalizado("no-es-hex") is None)
+        # Autowrap: las descripciones deben llenar el ancho real de su
+        # columna (antes quedaban clavadas en 380/740 px con espacio muerto).
+        _a.geometry("1500x900")
+        _a.phases_nb.select(_a.calib_phase)
+        _a.update()
+        _a.update_idletasks()
+
+        def _wrap_max(w):
+            m = 0
+            for _ch in w.winfo_children():
+                m = max(m, _wrap_max(_ch))
+            if w.winfo_class() == "TLabel":
+                try:
+                    m = max(m, int(str(w.cget("wraplength"))))
+                except Exception:
+                    pass
+            return m
+        _wm = _wrap_max(_a.calib_phase)
+        check("descripciones llenan el ancho de su columna (autowrap)",
+              _wm > 450, f"wraplength_max={_wm} (antes fijo en 380)")
+        # El log no debe morir con emojis fuera del BMP (Tk de Windows).
+        try:
+            _a.scans_phase._append_log("📋 prueba de emoji fuera del BMP")
+            _emoji_ok = True
+        except Exception:
+            _emoji_ok = False
+        check("el log tolera emojis fuera del BMP (📋)", _emoji_ok)
+        _a.destroy()
     except Exception as _e:
         check("la app construye todas las fases y pestañas", False,
               f"{type(_e).__name__}: {_e}")
