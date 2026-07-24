@@ -807,13 +807,11 @@ if _tk_ok:
               _PF.hex_normalizado("b2ff66") == "#B2FF66"
               and _PF.hex_normalizado("#fa0") == "#FFAA00"
               and _PF.hex_normalizado("no-es-hex") is None)
-        # Autowrap: las descripciones deben llenar el ancho real de su
-        # columna (antes quedaban clavadas en 380/740 px con espacio muerto).
-        _a.geometry("1500x900")
-        _a.phases_nb.select(_a.calib_phase)
-        _a.update()
-        _a.update_idletasks()
-
+        # Autowrap: las descripciones deben SEGUIR el ancho de su columna en
+        # vez de quedar clavadas (antes fijas en 380/740 px con espacio
+        # muerto). Comprobación de comportamiento (independiente de la
+        # plataforma y de las fuentes): al ensanchar la ventana, el wraplength
+        # máximo crece; si autowrap no corriera, se quedaría igual.
         def _wrap_max(w):
             m = 0
             for _ch in w.winfo_children():
@@ -824,9 +822,19 @@ if _tk_ok:
                 except Exception:
                     pass
             return m
-        _wm = _wrap_max(_a.calib_phase)
-        check("descripciones llenan el ancho de su columna (autowrap)",
-              _wm > 450, f"wraplength_max={_wm} (antes fijo en 380)")
+
+        _a.phases_nb.select(_a.calib_phase)
+        _a.geometry("1000x900")
+        _a.update()
+        _a.update_idletasks()
+        _wm_narrow = _wrap_max(_a.calib_phase)
+        _a.geometry("1700x900")
+        _a.update()
+        _a.update_idletasks()
+        _wm_wide = _wrap_max(_a.calib_phase)
+        check("las descripciones siguen el ancho de la columna (autowrap)",
+              _wm_wide > _wm_narrow + 80 and _wm_narrow > 0,
+              f"estrecho={_wm_narrow} ancho={_wm_wide} (antes fijo en 380)")
         # El log no debe morir con emojis fuera del BMP (Tk de Windows).
         try:
             _a.scans_phase._append_log("📋 prueba de emoji fuera del BMP")
