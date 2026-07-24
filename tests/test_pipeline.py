@@ -778,8 +778,29 @@ if _tk_ok:
         _a = _app_mod.App()
         _a.update_idletasks()
         _a.update()
-        _a.destroy()
         check("la app construye todas las fases y pestañas", True)
+        # Y en el tamaño MÍNIMO de ventana, los botones de acción de cada
+        # fase deben seguir visibles (regresión v2.4.1: las pestañas crecieron
+        # más que la pantalla y pack recortó la barra con «Vista previa» y
+        # «Generar hojas»).
+        _a.geometry("1100x860")
+        _a.update()
+        _fuera = []
+        for _fase, _nombre in ((_a.sheets_phase, "preview_btn"),
+                               (_a.sheets_phase, "run_btn"),
+                               (_a.scans_phase, "run_btn"),
+                               (_a.video_phase, "run_btn")):
+            _a.phases_nb.select(_fase)
+            _a.update()
+            _btn = getattr(_fase, _nombre)
+            _dentro = (_btn.winfo_viewable()
+                       and _btn.winfo_rooty() + _btn.winfo_height()
+                       <= _a.winfo_rooty() + _a.winfo_height())
+            if not _dentro:
+                _fuera.append(f"{type(_fase).__name__}.{_nombre}")
+        _a.destroy()
+        check("botones de acción visibles en ventana mínima (1100x860)",
+              not _fuera, f"fuera de pantalla: {_fuera}")
     except Exception as _e:
         check("la app construye todas las fases y pestañas", False,
               f"{type(_e).__name__}: {_e}")

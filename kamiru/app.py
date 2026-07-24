@@ -165,20 +165,14 @@ class SheetsPhase(PhaseFrame):
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=PAD, pady=(0, PAD))
-        self._tab_source(nb)
-        self._tab_grid(nb)
-        self._tab_sheet(nb)
-        self._tab_labels(nb)
-        self._tab_pagenum(nb)
-        self._tab_markers(nb)
-        self._tab_cyanotype(nb)
-        self._tab_output(nb)
-
-        # Barra inferior de acción
+        # La BARRA DE ACCIÓN se empaqueta PRIMERO y anclada abajo: con pack,
+        # los primeros en empaquetarse tienen prioridad de espacio. Si las
+        # pestañas piden más alto del que hay en pantalla, el que se encoge es
+        # el notebook — los botones (Vista previa / Generar hojas) quedan
+        # SIEMPRE visibles. (Antes la barra iba al final y en pantallas bajas
+        # desaparecía entera.)
         bar = ttk.Frame(self, padding=(PAD, 0, PAD, 0))
-        bar.pack(fill="x")
+        bar.pack(side="bottom", fill="x")
         self.estimate_lbl = ttk.Label(bar, text="", style="Info.TLabel")
         self.estimate_lbl.pack(anchor="w", pady=(0, 4))
         self.progress = ttk.Progressbar(bar, mode="determinate")
@@ -209,6 +203,17 @@ class SheetsPhase(PhaseFrame):
                    command=self._load_preset).pack(side="left")
         ttk.Button(pf, text="Guardar", width=8,
                    command=self._save_preset).pack(side="left", padx=(4, 0))
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=PAD, pady=(0, PAD))
+        self._tab_source(nb)
+        self._tab_grid(nb)
+        self._tab_sheet(nb)
+        self._tab_labels(nb)
+        self._tab_pagenum(nb)
+        self._tab_markers(nb)
+        self._tab_cyanotype(nb)
+        self._tab_output(nb)
 
     def _tab_source(self, nb):
         tab = ttk.Frame(nb, padding=PAD)
