@@ -24,6 +24,10 @@ permissions:
 
 env:
   PYTHONUTF8: "1"   # consola UTF-8 también en Windows (emojis del test/log)
+  # uv debe usar el Python de setup-python, NO descargarse uno propio: la
+  # ventana es Tkinter y un intérprete sin Tk produce ejecutables que abren
+  # en blanco. El de setup-python lo trae garantizado.
+  UV_PYTHON_PREFERENCE: only-system
 
 jobs:
   build:
