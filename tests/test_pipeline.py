@@ -808,33 +808,39 @@ if _tk_ok:
               and _PF.hex_normalizado("#fa0") == "#FFAA00"
               and _PF.hex_normalizado("no-es-hex") is None)
         # Autowrap: las descripciones deben SEGUIR el ancho de su columna en
-        # vez de quedar clavadas (antes fijas en 380/740 px con espacio
-        # muerto). Comprobación de comportamiento (independiente de la
-        # plataforma y de las fuentes): al ensanchar la ventana, el wraplength
-        # máximo crece; si autowrap no corriera, se quedaría igual.
-        def _wrap_max(w):
-            m = 0
+        # vez de quedar clavadas (antes fijas en 380/740 px). NO se comprueba
+        # redimensionando la ventana: en Windows/macOS el geometry() pasa por
+        # el window manager real y se aplica de forma ASÍNCRONA (un update()
+        # no basta), lo que hacía el test intermitente. En su lugar se dispara
+        # un <Configure> SINTÉTICO directo sobre una etiqueta: si el cableado
+        # de enable_autowrap existe, su handler fija wraplength = ancho - 8;
+        # si no, la etiqueta se queda en su valor fijo. Determinista en las
+        # tres plataformas, sin window manager ni timing.
+        def _primera_etiqueta_con_wrap(w):
             for _ch in w.winfo_children():
-                m = max(m, _wrap_max(_ch))
+                r = _primera_etiqueta_con_wrap(_ch)
+                if r is not None:
+                    return r
             if w.winfo_class() == "TLabel":
                 try:
-                    m = max(m, int(str(w.cget("wraplength"))))
+                    if int(str(w.cget("wraplength"))) > 0:
+                        return w
                 except Exception:
                     pass
-            return m
+            return None
 
         _a.phases_nb.select(_a.calib_phase)
-        _a.geometry("1000x900")
         _a.update()
-        _a.update_idletasks()
-        _wm_narrow = _wrap_max(_a.calib_phase)
-        _a.geometry("1700x900")
-        _a.update()
-        _a.update_idletasks()
-        _wm_wide = _wrap_max(_a.calib_phase)
+        _lbl = _primera_etiqueta_con_wrap(_a.calib_phase)
+        _autowrap_ok = False
+        _detalle = "sin etiquetas con wraplength en la fase de calibración"
+        if _lbl is not None:
+            _lbl.event_generate("<Configure>", width=888)
+            _wl = int(str(_lbl.cget("wraplength")))
+            _autowrap_ok = _wl == 880  # max(120, 888 - 8)
+            _detalle = f"wraplength={_wl} tras <Configure> sintético de 888"
         check("las descripciones siguen el ancho de la columna (autowrap)",
-              _wm_wide > _wm_narrow + 80 and _wm_narrow > 0,
-              f"estrecho={_wm_narrow} ancho={_wm_wide} (antes fijo en 380)")
+              _autowrap_ok, _detalle)
         # El log no debe morir con emojis fuera del BMP (Tk de Windows).
         try:
             _a.scans_phase._append_log("📋 prueba de emoji fuera del BMP")
