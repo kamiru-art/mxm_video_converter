@@ -1,0 +1,44 @@
+[project]
+name = "kamiru-studio"
+description = "Contact sheets, mixed media y cianotipia en una sola app."
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+
+dependencies = [
+    "Pillow>=10.0,<13",
+    "imageio-ffmpeg>=0.4.8,<1",
+    "numpy>=1.24,<3",
+    "qrcode[pil]>=7.4,<9",     # generación de códigos QR
+]
+
+# OpenCV (marcadores ArUco, alineación de escaneos, QR) viene en dos sabores
+# que NO pueden convivir en el mismo entorno:
+#   desktop  → uso normal de la app.
+#   headless → para construir los ejecutables: pesa menos y evita conflictos
+#              de librerías gráficas dentro del binario (la ventana es Tkinter).
+[project.optional-dependencies]
+desktop = ["opencv-python>=4.8,<6"]
+headless = ["opencv-python-headless>=4.8,<6"]
+
+[project.scripts]
+kamiru-studio = "kamiru.app:main"
+
+[dependency-groups]
+build = ["pyinstaller>=6.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# La versión vive SOLO en kamiru/__init__.py para no duplicarla al publicar.
+[tool.hatch.version]
+path = "kamiru/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["kamiru"]
+
+[tool.uv]
+# Los dos sabores de OpenCV se excluyen mutuamente, pero ambos quedan
+# resueltos en uv.lock para que el build de release sea reproducible.
+conflicts = [[{ extra = "desktop" }, { extra = "headless" }]]

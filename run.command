@@ -9,6 +9,13 @@ cd "$DIR"
 # el Tk 8.5 que trae el sistema de fábrica está obsoleto y a menudo dibuja la
 # ventana EN BLANCO. El Python de python.org incluye un Tk 8.6 que sí funciona,
 # así que lo preferimos.
+# Camino rápido: si uv está instalado, él prepara el entorno con EXACTAMENTE
+# las versiones de uv.lock (el mismo software que el ejecutable oficial).
+if command -v uv >/dev/null 2>&1; then
+  echo "Usando uv (entorno reproducible desde uv.lock)…"
+  exec uv run --frozen --extra desktop python -m kamiru
+fi
+
 pick_python() {
   local cands=() p w
   for p in /Library/Frameworks/Python.framework/Versions/*/bin/python3; do
