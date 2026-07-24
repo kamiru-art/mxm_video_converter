@@ -324,6 +324,53 @@ def sanitize_label(label: str) -> str:
     return out.strip() or "frame"
 
 
+def uniquify_labels(labels) -> list[str]:
+    """Desambigua etiquetas repetidas conservando el orden.
+
+    Las etiquetas son la CLAVE de los fotogramas en el layout.json, así que
+    dos repetidas hacen que la segunda pise a la primera y ese fotograma no se
+    pueda recuperar nunca del escaneo. Ocurre de verdad al etiquetar por
+    nombre de archivo: 'toma.png' y 'toma.jpg' comparten el stem 'toma'.
+
+    La primera aparición se respeta tal cual; las siguientes reciben un sufijo
+    '_2', '_3'… (saltando los que ya existan en la lista).
+    """
+    vistas: dict[str, int] = {}
+    ocupadas = set()
+    out = []
+    for lab in (labels or []):
+        lab = str(lab)
+        if lab not in ocupadas:
+            out.append(lab)
+            ocupadas.add(lab)
+            vistas[lab] = 1
+            continue
+        n = vistas.get(lab, 1)
+        while True:
+            n += 1
+            cand = f"{lab}_{n}"
+            if cand not in ocupadas:
+                break
+        vistas[lab] = n
+        out.append(cand)
+        ocupadas.add(cand)
+    return out
+
+
+def _unique_key(usadas: set, base: str) -> str:
+    """Clave única para el registro del layout (defensa de último recurso)."""
+    if base not in usadas:
+        usadas.add(base)
+        return base
+    n = 1
+    while True:
+        n += 1
+        cand = f"{base}_{n}"
+        if cand not in usadas:
+            usadas.add(cand)
+            return cand
+
+
 # Campos de Settings que se guardan en el layout.json para poder regenerar
 # hojas idénticas más tarde (p. ej. hojas de rescate). Se excluyen las rutas
 # de salida (dependen de la máquina/sesión).
@@ -769,6 +816,9 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
 
     label_color = _label_text_color(s)
     saving = _cyan_saving(s)
+    # Claves ya usadas en esta hoja: evita que dos etiquetas iguales se pisen
+    # dentro del layout (haría irrecuperable el segundo fotograma).
+    claves_usadas: set = set()
 
     for cell_idx, fpath in enumerate(chunk):
         global_idx = start + cell_idx
@@ -811,6 +861,7 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
                            outline=_ink_full_color(s), width=bw)
 
         text = _label_text_for(s, labels, numbers, global_idx)
+        clave = _unique_key(claves_usadas, text) if record is not None else text
 
         # Fila de metadatos: [QR] [texto], centrada bajo el frame.
         meta_top = py + new_h + L.label_gap
@@ -842,8 +893,9 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
                 tx = qx + L.qr_px + gap_qr_text
                 ty = int(round(meta_top + (L.meta_h - th) / 2))
                 draw.text((tx, ty), text, fill=label_color, font=L.label_font)
-            record["qrs"][text] = {
+            record["qrs"][clave] = {
                 "bbox": qr_bbox, "celda": cell_idx, "texto": payload,
+                "etiqueta": text,
             }
         elif s.labels_on and L.label_font is not None:
             tw, th = _text_size(draw, text, L.label_font)
@@ -857,10 +909,11 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
             meta = {"bbox": [px, py, px + new_w, py + new_h],
                     "celda": cell_idx,
                     "archivo_original": Path(fpath).name,
-                    "orig_px": [src_w, src_h]}
+                    "orig_px": [src_w, src_h],
+                    "etiqueta": text}
             if chunk_paths_meta and cell_idx < len(chunk_paths_meta):
                 meta.update(chunk_paths_meta[cell_idx] or {})
-            record["frames"][text] = meta
+            record["frames"][clave] = meta
 
     # Numerador de hoja en la esquina (con prefijo y ceros a la izquierda).
     if s.page_num_on and L.page_font is not None:
@@ -1012,6 +1065,12 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     out_dir = Path(s.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # out_name puede provenir de un layout.json compartido (flujo de rescate),
+    # así que se sanea igual que las etiquetas antes de construir cualquier ruta.
+    # sanitize_label elimina / \ : y demás separadores, de modo que un valor
+    # como "../../x" o "/abs/x" no pueda escapar de out_dir al construir nombres.
+    safe_name = sanitize_label(s.out_name or "hojas")
+
     per_page = s.per_page
     num_pages = estimate_pages(len(frame_paths), per_page)
 
@@ -1021,13 +1080,15 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     # Exportar fotogramas individuales a máxima calidad (opcional).
     frames_dir = None
     if s.export_frames:
-        frames_dir = out_dir / f"{s.out_name}_frames"
+        frames_dir = out_dir / f"{safe_name}_frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
+        usados: set = set()
         for gidx, fpath in enumerate(frame_paths):
+            # Nombre único: dos etiquetas iguales se sobreescribían y se
+            # perdía uno de los fotogramas exportados.
+            nombre = _unique_key(usados, sanitize_label(_label_of(gidx)))
             try:
-                shutil.copyfile(
-                    fpath,
-                    frames_dir / f"{sanitize_label(_label_of(gidx))}.png")
+                shutil.copyfile(fpath, frames_dir / f"{nombre}.png")
             except Exception:
                 pass
 
@@ -1035,18 +1096,22 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     # fotogramas extraídos del video vivieran en una carpeta temporal.
     originals_dir = None
     originals_map = {}
+    fallos_originales: list[str] = []
     if s.registration_on and s.keep_originals:
-        originals_dir = out_dir / f"{s.out_name}_originales"
+        originals_dir = out_dir / f"{safe_name}_originales"
         originals_dir.mkdir(parents=True, exist_ok=True)
+        usados_orig: set = set()
         for gidx, fpath in enumerate(frame_paths):
-            label = sanitize_label(_label_of(gidx))
+            label = _unique_key(usados_orig, sanitize_label(_label_of(gidx)))
             ext = Path(fpath).suffix or ".png"
             dest = originals_dir / f"{label}{ext}"
             try:
                 shutil.copyfile(fpath, dest)
                 originals_map[gidx] = f"{originals_dir.name}/{dest.name}"
-            except Exception:
-                pass
+            except Exception as e:
+                # Silenciar esto dejaba al usuario sin copias originales y, más
+                # tarde, sin poder generar hojas de rescate, sin ningún aviso.
+                fallos_originales.append(f"{Path(fpath).name}: {e}")
 
     def _pnum(k):
         if page_numbers is not None and k < len(page_numbers):
@@ -1075,7 +1140,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
 
         chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
         selected = (page_idx + 1) in pages_selected
-        page_base = f"{s.out_name}_p{str(_pnum(page_idx)).zfill(file_digits)}"
+        page_base = f"{safe_name}_p{str(_pnum(page_idx)).zfill(file_digits)}"
 
         # La geometría se registra SIEMPRE (el layout.json describe todas las
         # hojas); el render caro solo se hace para las hojas seleccionadas.
@@ -1131,7 +1196,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     # PDF combinado (todas las páginas en un solo archivo, listo para imprimir).
     pdf_path = None
     if s.fmt_pdf and page_images_for_pdf:
-        pdf_path = str(out_dir / f"{s.out_name}.pdf")
+        pdf_path = str(out_dir / f"{safe_name}.pdf")
         first, rest = page_images_for_pdf[0], page_images_for_pdf[1:]
         first.save(
             pdf_path, "PDF", save_all=True, append_images=rest,
@@ -1178,7 +1243,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
             "originales_dir": originals_dir.name if originals_dir else None,
             "ajustes": settings_snapshot(s),
         }
-        layout_path = str(out_dir / f"{s.out_name}_layout.json")
+        layout_path = str(out_dir / f"{safe_name}_layout.json")
         layoutfile.save(layout_data, layout_path)
 
     return {
@@ -1194,6 +1259,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
         "grid": f"{L.cols}×{L.rows}",
         "grid_swapped": (L.cols, L.rows) != (s.cols, s.rows),
         "avisos": cyanotype_size_warnings(s),
+        "fallos_originales": fallos_originales,
     }
 
 
@@ -1215,6 +1281,7 @@ def _render_geometry_only(s: Settings, L: _Layout, chunk, page_idx,
         return None, None
 
     record = {"numero": int(sheet_num), "frames": {}, "qrs": {}}
+    claves_usadas: set = set()
     tmp = Image.new("RGB", (10, 10))
     draw = ImageDraw.Draw(tmp)
 
@@ -1238,6 +1305,7 @@ def _render_geometry_only(s: Settings, L: _Layout, chunk, page_idx,
         py = int(round(block_top))
 
         text = _label_text_for(s, labels, numbers, global_idx)
+        clave = _unique_key(claves_usadas, text)
         meta_top = py + new_h + L.label_gap
         if L.qr_px > 0:
             payload = markers.qr_payload(s.project_name or s.out_name,
@@ -1249,17 +1317,19 @@ def _render_geometry_only(s: Settings, L: _Layout, chunk, page_idx,
             total_w = L.qr_px + gap_qr_text + tw
             qx = int(round(cell_x + (L.cell_w - total_w) / 2))
             qy = int(round(meta_top + (L.meta_h - L.qr_px) / 2))
-            record["qrs"][text] = {
+            record["qrs"][clave] = {
                 "bbox": [qx, qy, qx + L.qr_px, qy + L.qr_px],
                 "celda": cell_idx, "texto": payload,
+                "etiqueta": text,
             }
         meta = {"bbox": [px, py, px + new_w, py + new_h],
                 "celda": cell_idx,
                 "archivo_original": Path(fpath).name,
-                "orig_px": [src_w, src_h]}
+                "orig_px": [src_w, src_h],
+                "etiqueta": text}
         if chunk_paths_meta and cell_idx < len(chunk_paths_meta):
             meta.update(chunk_paths_meta[cell_idx] or {})
-        record["frames"][text] = meta
+        record["frames"][clave] = meta
 
     return None, record
 

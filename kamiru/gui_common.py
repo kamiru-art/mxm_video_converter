@@ -195,11 +195,13 @@ def show_guide(parent, guide_key: str):
     def _wheel(evt):
         delta = -1 if getattr(evt, "delta", 0) > 0 or evt.num == 4 else 1
         canvas.yview_scroll(delta, "units")
+
+    # La rueda se enlaza SOLO a esta ventana (bind), no globalmente
+    # (bind_all): con bind_all, abrir dos guías hacía que la segunda robara
+    # el scroll de la primera y, al cerrar cualquiera de las dos, el
+    # unbind_all dejaba sin rueda a la que seguía abierta.
     for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-        canvas.bind_all(ev, _wheel)
-    win.bind("<Destroy>", lambda e: [canvas.unbind_all(ev) for ev in
-                                     ("<MouseWheel>", "<Button-4>", "<Button-5>")]
-             if e.widget is win else None)
+        win.bind(ev, _wheel)
     win.focus_set()
 
 
@@ -358,11 +360,25 @@ class PhaseFrame(ttk.Frame):
         self.log_text.configure(state="disabled")
 
     # ------------------------------------------------------------ workers
+    def busy(self) -> bool:
+        """True si ya hay un trabajo en curso en esta fase."""
+        return bool(self.worker and self.worker.is_alive())
+
     def start_worker(self, target, *args):
+        """Lanza el hilo de trabajo. Ignora la petición si ya hay uno vivo.
+
+        Sin este guard, pulsar dos veces un botón lanzaba dos hilos que
+        escribían en la misma cola y sobre los mismos archivos de salida.
+        """
+        if self.busy():
+            self._append_log("⏳ Ya hay un proceso en marcha; espera a que "
+                             "termine o pulsa Cancelar.")
+            return False
         self._cancel = False
         self.worker = threading.Thread(target=target, args=args, daemon=True)
         self.worker.start()
         self.after(100, self.poll_queue)
+        return True
 
     def cancel(self):
         self._cancel = True

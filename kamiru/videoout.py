@@ -12,7 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .ffmpeg_utils import FFmpegError, _no_window_kwargs, find_ffmpeg
+from .ffmpeg_utils import (FFmpegError, _no_window_kwargs, _StderrDrain,
+                           find_ffmpeg)
 
 # Códecs de salida ofrecidos en la interfaz.
 CODECS = [
@@ -117,36 +118,40 @@ def build_video(files_in_order, fps: float, out_path,
            "-progress", "pipe:1", "-nostats",
            str(out_path)]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, universal_newlines=True,
-                            bufsize=1, **_no_window_kwargs())
-    total = len(files_in_order)
+    # El try/finally exterior garantiza que la lista temporal se borre incluso
+    # si Popen falla (antes solo se borraba si el proceso llegaba a arrancar).
     try:
-        for line in proc.stdout:
-            if cancel_check and cancel_check():
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                universal_newlines=True,
+                                bufsize=1, **_no_window_kwargs())
+        # Igual que en extract_frames: stderr se vacía en paralelo para que
+        # ffmpeg no se bloquee al llenar la tubería y cuelgue el render.
+        errdrain = _StderrDrain(proc.stderr)
+        total = len(files_in_order)
+        try:
+            for line in proc.stdout:
+                if cancel_check and cancel_check():
+                    proc.terminate()
+                    raise _Cancelled()
+                line = line.strip()
+                if line.startswith("frame=") and progress_cb:
+                    try:
+                        progress_cb(int(line.split("=", 1)[1]), total)
+                    except ValueError:
+                        pass
+            proc.wait()
+        finally:
+            if proc.poll() is None:
                 proc.terminate()
-                raise _Cancelled()
-            line = line.strip()
-            if line.startswith("frame=") and progress_cb:
-                try:
-                    progress_cb(int(line.split("=", 1)[1]), total)
-                except ValueError:
-                    pass
-        proc.wait()
     finally:
-        if proc.poll() is None:
-            proc.terminate()
         try:
             Path(list_path).unlink()
         except OSError:
             pass
 
     if proc.returncode not in (0, None):
-        err = ""
-        try:
-            err = (proc.stderr.read() or "")[-1500:]
-        except Exception:
-            pass
+        err = errdrain.text()
         # fps_mode es de ffmpeg >= 5; los binarios viejos usan -vsync.
         if "fps_mode" in err or "Unrecognized option" in err:
             raise FFmpegError(

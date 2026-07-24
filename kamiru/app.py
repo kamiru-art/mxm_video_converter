@@ -1169,7 +1169,11 @@ class SheetsPhase(PhaseFrame):
 
         # Etiquetas de TODOS los seleccionados.
         if params["label_from_file"]:
-            labels = [Path(p).stem for p in sel]
+            # Dos archivos distintos pueden compartir el nombre sin extensión
+            # ('toma.png' y 'toma.jpg'); se desambigua ANTES de deduplicar y de
+            # armar la línea de tiempo para que layout, timeline y archivos
+            # exportados usen todos la misma etiqueta única.
+            labels = core.uniquify_labels([Path(p).stem for p in sel])
         elif params["numbering_original"]:
             labels = [s.format_label(p) for p in positions]
         else:
@@ -1371,6 +1375,15 @@ class SheetsPhase(PhaseFrame):
             extra += f"\nFotogramas individuales: {result['frames_dir']}"
         for aviso in result.get("avisos", []):
             extra += f"\n⚠ {aviso}"
+        fallos = result.get("fallos_originales") or []
+        if fallos:
+            # Sin copia original no se pueden generar hojas de rescate luego,
+            # así que el fallo se avisa en vez de pasar desapercibido.
+            extra += (f"\n⚠ No se pudo guardar la copia original de "
+                      f"{len(fallos)} fotograma(s); no podrás reimprimirlos "
+                      f"como hoja de rescate.")
+            for f in fallos[:5]:
+                self.log(f"⚠ Copia original fallida — {f}")
         if messagebox.askyesno(
                 "¡Hojas generadas! 🎉",
                 f"Se crearon {n} hoja(s) en:\n{self.var_out_dir.get()}{extra}\n\n"

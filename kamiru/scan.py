@@ -90,10 +90,36 @@ except Exception:
 # con tildes/ñ (usan la codepage ANSI). Solución: Python lee/escribe los bytes
 # (Unicode nativo) y OpenCV solo (de)codifica en memoria.
 
+# Tope de píxeles al decodificar una imagen. Un escaneo legítimo a 1200 dpi de
+# una hoja A4 ronda los 140 MP, así que este techo no estorba en la práctica y
+# sí frena una "bomba de descompresión" (un PNG/TIFF de pocos KB que declara
+# decenas de gigapíxeles y agota la memoria al decodificarse).
+MAX_IMAGE_PIXELS = 300_000_000
+
+
+def _dimensiones_razonables(path) -> bool:
+    """True si la cabecera de la imagen declara un tamaño manejable.
+
+    PIL abre de forma perezosa (solo lee la cabecera), así que esto es barato.
+    Si PIL no reconoce el formato se deja pasar: lo intentará OpenCV.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            w, h = im.size
+    except Exception:
+        return True
+    return (int(w) * int(h)) <= MAX_IMAGE_PIXELS
+
+
 def leer_imagen_robusta(path, flags: int = cv2.IMREAD_UNCHANGED):
     """Lee una imagen tolerando rutas no-ASCII y TIFFs que OpenCV no abre."""
     path = Path(path)
     ruta_str = str(path)
+
+    if not _dimensiones_razonables(path):
+        return None
 
     if ruta_str.isascii():
         img = cv2.imread(ruta_str, flags)
@@ -726,12 +752,24 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
     res = ScanResult(scan=scan_path.name)
     _log = log or (lambda *_: None)
 
-    lienzo = layout["lienzo"]
-    page_w, page_h = int(lienzo["ancho_px"]), int(lienzo["alto_px"])
-    minfo = layout["marcadores"]
-    dict_name = minfo.get("dict", markers.DEFAULT_DICT)
-    layout_bboxes = minfo["bboxes"]
-    expected_ids = [int(k) for k in layout_bboxes.keys()]
+    # El layout.json es un archivo que se comparte entre usuarios: si viene
+    # malformado (campos ausentes o no numéricos) esto lanzaba antes de entrar
+    # al try de más abajo y tumbaba la tanda ENTERA de escaneos. Ahora falla
+    # solo este escaneo, con un mensaje claro.
+    try:
+        lienzo = layout["lienzo"]
+        page_w, page_h = int(lienzo["ancho_px"]), int(lienzo["alto_px"])
+        minfo = layout["marcadores"]
+        dict_name = minfo.get("dict", markers.DEFAULT_DICT)
+        layout_bboxes = minfo["bboxes"]
+        expected_ids = [int(k) for k in layout_bboxes.keys()]
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        res.error = f"El layout.json no es válido o está incompleto ({e})."
+        return res
+    if page_w <= 0 or page_h <= 0 or page_w * page_h > MAX_IMAGE_PIXELS:
+        res.error = (f"El layout.json declara un lienzo imposible "
+                     f"({page_w}×{page_h} px).")
+        return res
     res.marcadores_total = len(expected_ids)
 
     img = leer_imagen_robusta(scan_path, cv2.IMREAD_UNCHANGED)
@@ -852,6 +890,13 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
                                             px_mm)
 
         out_w, out_h = int(round(page_w * s)), int(round(page_h * s))
+        # El tamaño de salida lo fija el layout (compartible) multiplicado por
+        # la escala medida: se acota para no intentar una reserva de memoria
+        # descomunal con un layout manipulado o absurdo.
+        if out_w <= 0 or out_h <= 0 or out_w * out_h > MAX_IMAGE_PIXELS:
+            res.error = (f"El enderezado pedido es desproporcionado "
+                         f"({out_w}×{out_h} px); revisa el layout.json.")
+            return res
         warp = cv2.warpPerspective(img, M, (out_w, out_h),
                                    flags=cv2.INTER_LANCZOS4)
         del img
@@ -864,19 +909,22 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
 
         # 6. Identificar la hoja con CUALQUIER QR legible.
         hoja, via = _identify_sheet(warp, layout, s, local_shift)
-        if hoja is not None and claims is not None:
+        if hoja is not None and claims is not None and hoja.get("numero") is not None:
             # Registrar qué hoja reclamó este escaneo (identificación por QR:
-            # la fuente de verdad frente al fallback por descarte).
+            # la fuente de verdad frente al fallback por descarte). Se ignora
+            # la hoja sin número en vez de mapearla a 0, que colisionaba con
+            # una hoja numerada 0 de verdad.
             with claims_lock:
-                claims[int(hoja.get("numero") or 0)] = scan_path.name
+                claims[int(hoja["numero"])] = scan_path.name
         if hoja is None and len(layout.get("hojas", [])) == 1:
             # Descarte: si el layout describe UNA sola hoja, tiene que ser
             # esa… salvo que otro escaneo ya la haya reclamado POR QR: en ese
             # caso este escaneo es sospechoso (¿de otro proyecto?) y no debe
             # sobrescribir los fotogramas buenos.
-            numero = int(layout["hojas"][0].get("numero") or 0)
+            numero_raw = layout["hojas"][0].get("numero")
+            numero = int(numero_raw) if numero_raw is not None else None
             reclamada_por = None
-            if claims is not None:
+            if claims is not None and numero is not None:
                 with claims_lock:
                     reclamada_por = claims.get(numero)
             if reclamada_por and reclamada_por != scan_path.name:
@@ -1001,6 +1049,14 @@ def _identify_sheet(warp: np.ndarray, layout: dict, s: float,
             texto = _decode_qr(_crop_frame(warp, bbox, s, -0.35, local_shift))
             payload = markers.parse_qr_payload(texto) if texto else None
             if not payload:
+                continue
+            # Si el QR dice de qué PROYECTO viene y no coincide con este
+            # layout, no se acepta: antes un escaneo de otro proyecto con el
+            # mismo número de hoja se recortaba con esta geometría y se
+            # guardaba con estas etiquetas, sin ningún error.
+            proy_qr = (payload.get("proyecto") or "").strip()
+            proy_layout = str(layout.get("proyecto") or "").strip()
+            if proy_qr and proy_layout and proy_qr != proy_layout:
                 continue
             if payload.get("hoja") is not None:
                 hoja = layoutfile.sheet_by_number(layout, payload["hoja"])

@@ -518,14 +518,23 @@ class CalibPhase(PhaseFrame):
             filetypes=[("TIFF", "*.tif"), ("PNG", "*.png")])
         if not path:
             return
+        # Los valores de las variables Tk se leen AQUÍ (hilo principal) y se
+        # pasan al hilo: renderizar la página a 300 dpi tardaba lo suficiente
+        # como para congelar la ventana.
+        self.log("Generando página de prueba…")
+        self.start_worker(self._work_gen_printer_page, path,
+                          self.var_p_paper.get(),
+                          self.to_int(self.var_p_dpi, 300))
+
+    def _work_gen_printer_page(self, path, paper_name, dpi):
         try:
             out = calibration.generar_pagina_prueba_impresora(
-                path, self.var_p_paper.get(), self.to_int(self.var_p_dpi, 300))
-            self.log(f"✅ Página de prueba guardada: {out}")
-            self.log("   Imprímela al 100 % (sin «ajustar a página») y "
-                     "escanéala completa, plana y derecha.")
+                path, paper_name, dpi)
+            self.queue.put(("page_done", f"Página de prueba guardada: {out}",
+                            "   Imprímela al 100 % (sin «ajustar a página») y "
+                            "escanéala completa, plana y derecha."))
         except Exception as e:
-            messagebox.showerror("Ups", str(e))
+            self.queue.put(("error", str(e)))
 
     def _analyze_printer(self):
         scan_path = self.var_p_scan.get().strip()
@@ -578,26 +587,32 @@ class CalibPhase(PhaseFrame):
             filetypes=[("TIFF", "*.tif"), ("PNG", "*.png")])
         if not path:
             return
+        # Igual que la página de impresora: las variables Tk se leen en el hilo
+        # principal y el render pesado se hace en el hilo de trabajo.
+        block = (self.var_c_block_color.get()
+                 if self.var_c_block_on.get() else None)
+        self.log("Generando carta de calibración…")
+        self.start_worker(self._work_gen_cyano_chart, path, target,
+                          self.var_c_paper.get(),
+                          self.to_int(self.var_c_dpi, 300),
+                          self.var_c_ink.get(), self.var_c_mirror.get(),
+                          self._color_stops(), block)
+
+    def _work_gen_cyano_chart(self, path, target, paper_name, dpi, ink,
+                              mirror, ink_stops, block):
         try:
-            block = (self.var_c_block_color.get()
-                     if self.var_c_block_on.get() else None)
             if target == "colorblocker":
                 out = calibration.generar_colorblocker(
-                    path, self.var_c_paper.get(),
-                    self.to_int(self.var_c_dpi, 300),
-                    self.var_c_mirror.get(), block_color=block)
+                    path, paper_name, dpi, mirror, block_color=block)
             else:
                 out = calibration.generar_tira_cianotipia(
-                    path, self.var_c_paper.get(),
-                    self.to_int(self.var_c_dpi, 300),
-                    self.var_c_ink.get(), self.var_c_mirror.get(),
-                    target=target, ink_stops=self._color_stops(),
-                    block_color=block)
-            self.log(f"✅ Carta de calibración guardada: {out}")
-            self.log("   Imprímela en acetato, haz tu cianotipia como siempre "
-                     "y escanea el resultado azul seco.")
+                    path, paper_name, dpi, ink, mirror, target=target,
+                    ink_stops=ink_stops, block_color=block)
+            self.queue.put(("page_done", f"Carta de calibración guardada: {out}",
+                            "   Imprímela en acetato, haz tu cianotipia como "
+                            "siempre y escanea el resultado azul seco."))
         except Exception as e:
-            messagebox.showerror("Ups", str(e))
+            self.queue.put(("error", str(e)))
 
     def _analyze_cyano(self):
         scan_path = self.var_c_scan.get().strip()
@@ -655,6 +670,10 @@ class CalibPhase(PhaseFrame):
                 self.log(f"   • {n}")
             self.var_c_ink.set(p["mejor_color"])
             self.c_save_btn.configure(state="normal")
+        elif kind == "page_done":
+            self.log(f"✅ {msg[1]}")
+            if len(msg) > 2 and msg[2]:
+                self.log(msg[2])
         elif kind == "error":
             messagebox.showerror("Ups, algo falló", msg[1])
 
