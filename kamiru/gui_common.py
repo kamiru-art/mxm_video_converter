@@ -212,6 +212,31 @@ class PhaseFrame(ttk.Frame):
         self.queue: "queue.Queue" = queue.Queue()
         self.worker = None
         self._cancel = False
+        # Póller PERMANENTE de la cola: pase lo que pase con el hilo de
+        # trabajo o con un mensaje problemático, los resultados SIEMPRE
+        # terminan en el log/handle. (Antes, si el drenado moría por una
+        # excepción al mostrar un mensaje, todo lo posterior — como el
+        # resumen 📋 del ColorBlocker — quedaba varado y "desaparecía".)
+        self.after(150, self._poll_permanente)
+
+    def _poll_permanente(self):
+        try:
+            while True:
+                msg = self.queue.get_nowait()
+                try:
+                    if msg[0] == "log":
+                        self._append_log(msg[1])
+                    else:
+                        self.handle(msg)
+                except Exception as e:  # un mensaje malo no debe frenar el resto
+                    try:
+                        self._append_log("⚠ Error mostrando un resultado: "
+                                         f"{type(e).__name__}: {e}")
+                    except Exception:
+                        pass
+        except queue.Empty:
+            pass
+        self.after(150, self._poll_permanente)
 
     # ------------------------------------------------------------- helpers
     def section(self, parent, title, guide: str | None = None):
@@ -230,11 +255,33 @@ class PhaseFrame(ttk.Frame):
         lf.columnconfigure(1, weight=1)
         return lf
 
+    @staticmethod
+    def hex_normalizado(texto):
+        """'b2ff66' / '#B2FF66' / 'fa0' → '#B2FF66'; None si no es un hex."""
+        t = str(texto or "").strip().lstrip("#")
+        if len(t) == 3 and all(c in "0123456789abcdefABCDEF" for c in t):
+            t = "".join(ch * 2 for ch in t)
+        if len(t) == 6 and all(c in "0123456789abcdefABCDEF" for c in t):
+            return "#" + t.upper()
+        return None
+
     def color_picker(self, parent, var, row, col):
+        """Muestra + campo HEX editable + botón de selector. El campo acepta
+        pegar directamente los códigos que reporta el ColorBlocker
+        (p. ej. #B2FF66); se normaliza al salir del campo o con Enter."""
         box = ttk.Frame(parent)
         box.grid(row=row, column=col, sticky="w", padx=4, pady=(6, 0))
         swatch = tk.Label(box, width=3, relief="solid", borderwidth=1, bg=var.get())
         swatch.pack(side="left")
+        entry = ttk.Entry(box, textvariable=var, width=9)
+        entry.pack(side="left", padx=(4, 0))
+
+        def normaliza(_evt=None):
+            h = self.hex_normalizado(var.get())
+            if h is not None and h != var.get():
+                var.set(h)
+        entry.bind("<FocusOut>", normaliza)
+        entry.bind("<Return>", normaliza)
 
         def choose():
             c = colorchooser.askcolor(color=var.get(), title="Elegir color")
@@ -296,7 +343,17 @@ class PhaseFrame(ttk.Frame):
         if not hasattr(self, "log_text"):
             return
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", text.rstrip() + "\n")
+        linea = text.rstrip() + "\n"
+        try:
+            self.log_text.insert("end", linea)
+        except tk.TclError:
+            # El Tk de Windows (8.6) no acepta caracteres fuera del plano
+            # básico (emojis como 📋/🛟) en el Text y lanza TclError, lo que
+            # antes mataba el drenado y "desaparecían" los resultados
+            # siguientes. Reintentar con esos caracteres sustituidos.
+            self.log_text.insert(
+                "end", "".join(ch if ord(ch) < 0x10000 else "•"
+                               for ch in linea))
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
@@ -340,6 +397,36 @@ class PhaseFrame(ttk.Frame):
     def handle(self, msg):
         """Cada fase implementa el manejo de sus mensajes."""
         raise NotImplementedError
+
+    # ---------------------------------------------------------- autowrap
+    def enable_autowrap(self):
+        """Hace que TODAS las etiquetas descriptivas (las que tienen
+        wraplength fijo) llenen el 100 % del ancho de su columna antes de
+        saltar de línea: se estiran (sticky «we») y su wraplength se
+        re-ajusta al ancho real cada vez que la ventana cambia de tamaño.
+        Llamar al final de _build_ui de cada fase."""
+        def ajustar(evento, lbl):
+            ancho = max(120, evento.width - 8)
+            try:
+                if int(lbl.cget("wraplength")) != ancho:
+                    lbl.configure(wraplength=ancho)
+            except (tk.TclError, ValueError):
+                pass
+
+        def visitar(w):
+            for hijo in w.winfo_children():
+                visitar(hijo)
+            if isinstance(w, ttk.Label):
+                try:
+                    wl = int(w.cget("wraplength"))
+                except (tk.TclError, ValueError):
+                    wl = 0
+                if wl > 0:
+                    if w.winfo_manager() == "grid":
+                        w.grid_configure(sticky="we")
+                    w.bind("<Configure>",
+                           lambda e, lbl=w: ajustar(e, lbl), add="+")
+        visitar(self)
 
     # -------------------------------------------------------------- varios
     @staticmethod
