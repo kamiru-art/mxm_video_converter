@@ -116,9 +116,15 @@ jobs:
       - name: Determinar el tag
         id: tag
         shell: bash
+        # Los valores se pasan por 'env' (no interpolados en el script) para
+        # evitar inyección de comandos si un nombre de rama/tag contiene
+        # metacaracteres de shell como $( ), backticks o ';'.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${{ inputs.tag }}"
-          REF="${{ github.ref_name }}"
+          TAG="$INPUT_TAG"
+          REF="$REF_NAME"
           if [ -z "$TAG" ]; then
             case "$REF" in
               release/*) TAG="${REF#release/}" ;;
@@ -132,7 +138,9 @@ jobs:
           path: artefactos
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      # Fijado al SHA del commit (no al tag móvil @v2) para que un compromiso
+      # de la cuenta/repo de la acción no pueda inyectar código en el release.
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ github.sha }}

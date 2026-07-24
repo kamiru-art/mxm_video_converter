@@ -1012,6 +1012,12 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     out_dir = Path(s.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # out_name puede provenir de un layout.json compartido (flujo de rescate),
+    # así que se sanea igual que las etiquetas antes de construir cualquier ruta.
+    # sanitize_label elimina / \ : y demás separadores, de modo que un valor
+    # como "../../x" o "/abs/x" no pueda escapar de out_dir al construir nombres.
+    safe_name = sanitize_label(s.out_name or "hojas")
+
     per_page = s.per_page
     num_pages = estimate_pages(len(frame_paths), per_page)
 
@@ -1021,7 +1027,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     # Exportar fotogramas individuales a máxima calidad (opcional).
     frames_dir = None
     if s.export_frames:
-        frames_dir = out_dir / f"{s.out_name}_frames"
+        frames_dir = out_dir / f"{safe_name}_frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
         for gidx, fpath in enumerate(frame_paths):
             try:
@@ -1036,7 +1042,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     originals_dir = None
     originals_map = {}
     if s.registration_on and s.keep_originals:
-        originals_dir = out_dir / f"{s.out_name}_originales"
+        originals_dir = out_dir / f"{safe_name}_originales"
         originals_dir.mkdir(parents=True, exist_ok=True)
         for gidx, fpath in enumerate(frame_paths):
             label = sanitize_label(_label_of(gidx))
@@ -1075,7 +1081,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
 
         chunk = frame_paths[page_idx * per_page: page_idx * per_page + per_page]
         selected = (page_idx + 1) in pages_selected
-        page_base = f"{s.out_name}_p{str(_pnum(page_idx)).zfill(file_digits)}"
+        page_base = f"{safe_name}_p{str(_pnum(page_idx)).zfill(file_digits)}"
 
         # La geometría se registra SIEMPRE (el layout.json describe todas las
         # hojas); el render caro solo se hace para las hojas seleccionadas.
@@ -1131,7 +1137,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     # PDF combinado (todas las páginas en un solo archivo, listo para imprimir).
     pdf_path = None
     if s.fmt_pdf and page_images_for_pdf:
-        pdf_path = str(out_dir / f"{s.out_name}.pdf")
+        pdf_path = str(out_dir / f"{safe_name}.pdf")
         first, rest = page_images_for_pdf[0], page_images_for_pdf[1:]
         first.save(
             pdf_path, "PDF", save_all=True, append_images=rest,
@@ -1178,7 +1184,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
             "originales_dir": originals_dir.name if originals_dir else None,
             "ajustes": settings_snapshot(s),
         }
-        layout_path = str(out_dir / f"{s.out_name}_layout.json")
+        layout_path = str(out_dir / f"{safe_name}_layout.json")
         layoutfile.save(layout_data, layout_path)
 
     return {

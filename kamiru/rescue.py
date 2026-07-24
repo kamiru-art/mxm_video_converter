@@ -18,6 +18,22 @@ from pathlib import Path
 from . import core, layoutfile
 
 
+def _safe_join(base: Path, rel: str) -> Path | None:
+    """Une base/rel de forma segura para rutas que vienen de un layout.json
+    (archivo compartible entre usuarios): rechaza rutas absolutas y cualquier
+    salto fuera de ``base`` mediante "..". Devuelve la ruta resuelta o None."""
+    if not rel:
+        return None
+    if Path(rel).is_absolute():
+        return None
+    try:
+        cand = (base / rel).resolve()
+        cand.relative_to(base.resolve())
+    except (ValueError, OSError):
+        return None
+    return cand
+
+
 def generar_hojas_rescate(layout_path, faltantes, out_dir=None, log=None) -> dict:
     """Genera hojas con los fotogramas faltantes.
 
@@ -51,15 +67,16 @@ def generar_hojas_rescate(layout_path, faltantes, out_dir=None, log=None) -> dic
         ruta = None
         if entry:
             _, info = entry
-            rel = info.get("archivo_original") or ""
-            cand = base_dir / rel
-            if rel and cand.is_file():
+            cand = _safe_join(base_dir, info.get("archivo_original") or "")
+            if cand and cand.is_file():
                 ruta = cand
         if ruta is None and originals_dir:
-            safe = core.sanitize_label(etiqueta)
-            for c in sorted((base_dir / originals_dir).glob(f"{safe}.*")):
-                ruta = c
-                break
+            orig_root = _safe_join(base_dir, originals_dir)
+            if orig_root and orig_root.is_dir():
+                safe = core.sanitize_label(etiqueta)
+                for c in sorted(orig_root.glob(f"{safe}.*")):
+                    ruta = c
+                    break
         if ruta is None:
             sin_original.append(etiqueta)
             continue
