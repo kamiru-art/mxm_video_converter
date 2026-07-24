@@ -4,6 +4,15 @@ REM La primera vez crea un entorno virtual e instala las dependencias solo.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+REM Camino rapido: si uv esta instalado, prepara el entorno con EXACTAMENTE
+REM las versiones de uv.lock (el mismo software que el ejecutable oficial).
+where uv >nul 2>nul && (
+  echo Usando uv ^(entorno reproducible desde uv.lock^)...
+  uv run --frozen --extra desktop pythonw -m kamiru
+  if not errorlevel 1 exit /b 0
+  echo uv fallo; se intentara con pip.
+)
+
 set "PYTHON="
 where py >nul 2>nul && set "PYTHON=py -3"
 if not defined PYTHON (

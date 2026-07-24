@@ -166,11 +166,26 @@ e instala las dependencias sola (2–3 minutos); después abre al instante.
 
 > En macOS el comando suele ser `python3` (no `python`). En Windows, `py`.
 
+Con [uv](https://docs.astral.sh/uv/) (recomendado): instala exactamente las
+versiones fijadas en `uv.lock`, las mismas con las que se construye el
+ejecutable oficial.
+
+```bash
+uv sync --extra desktop            # prepara el entorno
+uv run python -m kamiru            # abre la app
+uv run python tests/test_pipeline.py   # prueba de integración (sin GUI)
+```
+
+Sin uv (plan B, con pip):
+
 ```bash
 python3 -m pip install -r requirements.txt
 python3 -m kamiru          # abre la app
 python3 tests/test_pipeline.py   # prueba de integración (sin GUI)
 ```
+
+> Las dependencias se declaran en `pyproject.toml` y se fijan en `uv.lock`.
+> `requirements.txt` se genera desde ahí: no lo edites a mano.
 
 No hace falta instalar `ffmpeg` aparte: viene incluido vía `imageio-ffmpeg`.
 `pyzbar` es opcional (refuerzo para QRs muy dañados; requiere libzbar).

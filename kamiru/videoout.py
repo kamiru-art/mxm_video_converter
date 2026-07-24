@@ -49,6 +49,17 @@ def frames_from_timeline(layout: dict, processed_dir) -> tuple[list[str], list[s
         if p.is_file() and p.suffix.lower() in {".tif", ".tiff", ".png", ".jpg", ".jpeg"}:
             disponibles[p.stem] = str(p)
 
+    # Si dos fotogramas compartían etiqueta, el layout guarda el segundo bajo
+    # una clave desambiguada ('toma_2') pero la línea de tiempo sigue pidiendo
+    # 'toma'. Este índice etiqueta→claves permite encontrarlo igualmente.
+    alias: dict[str, list[str]] = {}
+    for hoja in layout.get("hojas", []):
+        for clave, info in (hoja.get("frames") or {}).items():
+            etiqueta = (info or {}).get("etiqueta")
+            if etiqueta and etiqueta != clave:
+                alias.setdefault(sanitize_label(etiqueta), []).append(
+                    sanitize_label(clave))
+
     timeline = layout.get("timeline") or []
     if not timeline:
         # Sin línea de tiempo: usar todas las etiquetas del layout en orden.
@@ -64,6 +75,8 @@ def frames_from_timeline(layout: dict, processed_dir) -> tuple[list[str], list[s
     for item in sorted(timeline, key=lambda x: x.get("pos", 0)):
         rep = sanitize_label(item.get("rep") or item.get("etiqueta") or "")
         candidates = [rep, f"{rep}_procesado"]
+        for clave in alias.get(rep, []):
+            candidates += [clave, f"{clave}_procesado"]
         found = None
         for c in candidates:
             if c in disponibles:

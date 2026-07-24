@@ -1,16 +1,35 @@
-# Dependencias de Kamiru Studio
-# Instálalas con:  python -m pip install -r requirements.txt
-# (los lanzadores run.command / run.bat / run.sh lo hacen automáticamente)
-
-# Se fija un tope de versión MAYOR en cada dependencia: sin él, un release
-# futuro podía hornear en los ejecutables una versión mayor recién publicada
-# (con cambios incompatibles, o comprometida) sin que nadie lo revisara.
-# Para subir de mayor, actualiza el tope aquí a propósito y prueba el build.
-Pillow>=10.0,<13
-imageio-ffmpeg>=0.4.8,<1
-numpy>=1.24,<3
-opencv-python>=4.8,<6    # marcadores ArUco, alineación de escaneos, QR
-qrcode[pil]>=7.4,<9      # generación de códigos QR
-
+# ARCHIVO GENERADO — no lo edites a mano.
+# Las dependencias reales se declaran en pyproject.toml y se fijan en uv.lock.
+# Regenéralo con:
+#     uv export --frozen --extra desktop --no-hashes --no-emit-project -o requirements.txt
+#
+# Solo es el plan B para quien no tenga uv:
+#     python -m pip install -r requirements.txt
+# Lo recomendado es:  uv sync --extra desktop
+#
 # Opcional (refuerzo extra para leer QRs difíciles; requiere libzbar):
-# pyzbar>=0.1.9
+#     pyzbar>=0.1.9
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via qrcode
+imageio-ffmpeg==0.6.0
+    # via kamiru-studio
+numpy==2.2.6 ; python_full_version < '3.11'
+    # via
+    #   kamiru-studio
+    #   opencv-python
+numpy==2.4.6 ; python_full_version == '3.11.*'
+    # via
+    #   kamiru-studio
+    #   opencv-python
+numpy==2.5.1 ; python_full_version >= '3.12'
+    # via
+    #   kamiru-studio
+    #   opencv-python
+opencv-python==5.0.0.93
+    # via kamiru-studio
+pillow==12.3.0
+    # via
+    #   kamiru-studio
+    #   qrcode
+qrcode==8.2
+    # via kamiru-studio

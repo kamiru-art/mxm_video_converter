@@ -29,6 +29,16 @@ pick_python() {
   return 1
 }
 
+# Camino rápido: si uv está instalado, él se encarga del entorno y de instalar
+# EXACTAMENTE las versiones de uv.lock (mismo software que el ejecutable
+# oficial). Es mucho más rápido que pip y reproducible.
+if command -v uv >/dev/null 2>&1; then
+  echo "Usando uv (entorno reproducible desde uv.lock)…"
+  exec uv run --frozen --extra desktop python -m kamiru
+fi
+echo "uv no está instalado; se usará pip (más lento)."
+echo "  Consejo: instálalo con  curl -LsSf https://astral.sh/uv/install.sh | sh"
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "No se encontró python3. Instálalo con el gestor de paquetes de tu sistema."
   echo "  Debian/Ubuntu:  sudo apt install python3 python3-venv python3-tk"

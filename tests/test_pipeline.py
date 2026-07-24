@@ -1063,6 +1063,22 @@ try:
     check("un representante sin archivo se reporta como faltante",
           not _f2 and _m2 == ["no_existe"], f"files={_f2} missing={_m2}")
 
+    # Si el layout desambiguó una etiqueta repetida ('toma' → clave 'toma_2'),
+    # la línea de tiempo sigue pidiendo 'toma': debe resolverse por el campo
+    # 'etiqueta' en vez de darse por faltante.
+    _lay_alias = json.loads(json.dumps(layout))
+    _h0 = _lay_alias["hojas"][0]
+    _clave0 = sorted(_h0["frames"].keys())[0]
+    _info0 = _h0["frames"].pop(_clave0)
+    _info0["etiqueta"] = "etiqueta_repetida"
+    _h0["frames"][_clave0] = _info0
+    _lay_alias["timeline"] = [{"pos": 1, "etiqueta": "etiqueta_repetida",
+                               "rep": "etiqueta_repetida"}]
+    _f3, _m3 = _vo.frames_from_timeline(_lay_alias, outp1)
+    check("una etiqueta desambiguada se resuelve por el campo 'etiqueta'",
+          len(_f3) == 1 and not _m3 and Path(_f3[0]).stem == _clave0,
+          f"files={_f3} missing={_m3}")
+
     # Y el video se arma de verdad con archivos repetidos (demuxer concat).
     _vid_r = _vo.build_video(_files_r, 6.0, TMP / "reuso.mp4", _vo.CODECS[0])
     check("se construye el video con fotogramas repetidos",
