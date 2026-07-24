@@ -58,6 +58,35 @@ class ScansPhase(PhaseFrame):
         self.var_report = tk.BooleanVar(value=True)
 
     def _build_ui(self):
+        # Barra de acción y log ANCLADOS ABAJO y empaquetados primero: con
+        # pack, los primeros tienen prioridad de espacio, así los botones
+        # nunca desaparecen aunque el contenido no quepa en pantalla.
+        bar = ttk.Frame(self, padding=(PAD, PAD, PAD, 0))
+        bar.pack(side="bottom", fill="x")
+        self.progress = ttk.Progressbar(bar, mode="determinate")
+        self.progress.pack(fill="x")
+        self.status_lbl = ttk.Label(bar, text="Listo.", style="Sub.TLabel")
+        self.status_lbl.pack(anchor="w", pady=(2, 6))
+        btns = ttk.Frame(bar)
+        btns.pack(fill="x")
+        self.run_btn = ttk.Button(btns, text="Procesar escaneos",
+                                  style="Accent.TButton", command=self._on_run)
+        self.run_btn.pack(side="right")
+        self.cancel_btn = ttk.Button(btns, text="Cancelar", command=self.cancel,
+                                     state="disabled")
+        self.cancel_btn.pack(side="right", padx=(0, PAD))
+        self.rescue_btn = ttk.Button(btns, text="🛟 Generar hojas de rescate",
+                                     command=self._on_rescue, state="disabled")
+        self.rescue_btn.pack(side="left")
+        self.report_btn = ttk.Button(btns, text="Abrir informe",
+                                     command=self._open_report, state="disabled")
+        self.report_btn.pack(side="left", padx=(PAD, 0))
+
+        self.build_log(self, side="bottom")
+        self._append_log("Aquí se procesan los escaneos de las hojas pintadas "
+                         "(o de las cianotipias). Necesitas el layout .json "
+                         "que se creó junto a las hojas.")
+
         sec = self.section(self, "Archivos", guide="escaneos")
         self._row_dir(sec, 0, "Carpeta con los escaneos:", self.var_scans_dir,
                       "Selecciona la carpeta con los escaneos")
@@ -113,33 +142,6 @@ class ScansPhase(PhaseFrame):
         ttk.Checkbutton(sec, text="Generar informe (HTML con miniaturas + JSON + CSV)",
                         variable=self.var_report).grid(
             row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
-
-        # Barra de acción
-        bar = ttk.Frame(self, padding=(PAD, PAD, PAD, 0))
-        bar.pack(fill="x")
-        self.progress = ttk.Progressbar(bar, mode="determinate")
-        self.progress.pack(fill="x")
-        self.status_lbl = ttk.Label(bar, text="Listo.", style="Sub.TLabel")
-        self.status_lbl.pack(anchor="w", pady=(2, 6))
-        btns = ttk.Frame(bar)
-        btns.pack(fill="x")
-        self.run_btn = ttk.Button(btns, text="Procesar escaneos",
-                                  style="Accent.TButton", command=self._on_run)
-        self.run_btn.pack(side="right")
-        self.cancel_btn = ttk.Button(btns, text="Cancelar", command=self.cancel,
-                                     state="disabled")
-        self.cancel_btn.pack(side="right", padx=(0, PAD))
-        self.rescue_btn = ttk.Button(btns, text="🛟 Generar hojas de rescate",
-                                     command=self._on_rescue, state="disabled")
-        self.rescue_btn.pack(side="left")
-        self.report_btn = ttk.Button(btns, text="Abrir informe",
-                                     command=self._open_report, state="disabled")
-        self.report_btn.pack(side="left", padx=(PAD, 0))
-
-        self.build_log(self)
-        self._append_log("Aquí se procesan los escaneos de las hojas pintadas "
-                         "(o de las cianotipias). Necesitas el layout .json "
-                         "que se creó junto a las hojas.")
 
     # ------------------------------------------------------------ widgets
     def _row_dir(self, sec, row, label, var, title):
@@ -361,6 +363,13 @@ class CalibPhase(PhaseFrame):
         self.var_c_block_color = tk.StringVar(value="#000000")
 
     def _build_ui(self):
+        # Log anclado abajo y empaquetado primero (prioridad de espacio).
+        self.build_log(self, height=10, side="bottom")
+        self._append_log(
+            "Los perfiles guardados aquí aparecen en la fase «② Generar hojas» "
+            "(perfil de impresora en la pestaña Hoja; curva de cianotipia en la "
+            "pestaña Cianotipia).")
+
         cols = ttk.Frame(self)
         cols.pack(fill="both", expand=True)
         left = ttk.Frame(cols)
@@ -492,12 +501,6 @@ class CalibPhase(PhaseFrame):
                                      command=self._save_cyano)
         self.c_save_btn.pack(side="left", padx=4)
         self.refresh_color_profiles()
-
-        self.build_log(self, height=10)
-        self._append_log(
-            "Los perfiles guardados aquí aparecen en la fase «② Generar hojas» "
-            "(perfil de impresora en la pestaña Hoja; curva de cianotipia en la "
-            "pestaña Cianotipia).")
 
     def _pick(self, var):
         f = filedialog.askopenfilename(title="Elegir escaneo", filetypes=_IMG_TYPES)
@@ -735,8 +738,11 @@ class VideoPhase(PhaseFrame):
         ttk.Button(sec, text="Examinar…", command=self._pick_out).grid(
             row=1, column=2, pady=(6, 0))
 
+        # Barra anclada abajo, empaquetada tras las secciones pero con
+        # side="bottom": si el contenido no cabe, se encoge el log (que va
+        # después), nunca los botones.
         bar = ttk.Frame(self, padding=(PAD, PAD, PAD, 0))
-        bar.pack(fill="x")
+        bar.pack(side="bottom", fill="x")
         self.progress = ttk.Progressbar(bar, mode="determinate")
         self.progress.pack(fill="x")
         self.status_lbl = ttk.Label(bar, text="Listo.", style="Sub.TLabel")
@@ -750,7 +756,7 @@ class VideoPhase(PhaseFrame):
                                      state="disabled")
         self.cancel_btn.pack(side="right", padx=(0, PAD))
 
-        self.build_log(self)
+        self.build_log(self, side="bottom")
         self._append_log("El último paso: convierte los fotogramas recuperados "
                          "de nuevo en video, en el orden original.")
 
