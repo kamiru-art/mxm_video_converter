@@ -268,10 +268,16 @@ class PhaseFrame(ttk.Frame):
             return default
 
     # --------------------------------------------------------------- log
-    def build_log(self, parent, height=9):
+    def build_log(self, parent, height=9, side=None):
+        """side="bottom" ancla el log abajo; empaquetarlo (junto a la barra de
+        acción) ANTES que el resto le da prioridad de espacio con pack."""
         p = PALETTE
         frame = ttk.Frame(parent)
-        frame.pack(fill="both", expand=True, padx=PAD, pady=(PAD, 0))
+        if side:
+            frame.pack(side=side, fill="both", expand=True, padx=PAD,
+                       pady=(PAD, 0))
+        else:
+            frame.pack(fill="both", expand=True, padx=PAD, pady=(PAD, 0))
         self.log_text = tk.Text(frame, height=height, bg=p["log_bg"],
                                 fg=p["text"], relief="solid", borderwidth=1,
                                 highlightthickness=0, wrap="word",
