@@ -566,6 +566,63 @@ check("contenido del negativo al derecho y en su sitio",
       f"corr={corr_i:.3f} vs espejo={corr_im:.3f}")
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 4j. La fila de metadatos no invade el fotograma (modo ahorro) ══")
+# El caso real: con halo grande y nombres largos, el halo entintado de la
+# fila [QR + nombre] se dibujaba POR ENCIMA del borde inferior del fotograma
+# y lo tapaba. Ahora la celda reserva el espacio del halo (arriba y abajo) y,
+# si el nombre no cabe a lo ancho, la fuente se achica hasta 6 pt y luego el
+# texto impreso se elide con '…' — el frame no se toca de ninguna manera.
+negros_dir = TMP / "frames_negros"
+negros_dir.mkdir()
+negros = []
+for i in range(4):
+    p = negros_dir / f"negro_{i + 1}.png"
+    cv2.imwrite(str(p), np.zeros((360, 640, 3), np.uint8))
+    negros.append(str(p))
+et_largas = [f"un_recuerdito_con_nombre_larguisimo_de_verdad_{i + 1:03d}"
+             for i in range(4)]
+s4j = settings_base(TMP / "hojas_meta", mode="cianotipia", cyan_mirror=False,
+                    cyan_bg="ahorro", cyan_halo_mm=6.0, font_size_pt=18,
+                    qr_size_mm=12.0, cyan_frame_border_mm=0.0,
+                    out_name="meta", project_name="meta")
+res4j = core.generate(s4j, negros, labels=et_largas)
+# Un frame negro sale TRANSPARENTE en el negativo (blanco): cualquier píxel
+# oscuro dentro de su bbox es tinta ajena (halo/QR/nombre) tapándolo.
+img4j = cv2.imread(res4j["pages"][0])
+lay4j = layoutfile.load(res4j["layout"])
+hoja4j = lay4j["hojas"][0]
+peor = 255
+for fr in hoja4j["frames"].values():
+    x1, y1, x2, y2 = [int(v) for v in fr["bbox"]]
+    peor = min(peor, int(img4j[y1 + 2:y2 - 2, x1 + 2:x2 - 2].min()))
+check("nada pisa el área de los fotogramas (halo 6 mm, nombres largos)",
+      peor > 230, f"píxel más oscuro dentro de un frame: {peor}")
+halo4j = round(6.0 / 25.4 * 200)
+check("el halo de la fila de metadatos queda por debajo del frame",
+      all(hoja4j["qrs"][k]["bbox"][1] - halo4j >= hoja4j["frames"][k]["bbox"][3]
+          for k in hoja4j["qrs"]), "el halo del QR alcanza el frame")
+check("aviso de etiquetas que no caben (se achican/eliden)",
+      any("achicará" in a for a in res4j["avisos"]), str(res4j["avisos"]))
+# Y la hoja se sigue procesando: los QRs (quizá achicados) siguen legibles y
+# el layout describe exactamente lo impreso.
+p4j = cv2.imread(res4j["pages"][0])
+g4j2 = cv2.cvtColor(p4j, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+print4j = np.clip(paperc[None, None, :] * (1 - g4j2[..., None])
+                  + bluec[None, None, :] * g4j2[..., None], 0, 255).astype(np.uint8)
+p4j_path = TMP / "meta_print.png"
+cv2.imwrite(str(p4j_path), print4j)
+scans4j = TMP / "scans_meta"
+scans4j.mkdir()
+fake_scan(p4j_path, scans4j / "scan_meta.png", angle_deg=1.6, scale=2.4,
+          tint=(1.05, 0.97, 0.92), seed=67)
+rep4j = scan.procesar_carpeta(scans4j, res4j["layout"], TMP / "proc_meta",
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+check("hoja con metadatos ajustados se procesa (4/4)",
+      rep4j["escaneos_ok"] == 1 and rep4j["frames_extraidos"] == 4,
+      str([r["error"] for r in rep4j["resultados"]]))
+
+# ════════════════════════════════════════════════════════════════
 print("\n══ 5. Deduplicación perceptual ══")
 dup_dir = TMP / "frames_dup"
 dup_paths = make_frames(dup_dir, n=6, dup_pairs=((0, 1), (0, 2), (3, 5)))

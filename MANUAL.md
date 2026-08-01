@@ -349,7 +349,11 @@ activado (fase ②, pestaña 7):
     **transparentes** (sin tinta) y solo los marcadores, QRs y nombres llevan
     un **halo entintado** (margen configurable, 5 mm por defecto) para
     distinguirse. En la copia azul el fondo queda **azul** y cada marcador/QR
-    flota en su islita blanca. Gasta una fracción de la tinta.
+    flota en su islita blanca. Gasta una fracción de la tinta. El halo de la
+    fila QR+nombre tiene su espacio reservado dentro de la celda: **nunca
+    tapa el fotograma**; si un nombre no cabe a lo ancho, la fuente se achica
+    sola (hasta 6 pt) y luego el texto impreso se recorta con «…» (el QR y el
+    layout conservan el nombre completo).
   - **Fondo COMPLETO**: toda la zona muerta va entintada; en la copia azul el
     fondo queda **blanco papel** (como una hoja normal). Bonito, pero carísimo
     en tinta.
