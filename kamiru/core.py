@@ -22,6 +22,7 @@ Novedades v2:
 from __future__ import annotations
 
 import copy
+import functools
 import math
 import shutil
 from pathlib import Path
@@ -205,8 +206,13 @@ class Settings:
         return self.format_page_label(self.page_num_start + page_idx)
 
 
+@functools.lru_cache(maxsize=64)
 def _load_font(path, size_px: int):
-    """Carga una fuente TrueType/OpenType; cae a la fuente por defecto si falla."""
+    """Carga una fuente TrueType/OpenType; cae a la fuente por defecto si falla.
+
+    Cacheada: los fallbacks de ajuste de etiquetas (_fit_meta_text) prueban
+    varios tamaños por etiqueta y sin caché recargarían la misma fuente
+    cientos de veces por hoja."""
     if path:
         try:
             p = str(path)
@@ -577,11 +583,24 @@ def _build_layout(s: Settings) -> _Layout:
 
     meta_h = _meta_content_height(s, label_h, dpi)
     label_gap = paper.mm_to_px(s.label_gap_mm, dpi) if meta_h > 0 else 0
+    halo_px = paper.mm_to_px(max(0.0, s.cyan_halo_mm), dpi)
+
+    # En modo ahorro, la fila de metadatos (QR + nombre) lleva un halo
+    # entintado que se expande halo_px en TODAS direcciones. Ese halo no debe
+    # invadir jamás el fotograma (por arriba) ni la celda siguiente (por
+    # abajo), así que su espacio se reserva DENTRO de la celda: el hueco
+    # frame↔metadatos crece hasta cubrir el halo (+0.5 mm de respiro) y la
+    # celda aparta halo extra bajo la fila. Antes el halo se dibujaba por
+    # encima del borde inferior del fotograma y lo tapaba.
+    meta_halo = halo_px if (_cyan_saving(s) and meta_h > 0) else 0
+    if meta_halo:
+        label_gap = max(label_gap, meta_halo + paper.mm_to_px(0.5, dpi))
 
     # Orientación y cuadrícula: vertical, horizontal o "mejor ajuste" (que
     # puede intercambiar columnas↔filas para agrandar los fotogramas).
     frame_paths = getattr(s, "_frame_paths", None) or []
-    landscape, cols, rows = resolve_page_layout(s, frame_paths, meta_h, label_gap)
+    landscape, cols, rows = resolve_page_layout(s, frame_paths,
+                                                meta_h + meta_halo, label_gap)
     page_w, page_h = paper.page_size_px(
         s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm
     )
@@ -593,12 +612,12 @@ def _build_layout(s: Settings) -> _Layout:
 
     cell_w = (content_w - (cols - 1) * gutter) / cols
     cell_h = (content_h - (rows - 1) * gutter) / rows
-    label_area = (meta_h + label_gap) if meta_h > 0 else 0
+    label_area = (meta_h + meta_halo + label_gap) if meta_h > 0 else 0
     img_area_h = cell_h - label_area
     if cell_w <= 1 or img_area_h <= 1:
         raise ValueError(
             "No hay espacio suficiente para las celdas. Reduce columnas/filas, "
-            "los márgenes, el espaciado o sube el tamaño de hoja/DPI."
+            "los márgenes, el espaciado, el halo o sube el tamaño de hoja/DPI."
         )
 
     L = _Layout()
@@ -610,7 +629,7 @@ def _build_layout(s: Settings) -> _Layout:
     L.label_area, L.img_area_h = label_area, img_area_h
     L.meta_h = meta_h
     L.qr_px = paper.mm_to_px(s.qr_size_mm, dpi) if (s.registration_on and s.qr_on) else 0
-    L.halo_px = paper.mm_to_px(max(0.0, s.cyan_halo_mm), dpi)
+    L.halo_px = halo_px
 
     # Geometría de los marcadores de registro (igual en todas las hojas).
     if s.registration_on:
@@ -716,6 +735,80 @@ def _label_text_for(s: Settings, labels, numbers, global_idx: int) -> str:
     if numbers is not None and global_idx < len(numbers):
         return s.format_label(numbers[global_idx])
     return s.label_for(global_idx)
+
+
+# Tamaño mínimo (pt) al que se achica la fuente de las etiquetas antes de
+# pasar a elidir el texto: por debajo de esto ya no se lee sobre papel.
+MIN_LABEL_PT = 6.0
+
+
+def _fit_meta_text(draw, s: Settings, dpi: int, font, text: str, avail_w: int):
+    """Ajusta el texto IMPRESO de una etiqueta al ancho disponible.
+
+    Fallbacks en orden: (1) achicar la fuente punto a punto hasta
+    MIN_LABEL_PT; (2) elidir el texto con '…'. Solo cambia lo impreso: la
+    etiqueta completa sigue viva en el QR y en el layout.json, así que el
+    fotograma se recupera del escaneo con su nombre íntegro.
+
+    Returns:
+        (texto_visible, fuente, tw, th, reducido)
+    """
+    if font is None or avail_w <= 0:
+        return "", font, 0, 0, avail_w <= 0
+    tw, th = _text_size(draw, text, font)
+    if tw <= avail_w:
+        return text, font, tw, th, False
+    pt = float(s.font_size_pt)
+    while pt > MIN_LABEL_PT:
+        pt = max(MIN_LABEL_PT, pt - 1.0)
+        font = _load_font(s.font_path, paper.pt_to_px(pt, dpi))
+        tw, th = _text_size(draw, text, font)
+        if tw <= avail_w:
+            return text, font, tw, th, True
+    base = text
+    while base:
+        base = base[:-1]
+        cand = base + "…"
+        tw, th = _text_size(draw, cand, font)
+        if tw <= avail_w:
+            return cand, font, tw, th, True
+    return "", font, 0, 0, True
+
+
+def _meta_row_geometry(s: Settings, L: "_Layout", draw, text: str,
+                       cell_x: float, meta_top: float) -> dict:
+    """Geometría de la fila de metadatos [QR] [texto] bajo un fotograma.
+
+    El ancho disponible es el de la celda menos el halo de modo ahorro (que
+    se expande hacia los lados). Si la fila no cabe: primero se achica la
+    fuente, luego se elide el texto y, como último recurso, se achica el QR
+    al ancho de la celda. Así la fila (halo incluido) queda SIEMPRE dentro
+    de su celda y no puede tapar el fotograma ni a los vecinos.
+
+    Compartida por _render_page y _render_geometry_only para que el
+    layout.json describa exactamente lo impreso.
+    """
+    margen = L.halo_px if _cyan_saving(s) else 0
+    avail = max(8, int(L.cell_w) - 2 * margen)
+    qr_px = min(L.qr_px, avail)
+    texto_visible, fuente, tw, th = "", L.label_font, 0, 0
+    reducido = qr_px < L.qr_px
+    if s.labels_on and L.label_font is not None:
+        gap = max(6, qr_px // 8)
+        texto_visible, fuente, tw, th, red = _fit_meta_text(
+            draw, s, L.dpi, L.label_font, text, avail - qr_px - gap)
+        reducido = reducido or red
+    gap = max(6, qr_px // 8) if tw else 0
+    total_w = qr_px + gap + tw
+    qx = int(round(cell_x + (L.cell_w - total_w) / 2))
+    qy = int(round(meta_top + (L.meta_h - qr_px) / 2))
+    return {
+        "qr_px": qr_px, "qx": qx, "qy": qy,
+        "texto": texto_visible, "fuente": fuente, "tw": tw, "th": th,
+        "tx": qx + qr_px + gap,
+        "ty": int(round(meta_top + (L.meta_h - th) / 2)),
+        "total_w": total_w, "reducido": reducido,
+    }
 
 
 def _draw_registration_frame(s: Settings, L: _Layout, canvas: Image.Image):
@@ -863,47 +956,50 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
         text = _label_text_for(s, labels, numbers, global_idx)
         clave = _unique_key(claves_usadas, text) if record is not None else text
 
-        # Fila de metadatos: [QR] [texto], centrada bajo el frame.
+        # Fila de metadatos: [QR] [texto], centrada bajo el frame. Su
+        # geometría (con los fallbacks de fuente/QR) es la MISMA que registra
+        # _render_geometry_only en el layout.json.
         meta_top = py + new_h + L.label_gap
         qr_bbox = None
         if L.qr_px > 0 and record is not None:
             payload = markers.qr_payload(s.project_name or s.out_name,
                                          sheet_num, cell_idx, text)
-            qr_img = markers.qr_image(payload, L.qr_px, inverted=False)
+            fila = _meta_row_geometry(s, L, draw, text, cell_x, meta_top)
+            qr_img = markers.qr_image(payload, fila["qr_px"], inverted=False)
             if s.is_cyanotype:
                 qr_img = cyan.colorize_gray_patch(qr_img, s.cyan_ink,
                                                   s.cyan_ink_stops)
-            tw = th = 0
-            if s.labels_on and L.label_font is not None:
-                tw, th = _text_size(draw, text, L.label_font)
-            gap_qr_text = max(6, L.qr_px // 8) if tw else 0
-            total_w = L.qr_px + gap_qr_text + tw
-            qx = int(round(cell_x + (L.cell_w - total_w) / 2))
-            qy = int(round(meta_top + (L.meta_h - L.qr_px) / 2))
             if saving:
-                # Halo entintado detrás de toda la fila de metadatos.
+                # Halo entintado detrás de toda la fila de metadatos. La
+                # celda reserva su expansión (label_gap ≥ halo + 0.5 mm por
+                # arriba, meta_halo por abajo), así que nunca tapa el frame.
                 _halo_rect(draw, s,
-                           [qx, min(qy, int(meta_top)),
-                            qx + total_w, max(qy + L.qr_px,
-                                              int(meta_top + L.meta_h))],
+                           [fila["qx"], int(meta_top),
+                            fila["qx"] + fila["total_w"],
+                            int(meta_top + L.meta_h)],
                            L.halo_px)
-            canvas.paste(qr_img, (qx, qy))
-            qr_bbox = [qx, qy, qx + L.qr_px, qy + L.qr_px]
-            if tw:
-                tx = qx + L.qr_px + gap_qr_text
-                ty = int(round(meta_top + (L.meta_h - th) / 2))
-                draw.text((tx, ty), text, fill=label_color, font=L.label_font)
+            canvas.paste(qr_img, (fila["qx"], fila["qy"]))
+            qr_bbox = [fila["qx"], fila["qy"],
+                       fila["qx"] + fila["qr_px"], fila["qy"] + fila["qr_px"]]
+            if fila["tw"]:
+                draw.text((fila["tx"], fila["ty"]), fila["texto"],
+                          fill=label_color, font=fila["fuente"])
             record["qrs"][clave] = {
                 "bbox": qr_bbox, "celda": cell_idx, "texto": payload,
                 "etiqueta": text,
             }
         elif s.labels_on and L.label_font is not None:
-            tw, th = _text_size(draw, text, L.label_font)
-            tx = int(round(cell_x + (L.cell_w - tw) / 2))
-            ty = int(round(meta_top + (L.meta_h - th) / 2))
-            if saving:
-                _halo_rect(draw, s, [tx, ty, tx + tw, ty + th], L.halo_px)
-            draw.text((tx, ty), text, fill=label_color, font=L.label_font)
+            margen = L.halo_px if saving else 0
+            avail = max(8, int(L.cell_w) - 2 * margen)
+            texto_visible, fuente, tw, th, _red = _fit_meta_text(
+                draw, s, L.dpi, L.label_font, text, avail)
+            if tw:
+                tx = int(round(cell_x + (L.cell_w - tw) / 2))
+                ty = int(round(meta_top + (L.meta_h - th) / 2))
+                if saving:
+                    _halo_rect(draw, s, [tx, ty, tx + tw, ty + th], L.halo_px)
+                draw.text((tx, ty), texto_visible, fill=label_color,
+                          font=fuente)
 
         if record is not None:
             meta = {"bbox": [px, py, px + new_w, py + new_h],
@@ -1076,6 +1172,28 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
 
     def _label_of(gidx):
         return _label_text_for(s, labels, numbers, gidx)
+
+    # Aviso único si alguna etiqueta no cabe con la fuente elegida: al dibujar
+    # se achica la fuente (hasta MIN_LABEL_PT) o se elide con '…' para que la
+    # fila de metadatos jamás invada el fotograma ni la celda vecina.
+    avisos_extra: list[str] = []
+    if s.labels_on and L.label_font is not None and frame_paths:
+        tmp_draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        margen = L.halo_px if _cyan_saving(s) else 0
+        avail = max(8, int(L.cell_w) - 2 * margen)
+        if L.qr_px > 0:
+            qr_eff = min(L.qr_px, avail)
+            avail -= qr_eff + max(6, qr_eff // 8)
+        mas_larga = max((_label_of(i) for i in range(len(frame_paths))),
+                        key=len)
+        tw_max, _ = _text_size(tmp_draw, mas_larga, L.label_font)
+        if tw_max > avail:
+            avisos_extra.append(
+                f"Hay etiquetas que no caben junto al QR con la fuente de "
+                f"{s.font_size_pt:g} pt (p. ej. «{mas_larga}»): se achicará "
+                f"la fuente (hasta {MIN_LABEL_PT:g} pt) y, si aún no cabe, "
+                "se recortará el texto impreso con '…'. El QR y el "
+                "layout.json conservan la etiqueta completa.")
 
     # Exportar fotogramas individuales a máxima calidad (opcional).
     frames_dir = None
@@ -1258,7 +1376,7 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
         "orientation": "Horizontal" if L.landscape else "Vertical",
         "grid": f"{L.cols}×{L.rows}",
         "grid_swapped": (L.cols, L.rows) != (s.cols, s.rows),
-        "avisos": cyanotype_size_warnings(s),
+        "avisos": cyanotype_size_warnings(s) + avisos_extra,
         "fallos_originales": fallos_originales,
     }
 
@@ -1310,15 +1428,11 @@ def _render_geometry_only(s: Settings, L: _Layout, chunk, page_idx,
         if L.qr_px > 0:
             payload = markers.qr_payload(s.project_name or s.out_name,
                                          sheet_num, cell_idx, text)
-            tw = th = 0
-            if s.labels_on and L.label_font is not None:
-                tw, th = _text_size(draw, text, L.label_font)
-            gap_qr_text = max(6, L.qr_px // 8) if tw else 0
-            total_w = L.qr_px + gap_qr_text + tw
-            qx = int(round(cell_x + (L.cell_w - total_w) / 2))
-            qy = int(round(meta_top + (L.meta_h - L.qr_px) / 2))
+            fila = _meta_row_geometry(s, L, draw, text, cell_x, meta_top)
             record["qrs"][clave] = {
-                "bbox": [qx, qy, qx + L.qr_px, qy + L.qr_px],
+                "bbox": [fila["qx"], fila["qy"],
+                         fila["qx"] + fila["qr_px"],
+                         fila["qy"] + fila["qr_px"]],
                 "celda": cell_idx, "texto": payload,
                 "etiqueta": text,
             }
