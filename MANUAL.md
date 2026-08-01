@@ -410,8 +410,14 @@ Refuerzos automáticos de la fase ③ para cianotipia:
   superior-izquierdo se imprime un **triángulo testigo**: en la copia correcta
   apunta a la **derecha**; si apunta a la izquierda, esa hoja se expuso al
   revés (se procesa igual).
+- **Polaridad invertida**: si expusiste una hoja de modo **normal** como
+  cianotipia (sin generar el negativo), la copia sale con los marcadores y
+  QRs en negativo (claros sobre azul oscuro). La app también los detecta así,
+  igual que en espejo, y lo avisa en el informe.
 - **Marcadores lavados**: los que la primera pasada no ve se re-buscan
-  localmente justo donde deberían estar (segunda pasada guiada).
+  localmente justo donde deberían estar (segunda pasada guiada). Si la
+  detección normal es débil, se reintenta con parámetros relajados y con un
+  proxy más pequeño (binning) que ahoga el grano químico.
 - **Papel deformado**: el papel se moja y encoge; la app mide el **residuo de
   alineación** de cada marcador (sale en el informe, en mm), descarta
   marcadores inconsistentes y corrige cada recorte con los marcadores

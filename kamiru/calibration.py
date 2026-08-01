@@ -201,8 +201,8 @@ def _align_to_canonical(scan_path, geometry, mode="normal"):
 
     bboxes = {str(k): v for k, v in geometry["marker_bboxes"].items()}
     expected = [int(k) for k in bboxes]
-    img, _, found, _ = _detect_oriented(img, markers.DEFAULT_DICT,
-                                        expected, mode)
+    img, _, found, *_ = _detect_oriented(img, markers.DEFAULT_DICT,
+                                         expected, mode)
     if len(found) < 3:
         raise ValueError(
             f"Solo se detectaron {len(found)} marcadores de referencia en el "
@@ -325,8 +325,14 @@ def analizar_prueba_impresora(scan_path, paper_name: str = "A4",
     # ── Tamaño mínimo de marcador ───────────────────────────────
     detector_ids = SIZE_TEST_IDS
     warp_bgr = warp if warp.ndim == 3 else cv2.cvtColor(warp, cv2.COLOR_GRAY2BGR)
-    _, found_sizes = _detect_markers_multi(warp_bgr, markers.DEFAULT_DICT,
-                                           detector_ids, "normal")
+    # Detector ESTRICTO a propósito (sin polaridad invertida ni escalada de
+    # parámetros): aquí se MIDE qué tamaño mínimo resuelve la impresora; un
+    # detector relajado inflaría la capacidad medida y recomendaría
+    # marcadores que el procesado real no vería con fiabilidad.
+    _, found_sizes, _, _ = _detect_markers_multi(warp_bgr, markers.DEFAULT_DICT,
+                                                 detector_ids, "normal",
+                                                 polaridad="normal",
+                                                 escalar=False)
     detectados_mm = sorted(t["mm"] for t in g["size_test"] if t["id"] in found_sizes)
     marker_min = detectados_mm[0] if detectados_mm else None
     if marker_min is None:

@@ -22,6 +22,20 @@ Mejoras v2 sobre el procesador original:
 * ESCANEOS ESPEJADOS: los ArUco son quirales; si la cianotipia se expuso con
   el acetato al revés, la copia (y su escaneo) salen en espejo. Se detecta
   automáticamente, se voltea el escaneo y se avisa en el informe.
+* POLARIDAD INVERTIDA: si una hoja de modo normal se expone como cianotipia
+  (sin generar el negativo), la copia sale con los marcadores y QRs en
+  negativo (celdas claras sobre fondo oscuro). Cada variante de preprocesado
+  se prueba también invertida, así que esas copias se procesan igual; la
+  inversión se hace sobre la imagen (no con detectInvertedMarker, que sesga
+  las esquinas) para conservar la precisión subpíxel.
+* ESCALADA DE PARÁMETROS: si el detector del modo actual encuentra pocos
+  marcadores, se reintenta con los parámetros relajados de cianotipia
+  (bordes difusos, iluminación desigual) aunque el layout sea de modo
+  normal. Los falsos positivos no preocupan: solo se aceptan los IDs
+  esperados y la homografía RANSAC + el filtro de residuos los descartan.
+* BINNING: si la detección en el proxy estándar es débil, se reintenta en un
+  proxy a la mitad de lado (binning 2× extra): promediar píxeles ahoga el
+  grano químico y la textura del papel que confunden al umbral adaptativo.
 * RECUPERACIÓN GUIADA: los marcadores que la pasada global pierde (lavados,
   poco contraste) se re-buscan localmente donde DEBERÍAN estar según una
   homografía preliminar.
@@ -65,8 +79,11 @@ from . import layoutfile, markers
 
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
-# Lado máximo del proxy usado para la detección rápida de marcadores.
+# Lado máximo del proxy usado para la detección rápida de marcadores. Si la
+# detección a ese tamaño es débil se reintenta a la mitad (binning 2× extra:
+# promediar píxeles ahoga el grano químico y la textura del papel).
 PROXY_MAX_SIDE = 2400
+PROXY_SIDES = (PROXY_MAX_SIDE, PROXY_MAX_SIDE // 2)
 
 # Umbrales del control de precisión de la alineación (en milímetros físicos,
 # convertidos con la escala medida de cada escaneo para que signifiquen lo
@@ -249,7 +266,7 @@ def _flat_field(channel: np.ndarray) -> np.ndarray:
     return cv2.normalize(flat, None, 0, 255, cv2.NORM_MINMAX)
 
 
-def _gray_variants(bgr8: np.ndarray, mode: str):
+def _gray_variants_base(bgr8: np.ndarray, mode: str):
     """Genera versiones en escala de grises del escaneo, en orden de
     probabilidad de éxito según el modo.
 
@@ -277,6 +294,33 @@ def _gray_variants(bgr8: np.ndarray, mode: str):
         yield "canal_rojo_clahe", clahe.apply(red)
         yield "rojo_aplanado", _flat_field(red)
         yield "gris_norm", cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+
+
+def _gray_variants(bgr8: np.ndarray, mode: str, polaridad: str = "ambas"):
+    """Variantes de grises en ambas POLARIDADES.
+
+    Una hoja de modo normal expuesta como cianotipia (sin pasar por el
+    negativo) sale con marcadores y QRs invertidos: celdas claras sobre fondo
+    oscuro. Invertir la imagen antes de detectar los recupera SIN el sesgo de
+    esquinas de detectInvertedMarker (la geometría no cambia al invertir).
+
+    polaridad: "ambas" (normal primero, invertida después), "normal" (solo
+    normal) o "invertida_primero" (cuando la pasada global ya determinó que
+    la copia está en negativo, para que los recortes locales acierten antes).
+    """
+    base = []  # grises ya calculados: la segunda polaridad los reusa
+    for name, g in _gray_variants_base(bgr8, mode):
+        base.append((name, g))
+        if polaridad == "invertida_primero":
+            yield name + "_invertido", cv2.bitwise_not(g)
+        else:
+            yield name, g
+    if polaridad == "invertida_primero":
+        for name, g in base:
+            yield name, g
+    elif polaridad == "ambas":
+        for name, g in base:
+            yield name + "_invertido", cv2.bitwise_not(g)
 
 
 def _make_detector(dict_name: str, mode: str = "normal"):
@@ -310,29 +354,74 @@ def _make_detector(dict_name: str, mode: str = "normal"):
 
 
 def _detect_markers_multi(bgr8: np.ndarray, dict_name: str, expected_ids,
-                          mode: str):
+                          mode: str, polaridad: str = "ambas",
+                          escalar: bool = True):
     """Prueba varias estrategias de preprocesado y devuelve la mejor detección.
 
-    Returns:
-        (estrategia, {id: corners_4x2_float32}) — corners en coords de bgr8.
-    """
-    detector = _make_detector(dict_name, mode)
-    expected = set(int(i) for i in expected_ids)
-    best_name, best = "", {}
+    Cada variante de grises se prueba en ambas polaridades (la invertida solo
+    si la primera queda floja): cubre hojas de modo normal expuestas como
+    cianotipia sin pasar por el negativo. Si el detector del modo actual
+    encuentra pocos marcadores y escalar=True, se reintenta con los
+    parámetros relajados de cianotipia (bordes difusos, química que come
+    bits); los falsos positivos no preocupan porque solo se aceptan los IDs
+    esperados y la homografía RANSAC + el filtro de residuos los descartan.
 
-    for name, gray in _gray_variants(bgr8, mode):
-        corners, ids, _ = detector.detectMarkers(gray)
-        found = {}
-        if ids is not None:
-            for i, mid in enumerate(ids.flatten()):
-                mid = int(mid)
-                if mid in expected and mid not in found:
-                    found[mid] = corners[i][0].astype(np.float32)
-        if len(found) > len(best):
-            best_name, best = name, found
-        if len(best) >= len(expected):
+    La búsqueda exhaustiva (2 polaridades × 2 perfiles) solo se recorre
+    entera en escaneos que de otro modo fallarían: con una detección sólida
+    (≥ max(3, mitad de lo esperado)) se corta en cuanto se alcanza. La
+    calibración de impresora pasa polaridad="normal" y escalar=False para
+    MEDIR con el detector estricto (relajarlo inflaría la capacidad medida).
+
+    Returns:
+        (estrategia, {id: corners_4x2_float32}, invertida, escalado)
+        — corners en coords de bgr8; invertida/escalado describen la pasada
+        ganadora, para que las pasadas locales hereden lo aprendido sin
+        adivinarlo del nombre de la estrategia.
+    """
+    expected = set(int(i) for i in expected_ids)
+    solido = max(3, len(expected) // 2)  # detección "suficiente": parar aquí
+    perfiles = [(mode, False)]
+    if escalar and mode != "cianotipia":
+        perfiles.append(("cianotipia", True))
+    best_name, best = "", {}
+    best_inv = best_esc = False
+
+    for prof_mode, escalado in perfiles:
+        detector = _make_detector(dict_name, prof_mode)
+
+        def _detecta(name, gray, invertida):
+            nonlocal best_name, best, best_inv, best_esc
+            corners, ids, _ = detector.detectMarkers(gray)
+            found = {}
+            if ids is not None:
+                for i, mid in enumerate(ids.flatten()):
+                    mid = int(mid)
+                    if mid in expected and mid not in found:
+                        found[mid] = corners[i][0].astype(np.float32)
+            if len(found) > len(best):
+                best_name = (name + ("_invertido" if invertida else "")
+                             + ("_ciano" if escalado else ""))
+                best, best_inv, best_esc = found, invertida, escalado
+            return len(best) >= len(expected)
+
+        inv_primero = polaridad == "invertida_primero"
+        base = []  # grises ya calculados: la otra polaridad los reusa
+        completo = False
+        for name, g in _gray_variants_base(bgr8, prof_mode):
+            base.append((name, g))
+            if _detecta(name, cv2.bitwise_not(g) if inv_primero else g,
+                        inv_primero):
+                completo = True
+                break
+        # La otra polaridad, solo si la primera quedó floja.
+        if not completo and polaridad != "normal" and len(best) < solido:
+            for name, g in base:
+                if _detecta(name, g if inv_primero else cv2.bitwise_not(g),
+                            not inv_primero):
+                    break
+        if len(best) >= solido:
             break
-    return best_name, best
+    return best_name, best, best_inv, best_esc
 
 
 def _detect_oriented(img: np.ndarray, dict_name: str, expected_ids,
@@ -354,32 +443,58 @@ def _detect_oriented(img: np.ndarray, dict_name: str, expected_ids,
     completa con el mapeo exacto (el redondeo del proxy introduce un sesgo
     ≈(factor−1) px si simplemente se multiplica por factor tras el volteo).
 
+    Si la detección al derecho y en espejo sigue débil en el proxy estándar,
+    se reintenta en un proxy a la mitad de lado (sufijo "_bin": binning 2×
+    extra que promedia el grano químico y la textura del papel).
+
     Returns:
-        (img, estrategia, {id: corners_fullres}, flipped)
+        (img, estrategia, {id: corners_fullres}, flipped, invertida, escalado)
+        — invertida/escalado vienen de la pasada ganadora del detector
+        multi-estrategia, para que las pasadas locales hereden lo aprendido.
     """
     H, W = img.shape[:2]
-    factor = max(1.0, max(H, W) / float(PROXY_MAX_SIDE))
-    if factor > 1.0:
-        proxy = cv2.resize(img, (int(W / factor), int(H / factor)),
-                           interpolation=cv2.INTER_AREA)
-    else:
-        proxy = img
-    proxy8 = _to_u8(proxy)
-    if proxy8.ndim == 2:
-        proxy8 = cv2.cvtColor(proxy8, cv2.COLOR_GRAY2BGR)
-    Wp = proxy8.shape[1]
-
     expected_n = len(set(int(i) for i in expected_ids))
-    estrategia, found = _detect_markers_multi(proxy8, dict_name,
-                                              expected_ids, mode)
-    flipped = False
-    if len(found) < max(3, expected_n // 2):
-        estrategia_f, found_f = _detect_markers_multi(
-            cv2.flip(proxy8, 1), dict_name, expected_ids, mode)
-        if len(found_f) > len(found):
-            estrategia, found = f"{estrategia_f}_espejado", found_f
-            flipped = True
-            img = cv2.flip(img, 1)
+    objetivo = max(3, expected_n // 2)  # detección "fuerte": dejar de buscar
+
+    estrategia, found, flipped = "", {}, False
+    invertida = escalado = False
+    factor, Wp = 1.0, W
+    fuerte = False
+    factor_previo = None
+    for idx, max_side in enumerate(PROXY_SIDES):
+        f = max(1.0, max(H, W) / float(max_side))
+        if factor_previo is not None and abs(f - factor_previo) < 1e-9:
+            continue  # la imagen ya era menor que este proxy: sería idéntico
+        factor_previo = f
+        if f > 1.0:
+            proxy = cv2.resize(img, (int(W / f), int(H / f)),
+                               interpolation=cv2.INTER_AREA)
+        else:
+            proxy = img
+        proxy8 = _to_u8(proxy)
+        if proxy8.ndim == 2:
+            proxy8 = cv2.cvtColor(proxy8, cv2.COLOR_GRAY2BGR)
+        sufijo_bin = "_bin" if idx > 0 else ""
+
+        for flip in (False, True):
+            cara = cv2.flip(proxy8, 1) if flip else proxy8
+            est, fnd, inv, esc = _detect_markers_multi(cara, dict_name,
+                                                       expected_ids, mode)
+            # Estricto (>): en empate gana la pasada anterior, es decir, al
+            # derecho antes que en espejo y sin binning antes que con él.
+            if len(fnd) > len(found):
+                estrategia = est + ("_espejado" if flip else "") + sufijo_bin
+                found, flipped = fnd, flip
+                invertida, escalado = inv, esc
+                factor, Wp = f, proxy8.shape[1]
+            if len(found) >= objetivo:
+                fuerte = True
+                break
+        if fuerte:
+            break
+
+    if flipped:
+        img = cv2.flip(img, 1)
 
     full = {}
     for mid, c in found.items():
@@ -391,11 +506,12 @@ def _detect_oriented(img: np.ndarray, dict_name: str, expected_ids,
         else:
             cf *= factor
         full[mid] = cf
-    return img, estrategia, full, flipped
+    return img, estrategia, full, flipped, invertida, escalado
 
 
 def _refine_corners_fullres(img_full: np.ndarray, full_corners: dict,
-                            dict_name: str, mode: str):
+                            dict_name: str, mode: str,
+                            polaridad: str = "ambas"):
     """Re-detecta cada marcador en un recorte a resolución completa para
     obtener esquinas precisas. full_corners llega ya en coordenadas de
     img_full (las convierte _detect_oriented); si el re-detectado local
@@ -418,7 +534,7 @@ def _refine_corners_fullres(img_full: np.ndarray, full_corners: dict,
         crop = img_full[ry1:ry2, rx1:rx2]
         crop8 = _to_u8(crop)
         found = None
-        for _, gray in _gray_variants(crop8, mode):
+        for _, gray in _gray_variants(crop8, mode, polaridad):
             corners, ids, _ = detector.detectMarkers(gray)
             if ids is not None:
                 for i, did in enumerate(ids.flatten()):
@@ -455,7 +571,8 @@ def _correspondences(refined: dict, layout_bboxes: dict, s: float):
 
 def _recover_missing_markers(img_full: np.ndarray, refined: dict,
                              layout_bboxes: dict, s: float, dict_name: str,
-                             mode: str, thresh: float) -> dict:
+                             mode: str, thresh: float,
+                             polaridad: str = "ambas") -> dict:
     """Segunda pasada GUIADA: busca los marcadores no detectados justo donde
     deberían estar.
 
@@ -504,7 +621,7 @@ def _recover_missing_markers(img_full: np.ndarray, refined: dict,
             k = 3.0
             crop8 = cv2.resize(crop8, (0, 0), fx=k, fy=k,
                                interpolation=cv2.INTER_CUBIC)
-        for _, gray in _gray_variants(crop8, mode):
+        for _, gray in _gray_variants(crop8, mode, polaridad):
             corners, ids, _ = detector.detectMarkers(gray)
             if ids is None:
                 continue
@@ -636,7 +753,8 @@ def _decode_qr(crop_bgr: np.ndarray) -> str | None:
 
     OpenCV primero (sin dependencias nativas); pyzbar de refuerzo si está.
     Variantes: gris/canal rojo, ampliación, Otsu, umbral adaptativo con cierre
-    morfológico (fondo desigual), inversión y, como último recurso, espejo.
+    morfológico (fondo desigual) y polaridad invertida (QR claro sobre fondo
+    oscuro: hoja de modo normal expuesta como cianotipia).
     """
     if crop_bgr is None or crop_bgr.size == 0:
         return None
@@ -665,7 +783,10 @@ def _decode_qr(crop_bgr: np.ndarray) -> str | None:
                                      cv2.THRESH_BINARY, bs, 5)
         variants.append(cv2.morphologyEx(adap, cv2.MORPH_CLOSE,
                                          np.ones((3, 3), np.uint8)))
-    variants.append(255 - variants[1])  # polaridad invertida (Otsu del gris)
+    # Polaridad invertida: QR claro sobre fondo oscuro (hoja de modo normal
+    # expuesta como cianotipia). Se invierten el gris y el canal rojo (crudos
+    # y con Otsu); las variantes son [gris, otsu, adaptativo] × [gris, rojo].
+    variants.extend(255 - variants[i] for i in (0, 1, 3, 4))
 
     # El mejor detector prueba todas las variantes; el clásico solo unas
     # pocas de respaldo (con QRCodeDetectorAruco presente casi nunca aporta,
@@ -783,8 +904,8 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
 
     try:
         # 1. Detección rápida en proxy, con corrección de espejo integrada.
-        img, estrategia, found, flipped = _detect_oriented(
-            img, dict_name, expected_ids, mode)
+        img, estrategia, found, flipped, invertida, escalado = \
+            _detect_oriented(img, dict_name, expected_ids, mode)
         res.estrategia = estrategia
         res.marcadores = len(found)
         res.espejado = bool(flipped)
@@ -805,8 +926,19 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
                          f"estén tapados y que la hoja completa esté en el escaneo.")
             return res
 
+        # Lo que aprendió la pasada global guía las pasadas locales: si ganó
+        # la polaridad invertida se prueba primero en los recortes, y si hubo
+        # que escalar a los parámetros de cianotipia se mantienen.
+        polaridad = "invertida_primero" if invertida else "ambas"
+        det_mode = "cianotipia" if escalado else mode
+        if invertida:
+            res.advertencias.append(
+                "Marcadores con POLARIDAD INVERTIDA (¿hoja de modo normal "
+                "expuesta como cianotipia?); se detectaron en negativo.")
+
         # 2. Afinado de esquinas a resolución completa.
-        refined = _refine_corners_fullres(img, found, dict_name, mode)
+        refined = _refine_corners_fullres(img, found, dict_name, det_mode,
+                                          polaridad)
 
         # 3. Escala real del escaneo (medida, no asumida).
         s = _estimate_scale(refined, layout_bboxes)
@@ -820,7 +952,8 @@ def _process_one(scan_path: Path, layout: dict, out_dir: Path,
         # 3b. Recuperación guiada de los marcadores que faltan (lavados o de
         # bajo contraste): se buscan localmente donde deberían estar.
         extra = _recover_missing_markers(img, refined, layout_bboxes, s,
-                                         dict_name, mode, thresh)
+                                         dict_name, det_mode, thresh,
+                                         polaridad)
         if extra:
             refined.update(extra)
             res.marcadores = len(refined)
