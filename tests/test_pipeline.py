@@ -397,8 +397,8 @@ neg4f = cv2.flip(cv2.imread(res4f["pages"][0]), 1)
 g4f = cv2.cvtColor(neg4f, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 print4f = np.clip(paperc[None, None, :] * (1 - g4f[..., None])
                   + bluec[None, None, :] * g4f[..., None], 0, 255).astype(np.uint8)
-_, found4f = scan._detect_markers_multi(print4f, "DICT_4X4_50",
-                                        list(range(8)), "cianotipia")
+_, found4f, _, _ = scan._detect_markers_multi(print4f, "DICT_4X4_50",
+                                              list(range(8)), "cianotipia")
 check("marcador TL detectable junto al testigo (8 mm + halo 5 mm)",
       0 in found4f, f"detectados: {sorted(found4f)}")
 # El numerador de hoja se corre hacia dentro y no debe romper el marcador de
@@ -498,6 +498,72 @@ s4h3 = settings_base(TMP / "hojas_bloq3", mode="cianotipia",
 check("aviso con bloqueador demasiado claro",
       any("claro" in a for a in core.cyanotype_size_warnings(s4h3)),
       str(core.cyanotype_size_warnings(s4h3)))
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 4i. Hoja de modo NORMAL expuesta como cianotipia (polaridad invertida) ══")
+# El caso real que devolvía 0/8 marcadores: se imprimen las hojas de modo
+# normal (marcadores oscuros sobre papel claro) y se exponen directamente como
+# cianotipia SIN pasar por el negativo. La copia sale con la polaridad
+# invertida (marcadores/QRs claros sobre azul oscuro) y, si el acetato se
+# expone con la tinta hacia arriba, además EN ESPEJO. El layout sigue siendo
+# de modo "normal", así que también se prueba la escalada de parámetros.
+hoja_norm = cv2.imread(res["pages"][0], cv2.IMREAD_COLOR)
+g_inv = cv2.cvtColor(hoja_norm, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+# La CLARIDAD de la hoja es transparencia: papel blanco → azul; tinta → blanco.
+print_inv = np.clip(paperc[None, None, :] * (1 - g_inv[..., None])
+                    + bluec[None, None, :] * g_inv[..., None],
+                    0, 255).astype(np.uint8)
+pi_path = TMP / "invpol_print.png"
+cv2.imwrite(str(pi_path), print_inv)
+scans4i = TMP / "scans_invpol"
+scans4i.mkdir()
+fake_scan(pi_path, scans4i / "scan_invpol.png", angle_deg=1.9, scale=2.6,
+          tint=(1.05, 0.97, 0.91), seed=53)
+rep4i = scan.procesar_carpeta(scans4i, res["layout"], TMP / "proc_invpol",
+                              scan.ScanOptions(threads=1, report=False),
+                              log=lambda t: print("   ", t))
+r4i = rep4i["resultados"][0]
+check("copia en negativo procesada (layout de modo normal)",
+      rep4i["escaneos_ok"] == 1, str([r["error"] for r in rep4i["resultados"]]))
+check("estrategia con polaridad invertida", "_invertido" in r4i["estrategia"],
+      f"estrategia={r4i['estrategia']}")
+check("hoja identificada por QR invertido", r4i["hoja_numero"] == 1
+      and not any("descarte" in a for a in r4i["advertencias"]),
+      f"hoja={r4i['hoja_numero']}, avisos={r4i['advertencias']}")
+check("4/4 frames de la copia en negativo", len(r4i["frames"]) == 4,
+      f"frames={sorted(r4i['frames'])}")
+
+# El mismo caso pero además EN ESPEJO (los escaneos reales del estudio).
+pim_path = TMP / "invpol_espejo.png"
+cv2.imwrite(str(pim_path), cv2.flip(print_inv, 1))
+scans4i2 = TMP / "scans_invpol_espejo"
+scans4i2.mkdir()
+fake_scan(pim_path, scans4i2 / "scan_invpol_espejo.png", angle_deg=-2.3,
+          scale=2.5, tint=(1.05, 0.97, 0.91), seed=59)
+rep4i2 = scan.procesar_carpeta(scans4i2, res["layout"],
+                               TMP / "proc_invpol_espejo",
+                               scan.ScanOptions(threads=1, report=False),
+                               log=lambda t: print("   ", t))
+r4i2 = rep4i2["resultados"][0]
+check("copia en negativo Y en espejo procesada", rep4i2["escaneos_ok"] == 1,
+      str([r["error"] for r in rep4i2["resultados"]]))
+check("espejo detectado con polaridad invertida", r4i2["espejado"]
+      and "_invertido" in r4i2["estrategia"], f"estrategia={r4i2['estrategia']}")
+check("4/4 frames del negativo espejado", len(r4i2["frames"]) == 4,
+      f"frames={sorted(r4i2['frames'])}")
+# Geometría y orientación: la copia es un negativo del contenido, así que el
+# frame recuperado debe correlacionar NEGATIVO con el original al derecho (y
+# peor con el original en espejo: vigila la corrección del volteo).
+orig_i = cv2.cvtColor(cv2.resize(cv2.imread(frame_paths[0]), (160, 90)),
+                      cv2.COLOR_BGR2GRAY).astype(np.float32)
+rec_i = cv2.imread(str(list((TMP / "proc_invpol_espejo").glob("test_001*.tif"))[0]))
+rec_ig = cv2.cvtColor(cv2.resize(rec_i, (160, 90)),
+                      cv2.COLOR_BGR2GRAY).astype(np.float32)
+corr_i = float(np.corrcoef(orig_i.ravel(), rec_ig.ravel())[0, 1])
+corr_im = float(np.corrcoef(orig_i[:, ::-1].ravel(), rec_ig.ravel())[0, 1])
+check("contenido del negativo al derecho y en su sitio",
+      corr_i < -0.4 and corr_i < corr_im,
+      f"corr={corr_i:.3f} vs espejo={corr_im:.3f}")
 
 # ════════════════════════════════════════════════════════════════
 print("\n══ 5. Deduplicación perceptual ══")
