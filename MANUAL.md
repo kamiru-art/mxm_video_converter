@@ -360,6 +360,21 @@ activado (fase ②, pestaña 7):
 - **Espejado** (activado por defecto): el negativo se imprime en espejo para
   exponer "cara impresa contra papel" (más nitidez). La copia azul queda
   derecha sola.
+- **Ajuste fino de los tonos** (pestaña 7): la curva calibrada lineariza los
+  tonos, pero eso comprime otras zonas (p. ej. la piel se recupera perfecta y
+  la textura de la arena desaparece). Tres controles deciden el reparto:
+  - **Fuerza de la curva (0-100 %)**: mezcla entre la curva calibrada (100) y
+    la lineal (0). Los puntos medios rescatan altas luces aplastadas.
+  - **Adaptar al contenido (0-100 %)**: analiza el histograma de TUS
+    fotogramas y reparte el rango tonal hacia donde tus imágenes tienen
+    detalle (las zonas vacías lo ceden). Determinista y reproducible; las
+    hojas de rescate heredan exactamente la misma curva.
+  - **Micro-contraste (0-100 %)**: refuerza la textura local ANTES de la
+    curva; es lo único que conserva detalle en la piel Y en la arena a la
+    vez, porque actúa dentro de cada zona en vez de repartir entre zonas.
+  - Con una curva elegida, la vista previa en modo «simular la copia azul»
+    es un **soft-proof**: usa la respuesta medida de TU proceso, así ves los
+    tonos aplastados antes de gastar papel y sol.
 - **Borde bloqueador** 🆕 (0.8 mm por defecto, regulable 0–1 mm): un marco
   fino de tinta a densidad MÁXIMA alrededor de cada fotograma, por fuera de
   la imagen. Evita que la luz se cuele por los cantos del acetato durante la

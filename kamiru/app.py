@@ -139,6 +139,9 @@ class SheetsPhase(PhaseFrame):
         v.var_cyan_mirror = tk.BooleanVar(value=True)
         v.var_cyan_ink = tk.StringVar(value="#000000")
         v.var_cyan_curve = tk.StringVar(value=NO_CURVE)
+        v.var_cyan_strength = tk.DoubleVar(value=100.0)
+        v.var_cyan_adapt = tk.DoubleVar(value=0.0)
+        v.var_cyan_clarity = tk.DoubleVar(value=0.0)
         v.var_cyan_sim = tk.BooleanVar(value=False)
         v.var_cyan_bg = tk.StringVar(value="ahorro")  # ahorro | completo
         v.var_cyan_halo = tk.DoubleVar(value=5.0)
@@ -642,9 +645,45 @@ class SheetsPhase(PhaseFrame):
                   style="Sub.TLabel", wraplength=740).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
+        sec = self.section(tab, "Ajuste fino de los tonos")
+        fz = ttk.Frame(sec)
+        fz.grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(fz, text="Fuerza de la curva (%):").pack(side="left")
+        ttk.Spinbox(fz, from_=0, to=100, increment=5, width=6,
+                    textvariable=self.var_cyan_strength).pack(side="left", padx=4)
+        ttk.Label(fz, text="100 = compensación completa · 0 = lineal (los "
+                           "puntos medios rescatan altas luces aplastadas)",
+                  style="Sub.TLabel").pack(side="left")
+        ad = ttk.Frame(sec)
+        ad.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(ad, text="Adaptar al contenido (%):").pack(side="left")
+        ttk.Spinbox(ad, from_=0, to=100, increment=5, width=6,
+                    textvariable=self.var_cyan_adapt).pack(side="left", padx=4)
+        ttk.Label(ad, text="reparte el rango tonal hacia donde TUS fotogramas "
+                           "tienen detalle (0 = desactivado; prueba 40-60)",
+                  style="Sub.TLabel").pack(side="left")
+        mc = ttk.Frame(sec)
+        mc.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(mc, text="Micro-contraste (%):").pack(side="left")
+        ttk.Spinbox(mc, from_=0, to=100, increment=5, width=6,
+                    textvariable=self.var_cyan_clarity).pack(side="left", padx=4)
+        ttk.Label(mc, text="refuerza la textura local ANTES de la curva: el "
+                           "detalle sobrevive en las zonas comprimidas "
+                           "(0 = desactivado; prueba 25-40)",
+                  style="Sub.TLabel").pack(side="left")
+        ttk.Label(sec, text="Una curva global no puede dar detalle en la piel "
+                            "Y en la arena a la vez: con estos tres controles "
+                            "eliges el reparto (y el micro-contraste protege "
+                            "la textura local). Activa el soft-proof de abajo "
+                            "para verlo sin gastar papel ni sol.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
         sec = self.section(tab, "Vista previa")
         ttk.Checkbutton(sec, text="En la vista previa, simular la copia azul "
-                                  "final en vez del negativo",
+                                  "final en vez del negativo (con curva "
+                                  "elegida = soft-proof con TU respuesta "
+                                  "medida)",
                         variable=self.var_cyan_sim).grid(row=0, column=0, sticky="w")
 
     def _tab_output(self, nb):
@@ -748,11 +787,14 @@ class SheetsPhase(PhaseFrame):
             return None
         return config.load_profile("impresora", name)
 
-    def _cyan_curve_lut(self):
+    def _cyan_curve_profile(self) -> dict | None:
         name = self.var_cyan_curve.get()
         if not name or name == NO_CURVE:
             return None
-        prof = config.load_profile("cianotipia", name)
+        return config.load_profile("cianotipia", name)
+
+    def _cyan_curve_lut(self):
+        prof = self._cyan_curve_profile()
         return prof.get("lut") if prof else None
 
     def _apply_printer_sizes(self):
@@ -1048,6 +1090,10 @@ class SheetsPhase(PhaseFrame):
             cyan_mirror=self.var_cyan_mirror.get(),
             cyan_ink=cyan_ink,
             cyan_curve=self._cyan_curve_lut(),
+            cyan_curve_strength=self.to_float(self.var_cyan_strength, 100.0),
+            cyan_adaptive=self.to_float(self.var_cyan_adapt, 0.0),
+            cyan_clarity=self.to_float(self.var_cyan_clarity, 0.0),
+            cyan_curve_response=(self._cyan_curve_profile() or {}).get("respuesta"),
             cyan_bg=self.var_cyan_bg.get(),
             cyan_halo_mm=self.to_float(self.var_cyan_halo, 5.0),
             cyan_frame_border_mm=self.to_float(self.var_cyan_border, 0.8),

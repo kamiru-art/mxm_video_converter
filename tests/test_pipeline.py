@@ -862,6 +862,83 @@ check("con frames verticales intercambia la cuadrícula (4×5→5×4)",
       (cols, rows) == (5, 4), f"eligió {cols}×{rows}, landscape={landscape}")
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 9f. Ajuste fino de tonos (fuerza, adaptación, micro-contraste, soft-proof) ══")
+
+# Fuerza: 0 % = identidad (None → make_negative no toca nada); 50 % = mitad.
+lut_gamma = [255.0 * (i / 255.0) ** 0.5 for i in range(256)]
+check("fuerza 0 % devuelve identidad (None)",
+      cyanotype.effective_lut(lut_gamma, strength=0.0) is None)
+mitad = cyanotype.effective_lut(lut_gamma, strength=50.0)
+check("fuerza 50 % = punto medio identidad↔curva",
+      abs(mitad[128] - (128 + lut_gamma[128]) / 2) < 1.0,
+      f"mitad[128]={mitad[128]:.1f}")
+
+# Adaptación: histograma concentrado en altas luces → esa zona gana rango.
+hist_al = np.zeros(256)
+hist_al[190:230] = 1000.0
+adap = cyanotype.effective_lut(None, strength=100.0, adapt=100.0, hist=hist_al)
+check("curva adaptada monótona y anclada",
+      all(adap[i] <= adap[i + 1] + 1e-6 for i in range(255))
+      and adap[0] < 3 and adap[255] > 252,
+      f"extremos=({adap[0]:.1f}, {adap[255]:.1f})")
+span_zona = adap[229] - adap[190]
+check("la zona tonal poblada gana rango (detalle en la arena)",
+      span_zona > (229 - 190) * 2, f"span={span_zona:.0f} px de 39 lineales")
+sombra = adap[64] - adap[8]  # zona vacía: cede rango pero no colapsa a cero
+check("las zonas vacías ceden rango sin colapsar", 1.0 < sombra < 56.0,
+      f"span_vacia={sombra:.1f}")
+
+# Micro-contraste: la textura fina se amplifica antes de la curva.
+xx_t = np.arange(200, dtype=np.float32)
+tex = 128.0 + 6.0 * np.sin(xx_t[None, :] / 3.0) * np.ones((200, 1), np.float32)
+img_tex = Image.fromarray(np.clip(tex, 0, 255).astype(np.uint8), "L").convert("RGB")
+neg_plano = np.asarray(cyanotype.make_negative(img_tex).convert("L")).astype(np.float32)
+neg_clar = np.asarray(cyanotype.make_negative(img_tex, clarity=60).convert("L")).astype(np.float32)
+check("micro-contraste amplifica la textura local",
+      neg_clar.std() > neg_plano.std() * 1.2,
+      f"std {neg_plano.std():.2f} → {neg_clar.std():.2f}")
+check("sin micro-contraste ni curva, ni un píxel cambia",
+      np.array_equal(neg_plano, 255.0 - tex.round().clip(0, 255)) or
+      np.abs(neg_plano - (255.0 - tex)).max() <= 1.0)
+
+# Soft-proof: la respuesta medida (gamma 2.2 sintética) manda sobre el modelo
+# lineal genérico.
+resp = [[d, 40.0 + 180.0 * (d / 255.0) ** 2.2] for d in range(0, 256, 8)]
+grad = Image.fromarray(np.tile(np.arange(256, dtype=np.uint8), (8, 1)), "L")
+sim_med = np.asarray(cyanotype.simulate_print(grad, response=resp))
+sim_gen = np.asarray(cyanotype.simulate_print(grad))
+papel_sim, azul_sim = np.array([245, 242, 230]), np.array([23, 49, 92])
+check("soft-proof: tinta plena → papel, transparente → azul",
+      np.abs(sim_med[4, 0].astype(int) - papel_sim).max() <= 12
+      and np.abs(sim_med[4, 255].astype(int) - azul_sim).max() <= 12,
+      f"extremos={sim_med[4, 0].tolist()} / {sim_med[4, 255].tolist()}")
+check("soft-proof difiere del modelo genérico en medios tonos",
+      np.abs(sim_med[4, 128].astype(int) - sim_gen[4, 128].astype(int)).max() > 15,
+      f"med={sim_med[4, 128].tolist()} gen={sim_gen[4, 128].tolist()}")
+
+# Integración: generate() resuelve la curva efectiva UNA vez y el snapshot
+# del layout la guarda ya cocinada (las hojas de rescate no re-aplican nada).
+s9f = settings_base(TMP / "hojas_tonos", mode="cianotipia", cyan_mirror=True,
+                    cyan_curve=lut_gamma, cyan_curve_strength=60.0,
+                    cyan_adaptive=50.0, cyan_clarity=30.0,
+                    cyan_curve_response=resp,
+                    out_name="tonos", project_name="tonos")
+res9f = core.generate(s9f, frame_paths[:4], labels=labels[:4])
+aj9f = layoutfile.load(res9f["layout"])["ajustes"]
+check("snapshot guarda la curva efectiva con fuerza/adaptación neutralizadas",
+      isinstance(aj9f["cyan_curve"], list)
+      and aj9f["cyan_curve_strength"] == 100.0 and aj9f["cyan_adaptive"] == 0.0)
+check("la curva efectiva difiere de la del perfil (fuerza 60 % aplicada)",
+      abs(aj9f["cyan_curve"][128] - lut_gamma[128]) > 5.0,
+      f"efectiva[128]={aj9f['cyan_curve'][128]} vs perfil={lut_gamma[128]:.1f}")
+check("los ajustes del llamador no se mutan",
+      s9f.cyan_curve is lut_gamma and s9f.cyan_adaptive == 50.0
+      and s9f.cyan_curve_strength == 60.0)
+prev9f, _ = core.render_preview(s9f, frame_paths[:4], labels=labels[:4],
+                                simulate_cyanotype=True)
+check("vista previa con soft-proof funciona", prev9f.size[0] > 100)
+
+# ════════════════════════════════════════════════════════════════
 print("\n══ 10. Compatibilidad con layout v1 (app antigua) ══")
 v1 = {
     "lienzo": {"ancho_px": 2480, "alto_px": 3508, "ppi": 300,
