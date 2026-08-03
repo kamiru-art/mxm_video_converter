@@ -131,6 +131,21 @@ class Settings:
         self.cyan_ink = kw.get("cyan_ink", "#000000")
         # LUT de 256 valores (de un perfil de calibración) o None (identidad).
         self.cyan_curve = kw.get("cyan_curve") or None
+        # Fuerza de la curva calibrada (0-100 %): 100 = compensación completa,
+        # 0 = lineal. El punto medio entre "detalle nativo del proceso" y
+        # "tonos linearizados" se elige por proyecto.
+        self.cyan_curve_strength = float(kw.get("cyan_curve_strength", 100.0))
+        # Adaptación al contenido (0-100 %): redistribuye el rango tonal según
+        # el histograma de LOS fotogramas del proyecto (las zonas pobladas
+        # reciben más rango de densidad). 0 = desactivada.
+        self.cyan_adaptive = float(kw.get("cyan_adaptive", 0.0))
+        # Micro-contraste local (0-100 %): refuerza la textura antes de la
+        # curva para que el detalle sobreviva en las zonas comprimidas.
+        self.cyan_clarity = float(kw.get("cyan_clarity", 0.0))
+        # Respuesta medida del proceso ([densidad, luminancia], del perfil de
+        # calibración): la vista previa la usa como SOFT-PROOF. No se guarda
+        # en el snapshot (solo afecta a la previsualización).
+        self.cyan_curve_response = kw.get("cyan_curve_response") or None
         # Fondo del negativo: "ahorro" = solo halos entintados alrededor de
         # marcadores/QRs/nombres (gasta MUCHA menos tinta; el fondo de la
         # cianotipia queda azul); "completo" = todo el fondo entintado (el
@@ -389,6 +404,7 @@ _SNAPSHOT_FIELDS = [
     "page_num_color", "registration_on", "marker_count", "marker_size_mm",
     "marker_margin_mm", "marker_dict", "qr_on", "qr_size_mm", "gray_patch_on",
     "project_name", "mode", "cyan_mirror", "cyan_ink", "cyan_curve",
+    "cyan_curve_strength", "cyan_adaptive", "cyan_clarity",
     "cyan_bg", "cyan_halo_mm", "cyan_frame_border_mm", "cyan_block_color",
     "cyan_ink_stops",
     "print_scale_x", "print_scale_y", "out_name", "fmt_png", "fmt_pdf",
@@ -933,7 +949,8 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
 
         if s.is_cyanotype:
             resized = cyan.make_negative(resized, s.cyan_curve, s.cyan_ink,
-                                         s.cyan_ink_stops)
+                                         s.cyan_ink_stops,
+                                         clarity=s.cyan_clarity)
 
         # Bloque imagen+metadatos centrado en la celda; los metadatos van
         # pegados bajo la imagen para que se vea ordenado aunque el frame no
@@ -1103,6 +1120,25 @@ def _scale_bbox(bbox, s: Settings, page_w, page_h):
 # Vista previa y generación
 # ────────────────────────────────────────────────────────────────
 
+def _resolve_cyan_curve(s: Settings, frame_paths) -> None:
+    """Convierte (curva calibrada, fuerza, adaptación) en LA curva efectiva.
+
+    Se llama sobre una COPIA de los ajustes, una sola vez por generación o
+    vista previa, para que todas las hojas usen exactamente la misma curva.
+    Tras resolver, la fuerza y la adaptación se neutralizan: el snapshot del
+    layout.json guarda la curva efectiva ya cocinada, así las hojas de
+    rescate reproducen estos tonos sin re-aplicar (ni re-medir) nada.
+    """
+    if not s.is_cyanotype:
+        return
+    hist = None
+    if float(s.cyan_adaptive or 0) > 0 and frame_paths:
+        hist = cyan.content_histogram(frame_paths)
+    s.cyan_curve = cyan.effective_lut(s.cyan_curve, s.cyan_curve_strength,
+                                      s.cyan_adaptive, hist)
+    s.cyan_curve_strength, s.cyan_adaptive = 100.0, 0.0
+
+
 def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
                    numbers=None, page_numbers=None, labels=None,
                    max_dpi: int = 150, simulate_cyanotype: bool = False):
@@ -1117,6 +1153,7 @@ def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
     s = copy.copy(settings)
     s.dpi = min(int(settings.dpi), int(max_dpi))
     s._frame_paths = frame_paths  # para que resolve_landscape use estos frames
+    _resolve_cyan_curve(s, frame_paths)
     L = _build_layout(s)
     per_page = s.per_page
     num_pages = estimate_pages(len(frame_paths), per_page)
@@ -1127,7 +1164,9 @@ def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
     img = _apply_print_scale_img(img, s)
     if s.is_cyanotype:
         if simulate_cyanotype:
-            img = cyan.simulate_print(img)
+            # Soft-proof: con la respuesta medida del perfil, la simulación
+            # pasa por la curva real del proceso (no el modelo genérico).
+            img = cyan.simulate_print(img, response=s.cyan_curve_response)
         elif s.cyan_mirror:
             img = cyan.mirror(img)
     return img, num_pages
@@ -1153,8 +1192,11 @@ def generate(settings: Settings, frame_paths, numbers=None, page_numbers=None,
     Devuelve un dict con las rutas generadas: {'pages': [...], 'pdf': str|None,
     'frames_dir': str|None, 'layout': str|None, ...}.
     """
-    s = settings
+    # Copia: la resolución de la curva efectiva muta cyan_curve/fuerza/
+    # adaptación y no debe tocar los ajustes del llamador.
+    s = copy.copy(settings)
     s._frame_paths = frame_paths  # para resolve_landscape ("mejor ajuste")
+    _resolve_cyan_curve(s, frame_paths)
     L = _build_layout(s)
     dpi = L.dpi
 

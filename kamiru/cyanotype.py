@@ -36,7 +36,7 @@ Conceptos clave:
 from __future__ import annotations
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 
 def default_lut() -> list[int]:
@@ -55,6 +55,100 @@ def _as_lut_array(lut) -> np.ndarray:
     if arr.shape != (256,):
         raise ValueError("La curva de cianotipia debe tener exactamente 256 valores.")
     return np.clip(arr, 0, 255)
+
+
+# ────────────────────────────────────────────────────────────────
+# Curva efectiva: fuerza, adaptación al contenido
+# ────────────────────────────────────────────────────────────────
+#
+# La curva calibrada lineariza los tonos finales, pero esa es UNA intención de
+# render entre varias: al enderezar las zonas donde la química responde plano,
+# comprime otras (p. ej. altas luces) hasta que su textura cae por debajo del
+# ruido del proceso. Estos ajustes permiten elegir el reparto tonal:
+#
+# * FUERZA: mezcla identidad ↔ curva calibrada (0-100 %). El punto medio entre
+#   "detalle nativo" y "tonos linearizados".
+# * ADAPTACIÓN AL CONTENIDO: redistribuye los tonos de salida según el
+#   histograma de LOS FOTOGRAMAS DEL PROYECTO: las zonas tonales pobladas
+#   (piel, arena…) reciben más rango de densidad y las vacías lo ceden.
+#   Ecualización restringida (suavizada, monótona, con pendiente mínima), no
+#   aprendizaje automático: determinista y reproducible.
+
+# Máximo de fotogramas muestreados para el histograma (repartidos por toda la
+# selección) y caché de histogramas ya calculados (la vista previa vuelve a
+# pedir el mismo en cada cambio de página).
+HIST_MAX_FRAMES = 200
+_HIST_CACHE: dict = {}
+
+
+def content_histogram(frame_paths, max_frames: int = HIST_MAX_FRAMES) -> np.ndarray:
+    """Histograma de grises (256 bins) del contenido de los fotogramas.
+
+    Muestrea hasta max_frames repartidos por toda la selección, cada uno
+    reducido a miniatura (la distribución tonal no necesita resolución).
+    """
+    paths = [str(p) for p in frame_paths]
+    if len(paths) > max_frames:
+        idx = np.linspace(0, len(paths) - 1, max_frames).round().astype(int)
+        paths = [paths[i] for i in dict.fromkeys(idx.tolist())]
+    key = tuple(paths)
+    cached = _HIST_CACHE.get(key)
+    if cached is not None:
+        return cached
+    hist = np.zeros(256, dtype=np.float64)
+    for p in paths:
+        try:
+            with Image.open(p) as im:
+                g = np.asarray(im.convert("L").resize((96, 96)))
+        except Exception:
+            continue
+        hist += np.bincount(g.ravel(), minlength=256)
+    if len(_HIST_CACHE) > 4:
+        _HIST_CACHE.clear()
+    _HIST_CACHE[key] = hist
+    return hist
+
+
+def effective_lut(lut=None, strength: float = 100.0, adapt: float = 0.0,
+                  hist: np.ndarray | None = None):
+    """Curva efectiva de densidad: calibrada × fuerza, redistribuida al contenido.
+
+    1. FUERZA (0-100): mezcla lineal identidad ↔ lut calibrada.
+    2. ADAPTACIÓN (0-100): compone con T = mezcla de identidad y la CDF del
+       histograma del contenido (suavizada y con pendiente mínima para que
+       las zonas tonales vacías no colapsen a cero rango). Como la lut
+       calibrada lineariza los tonos de SALIDA, componer con T reparte esos
+       tonos según donde el contenido tiene detalle.
+
+    Devuelve una lista de 256 flotantes, o None si el resultado es la
+    identidad (así make_negative no toca ni un píxel ni mete dithering).
+    """
+    ident = np.arange(256, dtype=np.float64)
+    a = float(np.clip(strength if strength is not None else 100.0, 0, 100)) / 100.0
+    base = ident * (1.0 - a) + _as_lut_array(lut) * a
+
+    b = float(np.clip(adapt or 0.0, 0, 100)) / 100.0
+    out = base
+    if b > 0 and hist is not None and float(np.sum(hist)) > 0:
+        h = np.asarray(hist, dtype=np.float64)
+        # Suavizado (ventana 21) con bordes extendidos: la CDF debe ser una
+        # curva tonal amable, no seguir cada pico del histograma.
+        v = 21
+        ext = np.pad(h, v // 2, mode="edge")
+        h = np.convolve(ext, np.ones(v) / v, mode="valid")
+        h = h / max(1e-12, h.sum())
+        # Pendiente mínima: las zonas vacías conservan un 15 % de rango
+        # proporcional (que un tono no exista HOY no significa aplastarlo).
+        piso = 0.15
+        h = (h + piso / 256.0) / (1.0 + piso)
+        cdf = np.cumsum(h)
+        cdf = (cdf - cdf[0]) / max(1e-12, cdf[-1] - cdf[0])
+        T = (1.0 - b) * (ident / 255.0) + b * cdf
+        out = np.interp(T * 255.0, ident, base)
+
+    if np.allclose(out, ident, atol=1e-9):
+        return None
+    return [round(float(np.clip(x, 0, 255)), 3) for x in out]
 
 
 def hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -116,21 +210,35 @@ def density_to_rgb(density: np.ndarray, ink_rgb: tuple[int, int, int]) -> np.nda
 
 
 def make_negative(img: Image.Image, lut=None, ink_color: str = "#000000",
-                  stops=None) -> Image.Image:
+                  stops=None, clarity: float = 0.0) -> Image.Image:
     """Convierte un fotograma a su negativo de cianotipia.
 
     1. Pasa a escala de grises (la cianotipia es monocroma).
-    2. Aplica la curva de compensación (LUT) para obtener la densidad.
-    3. Colorea la densidad con el color/degradado de tinta elegido.
+    2. MICRO-CONTRASTE opcional (clarity 0-100): máscara de desenfoque de
+       radio grande sobre el gris, ANTES de la curva. Refuerza la textura
+       local, así el detalle sobrevive dentro de las zonas tonales que la
+       curva global comprime (una curva por sí sola no puede dar detalle en
+       piel Y arena a la vez; un operador local sí).
+    3. Aplica la curva de compensación (LUT) para obtener la densidad.
+    4. Colorea la densidad con el color/degradado de tinta elegido.
 
     Con curva de calibración, la cuantización a 8 bits se hace con DITHERING
     (ruido uniforme ±0.5 antes de redondear, semilla fija): una curva que
     comprime el rango deja menos densidades distintas y sin dithering los
     degradados salen ESCALONADOS (bandas). El ruido subcuántico reparte cada
     salto entre píxeles vecinos y el degradado impreso vuelve a verse continuo.
-    Sin curva (identidad) no se toca ni un píxel.
+    Sin curva ni micro-contraste (identidad) no se toca ni un píxel.
     """
-    gray = np.asarray(img.convert("L"))
+    gris = img.convert("L")
+    gray = np.asarray(gris)
+    c = float(np.clip(clarity or 0.0, 0, 100))
+    if c > 0:
+        # Radio proporcional al fotograma: micro-contraste, no un borde duro.
+        radio = max(2.0, min(gris.size) / 24.0)
+        blur = np.asarray(gris.filter(ImageFilter.GaussianBlur(radio)),
+                          dtype=np.float32)
+        realzado = gray.astype(np.float32) + (c / 100.0) * (gray - blur)
+        gray = np.clip(np.round(realzado), 0, 255).astype(np.uint8)
     lut_arr = _as_lut_array(lut)
     density_f = lut_arr[gray]
     if lut is not None:
@@ -167,14 +275,33 @@ def mirror(img: Image.Image) -> Image.Image:
 
 def simulate_print(negative: Image.Image,
                    paper_rgb=(245, 242, 230),
-                   blue_rgb=(23, 49, 92)) -> Image.Image:
+                   blue_rgb=(23, 49, 92),
+                   response=None) -> Image.Image:
     """Simula (aproximadamente) cómo se vería la cianotipia final de un
     negativo. Solo para la VISTA PREVIA de la interfaz: donde el negativo es
     transparente sale azul de Prusia; donde hay tinta plena queda papel.
+
+    Con `response` (la respuesta medida del perfil de calibración: pares
+    [densidad, luminancia]) la simulación es un SOFT-PROOF: en vez del modelo
+    lineal genérico, cada densidad pasa por la curva real de TU proceso, así
+    que los tonos aplastados o vacíos se ven ANTES de imprimir y exponer.
+    Aproximación: la claridad del negativo se toma como transparencia (exacto
+    con tinta neutra; orientativo con tintas de color).
     """
     gray = np.asarray(negative.convert("L")).astype(np.float32) / 255.0
     # gris del negativo: 1.0 = blanco = transparente = azul pleno en el papel
     exposure = gray  # claridad del negativo ≈ exposición
+    if response:
+        try:
+            pares = sorted((float(r[0]), float(r[1])) for r in response)
+            dd = np.array([p[0] for p in pares])
+            yy = np.maximum.accumulate(np.array([p[1] for p in pares]))
+            if len(dd) >= 5 and (yy[-1] - yy[0]) > 5:
+                dens = (1.0 - gray) * 255.0  # tinta oscura ≈ densidad
+                tono = np.interp(dens, dd, yy)
+                exposure = 1.0 - (tono - yy[0]) / (yy[-1] - yy[0])
+        except Exception:
+            pass  # respuesta malformada: se usa el modelo genérico
     out = np.empty(gray.shape + (3,), dtype=np.uint8)
     for ch in range(3):
         p, b = float(paper_rgb[ch]), float(blue_rgb[ch])
