@@ -273,10 +273,45 @@ def mirror(img: Image.Image) -> Image.Image:
     return ImageOps.mirror(img)
 
 
+def _density_from_pixels(negative: Image.Image, ink_color=None,
+                         stops=None) -> np.ndarray:
+    """Densidad estimada (0-255) de cada píxel de un negativo YA COLOREADO.
+
+    Con tinta neutra basta la claridad invertida. Con una tinta de color (o un
+    degradado ColorBlocker) NO: un verde flúor a densidad plena es CLARO en
+    luminancia, así que leer la claridad como transparencia haría creer que
+    esa zona deja pasar el UV cuando en realidad lo bloquea.
+
+    Solución: proyectar el color de cada píxel sobre el EJE DE LA TINTA (la
+    recta que va del blanco del acetato a la tinta plena). Ese eje conserva
+    los 8 bits de resolución sea cual sea el color — con luminancia, un verde
+    flúor solo recorre 40 niveles y la densidad saldría a escalones — y sigue
+    siendo válido con degradados de varias paradas (se fuerza monótono, que
+    un ColorBlocker puede dar la vuelta a medio camino).
+    """
+    if not ink_color and not stops:
+        return 255.0 - np.asarray(negative.convert("L")).astype(np.float32)
+    ramp = ink_ramp(ink_color or "#000000", stops).astype(np.float64)
+    eje = ramp[255] - ramp[0]
+    norma = float(eje @ eje)
+    if norma < 1e-6:      # rampa degenerada (tinta = blanco): sin densidad
+        return np.zeros(negative.size[::-1], dtype=np.float32)
+    t_ramp = ((ramp - ramp[0]) @ eje) / norma
+    # Estrictamente creciente para que la inversa exista.
+    t_ramp = np.maximum.accumulate(t_ramp)
+    for i in range(1, 256):
+        if t_ramp[i] <= t_ramp[i - 1]:
+            t_ramp[i] = t_ramp[i - 1] + 1e-6
+    rgb = np.asarray(negative.convert("RGB")).astype(np.float64)
+    t_pix = ((rgb - ramp[0]) @ eje) / norma
+    return np.interp(t_pix, t_ramp,
+                     np.arange(256, dtype=np.float64)).astype(np.float32)
+
+
 def simulate_print(negative: Image.Image,
                    paper_rgb=(245, 242, 230),
                    blue_rgb=(23, 49, 92),
-                   response=None) -> Image.Image:
+                   response=None, ink_color=None, stops=None) -> Image.Image:
     """Simula (aproximadamente) cómo se vería la cianotipia final de un
     negativo. Solo para la VISTA PREVIA de la interfaz: donde el negativo es
     transparente sale azul de Prusia; donde hay tinta plena queda papel.
@@ -285,25 +320,50 @@ def simulate_print(negative: Image.Image,
     [densidad, luminancia]) la simulación es un SOFT-PROOF: en vez del modelo
     lineal genérico, cada densidad pasa por la curva real de TU proceso, así
     que los tonos aplastados o vacíos se ven ANTES de imprimir y exponer.
-    Aproximación: la claridad del negativo se toma como transparencia (exacto
-    con tinta neutra; orientativo con tintas de color).
+
+    Con ink_color/stops la densidad se deduce de la rampa de tinta REAL, así
+    que el soft-proof también vale con tintas de color y degradados
+    ColorBlocker (ver _density_from_pixels).
     """
-    gray = np.asarray(negative.convert("L")).astype(np.float32) / 255.0
-    # gris del negativo: 1.0 = blanco = transparente = azul pleno en el papel
-    exposure = gray  # claridad del negativo ≈ exposición
+    dens = _density_from_pixels(negative, ink_color, stops)
+    # densidad 0 = sin tinta = transparente = azul pleno en el papel
+    exposure = 1.0 - dens / 255.0
     if response:
         try:
             pares = sorted((float(r[0]), float(r[1])) for r in response)
             dd = np.array([p[0] for p in pares])
             yy = np.maximum.accumulate(np.array([p[1] for p in pares]))
             if len(dd) >= 5 and (yy[-1] - yy[0]) > 5:
-                dens = (1.0 - gray) * 255.0  # tinta oscura ≈ densidad
                 tono = np.interp(dens, dd, yy)
                 exposure = 1.0 - (tono - yy[0]) / (yy[-1] - yy[0])
         except Exception:
             pass  # respuesta malformada: se usa el modelo genérico
-    out = np.empty(gray.shape + (3,), dtype=np.uint8)
+    out = np.empty(exposure.shape + (3,), dtype=np.uint8)
     for ch in range(3):
         p, b = float(paper_rgb[ch]), float(blue_rgb[ch])
         out[..., ch] = np.clip(p + (b - p) * exposure, 0, 255).astype(np.uint8)
     return Image.fromarray(out, "RGB")
+
+
+def response_summary(response) -> dict:
+    """Diagnóstico de una respuesta medida ([densidad, luminancia]).
+
+    Devuelve {'rango', 'invertida', 'plana'}: sirve para avisar de una
+    calibración que salió al revés (se escaneó el ACETATO en vez de la copia
+    azul) o sin contraste (exposición mal calculada), en vez de guardar una
+    curva que luego arruina todos los negativos del proyecto.
+    """
+    try:
+        pares = sorted((float(r[0]), float(r[1])) for r in response or [])
+    except (TypeError, ValueError):
+        return {"rango": 0.0, "invertida": False, "plana": True}
+    if len(pares) < 3:
+        return {"rango": 0.0, "invertida": False, "plana": True}
+    y = np.array([p[1] for p in pares])
+    n = max(1, len(y) // 4)
+    rango = float(y.max() - y.min()) / 255.0
+    return {
+        "rango": rango,
+        "invertida": bool(y[:n].mean() > y[-n:].mean() + 8),
+        "plana": rango < 0.10,
+    }

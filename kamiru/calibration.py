@@ -41,19 +41,13 @@ from .core import _load_font, _text_size
 from .scan import (_detect_markers_multi, _detect_oriented, _estimate_scale,
                    _refine_corners_fullres, _to_u8, leer_imagen_robusta)
 
-# Fuente del sistema para los textos de las hojas de calibración (la fuente
-# por defecto de Pillow no siempre trae acentos). Se descubre una sola vez.
-_FONT_PATH_CACHE: list = []
-
 
 def _get_font(size_px: int):
-    if not _FONT_PATH_CACHE:
-        try:
-            _, path = fontmod.default_font(fontmod.discover_fonts())
-        except Exception:
-            path = None
-        _FONT_PATH_CACHE.append(path)
-    return _load_font(_FONT_PATH_CACHE[0], size_px)
+    """Fuente del sistema para los textos de las hojas de calibración (la de
+    Pillow por defecto no trae acentos). Descubierta y cacheada una sola vez
+    en fonts.ui_font_path()."""
+    return _load_font(fontmod.ui_font_path(), size_px)
+
 
 # Geometría fija de las páginas de calibración (en mm).
 CAL_MARKER_MM = 10.0      # lado de los marcadores de registro
@@ -479,9 +473,15 @@ def generar_tira_cianotipia(out_path, paper_name: str = "A4", dpi: int = 300,
     font_small = _get_font( _mm(2.8, dpi))
     text_color = "#FFFFFF" if sum(bg) < 420 else "#000000"
 
+    # Con un color de bloqueador elegido a mano, los marcadores lo usan
+    # también: son el marco que permite alinear el escaneo, así que deben
+    # bloquear el UV tan bien como el fondo (si la impresora imprime mal la
+    # tinta plena del degradado, el marco se vela y la carta no se puede leer).
+    marker_ink, marker_stops = ((block_color, None) if block_color
+                                else (ink_color, ink_stops))
     for mid, (px, py) in g["marker_positions"].items():
         patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
-        patch = cyan.colorize_gray_patch(patch, ink_color, ink_stops)
+        patch = cyan.colorize_gray_patch(patch, marker_ink, marker_stops)
         canvas.paste(patch, (int(px), int(py)))
 
     band = g["patches"][0]["bbox"][0]
@@ -600,11 +600,18 @@ def _pchip(x: np.ndarray, y: np.ndarray, xq: np.ndarray) -> np.ndarray:
 
 def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
                              steps: int = CYANO_STEPS,
-                             target: str = "kamiru21", log=None) -> dict:
+                             target: str = "kamiru21", log=None,
+                             ink_color: str | None = None,
+                             ink_stops=None,
+                             block_color: str | None = None) -> dict:
     """Analiza el escaneo de la CIANOTIPIA de la carta y construye la curva.
 
     Devuelve un perfil con la LUT de compensación (256 valores), la respuesta
     medida y notas/sugerencias.
+
+    ink_color/ink_stops/block_color se GUARDAN en el perfil (no se usan para
+    medir): una curva solo es válida para el color de tinta con el que se
+    imprimió la carta, así que la fase ② puede avisar si luego se elige otro.
     """
     _log = log or (lambda *_: None)
     g = cyanotype_strip_geometry(paper_name, dpi, steps, target)
@@ -625,6 +632,24 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
 
     d = np.array([r[0] for r in respuesta], dtype=np.float64)
     y = np.array([r[1] for r in respuesta], dtype=np.float64)
+
+    # Diagnóstico ANTES de construir nada: una respuesta invertida (más tinta
+    # ⇒ copia más OSCURA) significa casi siempre que se escaneó el acetato en
+    # vez de la copia azul. Sin este aviso se guardaba una curva "válida" que
+    # arruinaba todos los negativos del proyecto en silencio.
+    diag = cyan.response_summary(respuesta)
+    if diag["invertida"]:
+        raise ValueError(
+            "La respuesta medida está INVERTIDA: los parches con más tinta "
+            "salieron más oscuros. Lo habitual es haber escaneado el ACETATO "
+            "en vez de la copia azul de papel; escanea la cianotipia seca y "
+            "vuelve a analizar.")
+    if diag["plana"]:
+        raise ValueError(
+            "Los parches de la carta apenas se distinguen entre sí "
+            f"(rango {diag['rango'] * 100:.0f} %). Suele ser exposición muy "
+            "corta o muy larga, o un escaneo con el contraste al mínimo. "
+            "Repite la exposición antes de guardar una curva.")
 
     # ── Curva SUAVE (estilo EDN, sin escalones) ──────────────────
     # El enfoque antiguo (np.maximum.accumulate + interp lineal sobre los
@@ -695,6 +720,11 @@ def analizar_tira_cianotipia(scan_path, paper_name: str = "A4", dpi: int = 300,
         "lut": lut,
         "respuesta": respuesta,
         "rango_dinamico": round(rango, 3),
+        # Condiciones con las que se imprimió la carta: la curva solo es
+        # válida para esta tinta (ver docstring).
+        "ink": ink_color,
+        "ink_stops": ink_stops,
+        "block_color": block_color,
         "notas": notas,
     }
 
@@ -797,9 +827,15 @@ def generar_colorblocker(out_path, paper_name: str = "A4", dpi: int = 300,
     font_small = _get_font( _mm(2.2, dpi))
     text_color = "#FFFFFF" if sum(bg) < 420 else "#000000"
 
+    # Los marcadores se imprimen con el MISMO color que el fondo bloqueador.
+    # Con negro forzado, en una impresora cuyo negro filtra UV (justo la
+    # premisa del ColorBlocker) los marcadores se velan en la copia azul y la
+    # carta deja de poder alinearse — la calibración fallaría por culpa de su
+    # propio marco.
+    marker_ink = block_color or "#000000"
     for mid, (px, py) in g["marker_positions"].items():
         patch = markers.marker_patch(mid, g["marker_side"], g["marker_quiet"])
-        patch = cyan.colorize_gray_patch(patch, "#000000")
+        patch = cyan.colorize_gray_patch(patch, marker_ink)
         canvas.paste(patch, (int(px), int(py)))
 
     x0 = g["patches"][0]["bbox"][0]
@@ -914,9 +950,16 @@ def analizar_colorblocker(scan_path, paper_name: str = "A4", dpi: int = 300,
         notas.append("En tu impresora el negro/gris es el mejor bloqueador: "
                      "puedes seguir usando tinta negra.")
     if not monotona.all():
+        # Informativo, NO un descarte: el mejor bloqueador se elige por el
+        # parche más claro de toda la carta, y en impresoras donde el negro
+        # filtra UV los matices ganadores son justamente los "no monótonos"
+        # respecto del orden nominal. (Antes esta nota decía que se
+        # descartaban, y no se descartaba ninguno.)
         malos = int((~monotona).sum())
-        notas.append(f"{malos} matiz(es) dieron respuesta no monótona y se "
-                     f"descartaron (normal: colores que casi no bloquean).")
+        notas.append(
+            f"{malos} matiz(es) no siguieron el orden nominal de la carta "
+            "(normal: colores que casi no bloquean el UV). No se descartan: "
+            "el mejor bloqueador se elige por el parche que quedó más claro.")
 
     return {
         "tipo": "cianotipia_color",

@@ -1,0 +1,64 @@
+# Ejecuta la prueba de integración en los tres sistemas en cada push y en cada
+# pull request.
+#
+# Antes, la única CI del repositorio vivía en release.yml, que solo se dispara
+# al publicar (tag «v*» o rama «release/**»): un pull request no ejecutaba NADA
+# y los fallos aparecían cuando ya se estaba construyendo el release. Aquí solo
+# se prueba (sin PyInstaller), así que tarda minutos en vez de decenas.
+
+name: Tests
+
+on:
+  push:
+    branches-ignore: ["release/**"]   # esas ya las cubre release.yml
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Un push nuevo sobre la misma rama cancela la ejecución anterior.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"   # consola UTF-8 también en Windows (emojis del test/log)
+  UV_PYTHON_PREFERENCE: only-system
+
+jobs:
+  test:
+    name: Test (${{ matrix.nombre }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            nombre: windows
+          - os: macos-latest
+            nombre: macos-apple-silicon
+          - os: ubuntu-22.04
+            nombre: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.8.17"
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias (exactamente las de uv.lock)
+        shell: bash
+        run: uv sync --frozen --extra headless
+
+      - name: Prueba de integración
+        shell: bash
+        # En Windows y macOS hay display, así que el humo de la GUI corre de
+        # verdad; en el runner de Linux se salta solo (lo dice el propio test).
+        run: uv run --frozen --extra headless python tests/test_pipeline.py

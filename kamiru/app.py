@@ -18,6 +18,7 @@ import os
 # antes de que se inicialice Tk (es decir, antes de importar tkinter).
 os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 
+import queue
 import shutil
 import tempfile
 import threading
@@ -31,7 +32,8 @@ from . import __app_name__, __version__, config, core, dedup
 from . import fonts as fontmod
 from . import markers, paper
 from .ffmpeg_utils import VideoInfo, extract_frames, find_ffmpeg, probe
-from .gui_common import PAD, PALETTE, PhaseFrame, build_style, show_guide
+from .gui_common import (PAD, PALETTE, PhaseFrame, ScrollArea, build_style,
+                         show_guide)
 from .gui_phases import NO_COLOR_PROFILE, CalibPhase, ScansPhase, VideoPhase
 
 VIDEO_TYPES = [
@@ -69,7 +71,6 @@ class SheetsPhase(PhaseFrame):
         self._load_fonts_async()
         self.refresh_profiles()
         self._update_estimate()
-        self._poll_forever()
 
     # ------------------------------------------------------------------ vars
     def _build_vars(self):
@@ -207,6 +208,13 @@ class SheetsPhase(PhaseFrame):
         ttk.Button(pf, text="Guardar", width=8,
                    command=self._save_preset).pack(side="left", padx=(4, 0))
 
+        # Log de la fase: alto fijo y sin expandir, para que las 8 pestañas
+        # conserven todo el espacio disponible. Antes esta fase no tenía
+        # ninguno y los avisos solo cabían en la etiqueta de estado, que se
+        # sobrescribe con el siguiente mensaje.
+        self.build_log(self, height=4, side="bottom", expand=False)
+        self._append_log("Aquí aparecen los avisos de la generación de hojas.")
+
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=PAD, pady=(0, PAD))
         self._tab_source(nb)
@@ -219,11 +227,23 @@ class SheetsPhase(PhaseFrame):
         self._tab_output(nb)
         self.enable_autowrap()
 
-    def _tab_source(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="1 · Origen")
+    @staticmethod
+    def _tab(nb, titulo):
+        """Crea una pestaña con scroll y devuelve el frame donde va el contenido.
 
-        sec = self.section(tab, "¿De dónde salen los fotogramas?")
+        Varias pestañas (Origen, Marcadores, Cianotipia) tienen más secciones
+        de las que caben en una pantalla de portátil: sin scroll, las últimas
+        se recortaban sin más y no había manera de llegar a ellas."""
+        area = ScrollArea(nb)
+        nb.add(area, text=titulo)
+        cuerpo = ttk.Frame(area.body, padding=PAD)
+        cuerpo.pack(fill="both", expand=True)
+        return cuerpo
+
+    def _tab_source(self, nb):
+        tab = self._tab(nb, "1 · Origen")
+
+        sec = self.section(tab, "¿De dónde salen los fotogramas?", guide="origen")
         ttk.Radiobutton(sec, text="De un video", variable=self.var_source,
                         value="video", command=self._sync_source).grid(
             row=0, column=0, sticky="w")
@@ -277,10 +297,10 @@ class SheetsPhase(PhaseFrame):
         self._sync_source()
 
     def _tab_grid(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="2 · Fotogramas")
+        tab = self._tab(nb, "2 · Fotogramas")
 
-        sec = self.section(tab, "¿Cuántos fotogramas extraer del video?")
+        sec = self.section(tab, "¿Cuántos fotogramas extraer del video?",
+                           guide="fotogramas")
         self.extract_sec = sec
         ttk.Radiobutton(sec, text="Muestrear N fotogramas por segundo (recomendado)",
                         variable=self.var_extract_mode, value="fps",
@@ -347,10 +367,9 @@ class SheetsPhase(PhaseFrame):
                     textvariable=self.var_gutter).grid(row=0, column=1, sticky="w", padx=4)
 
     def _tab_sheet(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="3 · Hoja")
+        tab = self._tab(nb, "3 · Hoja")
 
-        sec = self.section(tab, "Tamaño y orientación")
+        sec = self.section(tab, "Tamaño y orientación", guide="hoja")
         ttk.Label(sec, text="Tamaño de hoja:").grid(row=0, column=0, sticky="w")
         cb = ttk.Combobox(sec, values=paper.PAPER_ORDER, textvariable=self.var_paper,
                           state="readonly", width=22)
@@ -402,10 +421,9 @@ class SheetsPhase(PhaseFrame):
             row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def _tab_labels(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="4 · Nombres")
+        tab = self._tab(nb, "4 · Nombres")
 
-        sec = self.section(tab, "Etiquetas de los fotogramas")
+        sec = self.section(tab, "Etiquetas de los fotogramas", guide="nombres")
         ttk.Checkbutton(sec, text="Escribir el nombre debajo de cada frame",
                         variable=self.var_labels_on,
                         command=self._update_name_preview).grid(row=0, column=0, columnspan=4, sticky="w")
@@ -457,10 +475,9 @@ class SheetsPhase(PhaseFrame):
         self.color_picker(sec, self.var_label_color, row=3, col=1)
 
     def _tab_pagenum(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="5 · Nº de hoja")
+        tab = self._tab(nb, "5 · Nº hoja")
 
-        sec = self.section(tab, "Número de hoja en la esquina")
+        sec = self.section(tab, "Número de hoja en la esquina", guide="nombres")
         ttk.Checkbutton(sec, text="Mostrar el número de hoja (para organizarte mejor)",
                         variable=self.var_pagenum_on).grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(sec, text="Posición:").grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -491,8 +508,7 @@ class SheetsPhase(PhaseFrame):
         self.color_picker(sec, self.var_pagenum_color, row=6, col=1)
 
     def _tab_markers(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="6 · Marcadores")
+        tab = self._tab(nb, "6 · Marcadores")
 
         sec = self.section(tab, "Marcadores de registro (para escanear de vuelta)",
                            guide="marcadores")
@@ -547,8 +563,7 @@ class SheetsPhase(PhaseFrame):
             row=1, column=0, sticky="w", pady=(6, 0))
 
     def _tab_cyanotype(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="7 · Cianotipia")
+        tab = self._tab(nb, "7 · Cianotipia")
 
         sec = self.section(tab, "Negativos para cianotipia (imprimir en acetato)",
                            guide="cianotipia")
@@ -687,10 +702,9 @@ class SheetsPhase(PhaseFrame):
                         variable=self.var_cyan_sim).grid(row=0, column=0, sticky="w")
 
     def _tab_output(self, nb):
-        tab = ttk.Frame(nb, padding=PAD)
-        nb.add(tab, text="8 · Salida")
+        tab = self._tab(nb, "8 · Salida")
 
-        sec = self.section(tab, "Dónde guardar")
+        sec = self.section(tab, "Dónde guardar", guide="salida")
         ttk.Label(sec, text="Carpeta de salida:").grid(row=0, column=0, sticky="w")
         ttk.Entry(sec, textvariable=self.var_out_dir).grid(row=0, column=1, sticky="ew", padx=4)
         ttk.Button(sec, text="Examinar…", command=self._pick_outdir).grid(row=0, column=2)
@@ -1147,6 +1161,53 @@ class SheetsPhase(PhaseFrame):
             "simulate_cyan": self.var_cyan_sim.get(),
         }
 
+    def _curve_mismatch_warning(self, s: core.Settings) -> str | None:
+        """Avisa si la curva elegida se midió con OTRA tinta.
+
+        Una curva de compensación describe el proceso completo con un color de
+        tinta concreto; aplicarla con otro color (o con un degradado
+        ColorBlocker distinto) descoloca justo lo que pretendía arreglar. Los
+        perfiles antiguos no guardan la tinta: en ese caso no se dice nada.
+        """
+        prof = self._cyan_curve_profile()
+        if not prof:
+            return None
+        tinta_curva = prof.get("ink")
+        stops_curva = prof.get("ink_stops")
+        if not tinta_curva and not stops_curva:
+            return None
+        if bool(stops_curva) != bool(s.cyan_ink_stops):
+            return ("La curva «{}» se midió {} degradado ColorBlocker y ahora "
+                    "vas a generar {} él.").format(
+                self.var_cyan_curve.get(),
+                "con" if stops_curva else "sin",
+                "con" if s.cyan_ink_stops else "sin")
+        if not stops_curva and tinta_curva and \
+                str(tinta_curva).upper() != str(s.cyan_ink).upper():
+            return (f"La curva «{self.var_cyan_curve.get()}» se midió con la "
+                    f"tinta {tinta_curva} y ahora vas a imprimir con "
+                    f"{s.cyan_ink}: los tonos compensados no coincidirán.")
+        return None
+
+    def _confirm_cyan_warnings(self, s: core.Settings) -> bool:
+        """Enseña los avisos de cianotipia ANTES de generar.
+
+        Antes solo aparecían en el diálogo final, cuando las hojas ya estaban
+        escritas en disco: enterarse de que los marcadores son demasiado
+        pequeños DESPUÉS de generar 40 negativos no sirve de nada.
+        """
+        avisos = list(core.cyanotype_size_warnings(s))
+        curva = self._curve_mismatch_warning(s)
+        if curva:
+            avisos.insert(0, curva)
+        if not avisos:
+            return True
+        return messagebox.askokcancel(
+            "Antes de generar",
+            "Revisa esto antes de gastar acetato y sol:\n\n"
+            + "\n\n".join(f"• {a}" for a in avisos)
+            + "\n\n¿Generar las hojas igualmente?")
+
     def _on_run(self):
         s = self._collect_settings()
         err = self._validate(s)
@@ -1168,6 +1229,8 @@ class SheetsPhase(PhaseFrame):
             if r:
                 self.app.goto_calibration()
                 return
+        if not self._confirm_cyan_warnings(s):
+            return
         self._set_busy(True)
         self.progress.configure(value=0, maximum=100)
         self._set_status("Preparando…")
@@ -1333,18 +1396,14 @@ class SheetsPhase(PhaseFrame):
         self._set_status("Cancelando…")
 
     # ----------------------------------------------------------- cola/eventos
-    def _poll_forever(self):
-        """La fase 1 sondea siempre (fuentes y probe llegan sin worker)."""
-        try:
-            while True:
-                msg = self.queue.get_nowait()
-                self.handle(msg)
-        except Exception:
-            pass
-        self.after(120, self._poll_forever)
+    def poll_queue(self):
+        """El sondeo permanente de PhaseFrame ya drena la cola.
 
-    def poll_queue(self):  # el poller permanente ya se encarga
-        pass
+        Antes esta fase tenía ADEMÁS su propio bucle (`_poll_forever`), así que
+        dos temporizadores competían por la misma cola: los mensajes de log se
+        los quedaba, al azar, el que llegase antes — y como esta fase no tenía
+        panel de log, el sondeo permanente los tiraba a la basura (los avisos
+        de «copia original fallida» desaparecían la mitad de las veces)."""
 
     def handle(self, msg):
         kind = msg[0]
@@ -1355,8 +1414,6 @@ class SheetsPhase(PhaseFrame):
         elif kind == "probe_err":
             self.video_info_lbl.configure(text=f"No se pudo leer el video: {msg[1]}")
         elif kind == "status":
-            self._set_status(msg[1])
-        elif kind == "log":
             self._set_status(msg[1])
         elif kind == "extract":
             done, total = msg[1], msg[2]
@@ -1471,7 +1528,12 @@ class SheetsPhase(PhaseFrame):
         win.configure(bg=PALETTE["bg"])
         win.transient(self.app)
 
-        state = {"idx": 0, "cache": {0: first_img}, "photo": None}
+        # Caché ACOTADA: una hoja A4 a 150 dpi ronda los 6 MB en memoria, así
+        # que guardarlas todas hacía crecer la app sin techo al hojear un
+        # proyecto de cientos de hojas.
+        PREVIEW_CACHE_MAX = 8
+        state = {"idx": 0, "cache": {0: first_img}, "orden": [0], "photo": None,
+                 "cola": queue.Queue(), "pendiente": None}
 
         img_lbl = ttk.Label(win, anchor="center")
         img_lbl.pack(padx=12, pady=(12, 6))
@@ -1482,18 +1544,24 @@ class SheetsPhase(PhaseFrame):
         nav.pack(pady=(0, 12))
         page_var = tk.IntVar(value=1)
 
-        def render_pil(k):
-            if k not in state["cache"]:
+        def _guardar(k, img):
+            state["cache"][k] = img
+            if k in state["orden"]:
+                state["orden"].remove(k)
+            state["orden"].append(k)
+            while len(state["orden"]) > PREVIEW_CACHE_MAX:
+                state["cache"].pop(state["orden"].pop(0), None)
+
+        def _render_worker(k):
+            try:
                 img, _ = core.render_preview(settings, frames, k, labels=labels,
                                              page_numbers=page_numbers,
                                              simulate_cyanotype=simulate)
-                state["cache"][k] = img
-            return state["cache"][k]
+                state["cola"].put((k, img, None))
+            except Exception as e:              # una hoja rota no cierra la ventana
+                state["cola"].put((k, None, f"{type(e).__name__}: {e}"))
 
-        def show(k):
-            k = max(0, min(int(k), num_pages - 1))
-            state["idx"] = k
-            pil = render_pil(k)
+        def _pintar(k, pil):
             max_w, max_h = 980, 660
             w, h = pil.size
             scale = min(max_w / w, max_h / h, 1.0)
@@ -1513,6 +1581,52 @@ class SheetsPhase(PhaseFrame):
             page_var.set(k + 1)
             prev_btn.configure(state="normal" if k > 0 else "disabled")
             next_btn.configure(state="normal" if k < num_pages - 1 else "disabled")
+
+        def _drenar():
+            """Recoge las hojas que termina el hilo de render.
+
+            Renderizar una hoja tarda cerca de un segundo: hacerlo en el hilo
+            de la interfaz (como antes) congelaba la ventana en cada clic de
+            «Siguiente» y parecía que la app se había colgado."""
+            if not win.winfo_exists():
+                return
+            try:
+                while True:
+                    k, img, err = state["cola"].get_nowait()
+                    if img is not None:
+                        _guardar(k, img)
+                    if k == state["idx"]:
+                        state["pendiente"] = None
+                        if img is not None:
+                            _pintar(k, img)
+                        else:
+                            info_lbl.configure(
+                                text=f"No se pudo renderizar esta hoja: {err}")
+                            prev_btn.configure(state="normal" if k > 0 else "disabled")
+                            next_btn.configure(
+                                state="normal" if k < num_pages - 1 else "disabled")
+            except queue.Empty:
+                pass
+            win.after(80, _drenar)
+
+        def show(k):
+            k = max(0, min(int(k), num_pages - 1))
+            state["idx"] = k
+            page_var.set(k + 1)
+            pil = state["cache"].get(k)
+            if pil is not None:
+                state["pendiente"] = None
+                _guardar(k, pil)
+                _pintar(k, pil)
+                return
+            if state["pendiente"] == k:
+                return
+            state["pendiente"] = k
+            info_lbl.configure(text=f"Renderizando la hoja {k + 1}…")
+            prev_btn.configure(state="disabled")
+            next_btn.configure(state="disabled")
+            threading.Thread(target=_render_worker, args=(k,),
+                             daemon=True).start()
 
         prev_btn = ttk.Button(nav, text="◀ Anterior", command=lambda: show(state["idx"] - 1))
         prev_btn.grid(row=0, column=0, padx=4)
@@ -1534,6 +1648,7 @@ class SheetsPhase(PhaseFrame):
         win.bind("<Return>", lambda e: show(page_var.get() - 1))
         win.protocol("WM_DELETE_WINDOW", on_close)
 
+        _drenar()
         show(0)
         win.update_idletasks()
         win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
@@ -1648,6 +1763,9 @@ class App(tk.Tk):
         self.calib_phase.restore_vars("s3_", data)
         self.video_phase.restore_vars("s4_", data)
         self.sheets_phase._after_restore()
+        # La carta de calibración se recuerda entre sesiones: hay que volver a
+        # ajustar qué campos tienen sentido para ella.
+        self.calib_phase._sync_target()
 
     def _on_close(self):
         try:
