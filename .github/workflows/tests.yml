@@ -9,8 +9,11 @@
 name: Tests
 
 on:
+  # Solo main y los pull requests: una rama con PR abierto disparaba los dos
+  # eventos y gastaba el doble de runners para probar el mismo commit. Las
+  # ramas «release/**» las cubre release.yml, que además construye.
   push:
-    branches-ignore: ["release/**"]   # esas ya las cubre release.yml
+    branches: ["main"]
   pull_request:
   workflow_dispatch:
 
