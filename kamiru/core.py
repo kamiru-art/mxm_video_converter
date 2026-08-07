@@ -1165,8 +1165,13 @@ def render_preview(settings: Settings, frame_paths, page_idx: int = 0,
     if s.is_cyanotype:
         if simulate_cyanotype:
             # Soft-proof: con la respuesta medida del perfil, la simulación
-            # pasa por la curva real del proceso (no el modelo genérico).
-            img = cyan.simulate_print(img, response=s.cyan_curve_response)
+            # pasa por la curva real del proceso (no el modelo genérico). El
+            # color/degradado de tinta se pasa para deducir la densidad real:
+            # con tintas de color, leer la claridad como transparencia daba
+            # una simulación al revés en las zonas densas.
+            img = cyan.simulate_print(img, response=s.cyan_curve_response,
+                                      ink_color=s.cyan_ink,
+                                      stops=s.cyan_ink_stops)
         elif s.cyan_mirror:
             img = cyan.mirror(img)
     return img, num_pages

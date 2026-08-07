@@ -95,6 +95,13 @@ Esta versión 2 une en una sola app a *Video to Contact Sheets* y a
   que descubre **qué color de tinta bloquea mejor el UV en TU impresora**
   (el negro no siempre es lo mejor). El perfil resultante trae el mejor color
   y un **degradado de 3 paradas** que se aplica a los negativos con un clic.
+- **Gráficos del resultado** 🆕: cada análisis se dibuja bajo el formulario
+  (respuesta medida vs. curva aplicada, color ganador y degradado, escala y
+  tamaños seguros), para juzgar de un vistazo si la calibración salió sana.
+- **Comprobaciones antes de guardar** 🆕: si escaneaste el acetato en vez de
+  la copia azul (respuesta invertida) o la carta salió sin contraste, la app
+  lo dice y no construye una curva que arruinaría el proyecto. Y la curva
+  recuerda **con qué tinta se midió**, para avisarte si luego cambias.
 - Si activas el modo cianotipia sin perfil, la app te ofrece generar la hoja
   de calibración antes de imprimir nada.
 
@@ -146,6 +153,17 @@ e instala las dependencias sola (2–3 minutos); después abre al instante.
    `sudo dnf install python3 python3-tkinter` (Fedora).
 2. Ejecuta una vez `./Instalar en Linux.sh`; la app queda en tu menú.
    También puedes usar `./run.sh`.
+
+---
+
+## 📖 Ayuda dentro de la app
+
+Cada sección tiene un botón **«?»** que abre una guía paso a paso, y **cada
+paso lleva su propio dibujo** al lado del texto: la página de prueba, la
+impresión al 100 %, el acetato bajo el sol, el escáner, los halos del modo
+ahorro, la curva de compensación… Son diagramas dibujados por la app (no hay
+que descargar nada) y explican la **física** de cada paso, no solo dónde
+hacer clic.
 
 ---
 

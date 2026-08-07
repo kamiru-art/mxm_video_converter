@@ -56,8 +56,17 @@ def _nice_name(path: Path) -> str:
     return " ".join(name.split())
 
 
+# Caché del escaneo de fuentes: recorrer /usr/share/fonts (o C:\Windows\Fonts)
+# tarda cientos de milisegundos y varias partes de la app lo piden (interfaz,
+# hojas de calibración, diagramas de las guías). Se devuelve una COPIA porque
+# la interfaz añade al dict las fuentes que la usuaria elige por archivo.
+_DISCOVER_CACHE: dict = {}
+
+
 def discover_fonts():
     """Devuelve un dict ordenado {nombre visible: ruta_str} de fuentes disponibles."""
+    if _DISCOVER_CACHE:
+        return dict(_DISCOVER_CACHE)
     found = {}
     for d in _candidate_dirs():
         try:
@@ -69,7 +78,9 @@ def discover_fonts():
                         found[name] = str(path)
         except (PermissionError, OSError):
             continue
-    return dict(sorted(found.items(), key=lambda kv: kv[0].lower()))
+    ordenadas = dict(sorted(found.items(), key=lambda kv: kv[0].lower()))
+    _DISCOVER_CACHE.update(ordenadas)
+    return dict(ordenadas)
 
 
 # Familias preferidas como valor por defecto (la primera que exista, gana).
@@ -99,3 +110,23 @@ def default_font(fonts: dict):
     # Último recurso: la primera alfabéticamente.
     first = next(iter(fonts.items()))
     return first[0], first[1]
+
+
+_UI_FONT: list = []
+
+
+def ui_font_path():
+    """Ruta de la fuente para los textos que la app DIBUJA (hojas de
+    calibración, diagramas de las guías, gráficos de resultados).
+
+    La fuente por defecto de Pillow es un bitmap ASCII: sin esto, cualquier
+    acento o flecha («Tamaños», «0 → 255») sale como un cuadrado vacío.
+    Devuelve None si no se encontró ninguna fuente del sistema.
+    """
+    if not _UI_FONT:
+        try:
+            _, path = default_font(discover_fonts())
+        except Exception:
+            path = None
+        _UI_FONT.append(path)
+    return _UI_FONT[0]

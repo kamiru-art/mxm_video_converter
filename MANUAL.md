@@ -127,8 +127,10 @@ Es trabajo de **una sola vez** (por impresora, y por proceso de cianotipia):
   mide con TU proceso completo real: tu impresora + tu acetato + tu emulsión
   + tu sol + tu lavado.
 
-> 💡 En la app, cada sección de calibración tiene un botón **«?»** con esta
-> misma guía paso a paso, siempre a un clic.
+> 💡 En la app, **cada sección tiene un botón «?»** con esta misma guía paso
+> a paso, y cada paso viene con un **dibujo** de lo que tienes delante en ese
+> momento (la carta, el acetato bajo el sol, el escáner, la curva medida).
+> Siempre a un clic, sin salir de la app.
 >
 > ¿Solo quieres probar la app o pintar sobre papel sin escanear de vuelta?
 > Puedes saltarte esta fase y volver cuando quieras precisión.
@@ -174,8 +176,22 @@ El flujo es el mismo para las tres (paso a paso):
 4. **Escanea la copia azul seca** (NO el acetato), completa y plana.
 5. **Analizar cianotipia**. Según la carta, la app construye la **curva de
    compensación** (con rango dinámico y sugerencias) o el **perfil de color**
-   (mejor bloqueador + degradado).
-6. **Guardar perfil** → aparece en la fase ②, pestaña Cianotipia.
+   (mejor bloqueador + degradado), y dibuja el resultado en un **gráfico**
+   bajo los formularios:
+   - En la curva verás en **azul** lo que tu proceso hace de verdad y en
+     **verde** la corrección que se aplicará. Si el azul sale plano en un
+     tramo, ahí tu química no distingue tonos: sube el tiempo de exposición o
+     mejora el bloqueo de la tinta.
+   - En el ColorBlocker verás el color ganador junto al negro y el degradado
+     de tinta completo.
+6. **Guardar perfil** → aparece en la fase ②, pestaña Cianotipia. La curva
+   guarda **con qué tinta se midió**: si luego generas hojas con otro color,
+   la app te avisa antes de gastar acetato (una curva medida con verde no
+   sirve para negativos en negro).
+
+> ⚠️ Si escaneas el **acetato** en vez de la copia azul, la app lo detecta
+> (la respuesta sale invertida) y se niega a construir la curva en vez de
+> guardarte una que arruinaría todos los negativos del proyecto.
 
 Orden recomendado: primero el **ColorBlocker** (una vez, para conocer tu mejor
 tinta) y después la **curva** (tira Kamiru o EDN 2.2) usando ese perfil de

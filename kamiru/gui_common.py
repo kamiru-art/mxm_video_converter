@@ -22,7 +22,9 @@ PALETTE = {
     "bg": "#F3F5F7",          # fondo general
     "card": "#FFFFFF",        # campos / pestaña activa
     "text": "#243038",        # texto principal
-    "muted": "#6B7B88",       # texto secundario
+    # Texto secundario: hay MUCHA explicación en este tono; #6B7B88 se quedaba
+    # en 3.6:1 sobre el fondo claro (por debajo del mínimo legible de 4.5:1).
+    "muted": "#556470",       # texto secundario
     "accent": "#1FA37A",      # verde principal
     "accent_dark": "#15795A",
     "accent_soft": "#A9CEC2",  # acento atenuado (botón deshabilitado)
@@ -103,7 +105,9 @@ def build_style(root: tk.Tk):
     # Pestañas
     style.configure("TNotebook", background=p["bg"], bordercolor=p["border"],
                     tabmargins=(4, 4, 4, 0))
-    style.configure("TNotebook.Tab", padding=(15, 9),
+    # Padding ajustado: con (15, 9) las 8 pestañas de «Generar hojas» no
+    # cabían a lo ancho y sus títulos salían cortados.
+    style.configure("TNotebook.Tab", padding=(10, 8),
                     background=p["tab_off"], foreground=p["muted"])
     style.map("TNotebook.Tab",
               background=[("selected", p["card"])],
@@ -133,16 +137,42 @@ def build_style(root: tk.Tk):
                     bordercolor=p["border"], lightcolor=p["accent"],
                     darkcolor=p["accent"])
 
-    # Botón de ayuda «?» (pequeño, redondeado visualmente por el padding).
-    style.configure("Help.TButton", padding=(4, 0),
-                    background=p["accent"], foreground=p["accent_text"])
+    # Botón de ayuda «?»: con padding (4, 0) el área de clic quedaba en ~18 px,
+    # por debajo de lo que se acierta cómodamente con el ratón (y ni hablar en
+    # pantallas táctiles). Ahora es un botón redondo de ~26 px.
+    style.configure("Help.TButton", padding=(7, 3), font=("", 12, "bold"),
+                    background=p["accent"], foreground=p["accent_text"],
+                    bordercolor=p["accent"], focuscolor=p["accent_text"])
     style.map("Help.TButton",
-              background=[("active", p["accent_dark"])])
+              background=[("active", p["accent_dark"]),
+                          ("pressed", p["accent_dark"])])
+
+
+GUIDE_ART_W = 150   # ancho del diagrama de cada paso, en píxeles
+
+
+def _guide_photo(nombre: str):
+    """PhotoImage del diagrama `nombre`, o None si no se puede dibujar.
+
+    Los fallos son silenciosos a propósito: sin ImageTk (o con un nombre de
+    diagrama que aún no existe) la guía debe seguir abriéndose con su texto.
+    """
+    if not nombre:
+        return None
+    try:
+        from PIL import ImageTk
+
+        from . import guide_art
+        img = guide_art.render(nombre, GUIDE_ART_W)
+        return ImageTk.PhotoImage(img) if img is not None else None
+    except Exception:
+        return None
 
 
 def show_guide(parent, guide_key: str):
     """Abre la guía paso a paso `guide_key` (ver guides.py) en una ventana
-    con scroll: número + emoji + título en negrita + explicación por paso."""
+    con scroll: cada paso lleva su DIAGRAMA a la izquierda y, al lado,
+    emoji + título en negrita + explicación."""
     guia = GUIDES.get(guide_key)
     if not guia:
         return
@@ -151,8 +181,12 @@ def show_guide(parent, guide_key: str):
     win.title(f"❓ {guia['titulo']}")
     win.configure(bg=p["bg"])
     win.transient(parent.winfo_toplevel())
-    ancho = 660
-    win.geometry(f"{ancho}x640")
+    ancho = 760
+    win.geometry(f"{ancho}x680")
+    win.minsize(560, 360)
+    # Las imágenes de Tk se recolectan si nadie las referencia: la ventana es
+    # su dueña mientras viva.
+    win._diagramas = []
 
     canvas = tk.Canvas(win, bg=p["bg"], highlightthickness=0)
     vs = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
@@ -167,28 +201,53 @@ def show_guide(parent, guide_key: str):
     ttk.Label(inner, text=guia["intro"], style="Sub.TLabel",
               wraplength=ancho - 70).pack(anchor="w", pady=(6, 10))
 
-    for i, (emoji, titulo, texto) in enumerate(guia["pasos"]):
+    # Ancho de texto: lo que queda tras el diagrama y los márgenes de la
+    # tarjeta. Se recalcula al redimensionar (ver _on_resize).
+    etiquetas: list = []
+    for paso in guia["pasos"]:
+        emoji, titulo, texto = paso[0], paso[1], paso[2]
+        diagrama = paso[3] if len(paso) > 3 else None
+
         card = tk.Frame(inner, bg=p["card"], highlightbackground=p["border"],
                         highlightthickness=1)
         card.pack(fill="x", pady=(0, 8))
-        fila = tk.Frame(card, bg=p["card"])
-        fila.pack(fill="x", padx=12, pady=(10, 2))
+        foto = _guide_photo(diagrama)
+        if foto is not None:
+            win._diagramas.append(foto)
+            art = tk.Label(card, image=foto, bg=p["card"], borderwidth=0)
+            art.pack(side="left", padx=(12, 12), pady=12, anchor="n")
+        col = tk.Frame(card, bg=p["card"])
+        col.pack(side="left", fill="both", expand=True, padx=(0 if foto else 12, 14),
+                 pady=(10, 10))
+        fila = tk.Frame(col, bg=p["card"])
+        fila.pack(fill="x")
         tk.Label(fila, text=emoji, bg=p["card"],
-                 font=("TkDefaultFont", 20)).pack(side="left", padx=(0, 10))
-        tk.Label(fila, text=titulo, bg=p["card"], fg=p["accent_dark"],
-                 font=("TkDefaultFont", 13, "bold"), justify="left",
-                 wraplength=ancho - 150, anchor="w").pack(
-            side="left", fill="x", expand=True)
-        tk.Label(card, text=texto, bg=p["card"], fg=p["text"], justify="left",
-                 wraplength=ancho - 110, anchor="w").pack(
-            fill="x", padx=(58, 14), pady=(0, 10))
+                 font=("TkDefaultFont", 18)).pack(side="left", padx=(0, 8))
+        lbl_tit = tk.Label(fila, text=titulo, bg=p["card"], fg=p["accent_dark"],
+                           font=("TkDefaultFont", 13, "bold"), justify="left",
+                           anchor="w")
+        lbl_tit.pack(side="left", fill="x", expand=True)
+        lbl_txt = tk.Label(col, text=texto, bg=p["card"], fg=p["text"],
+                           justify="left", anchor="w")
+        lbl_txt.pack(fill="x", pady=(4, 0))
+        etiquetas.append((lbl_tit, lbl_txt, foto is not None))
 
     ttk.Button(inner, text="Entendido 💚", command=win.destroy).pack(
         anchor="e", pady=(6, 0))
 
     def _on_resize(_evt=None):
         canvas.configure(scrollregion=canvas.bbox("all"))
-        canvas.itemconfigure(inner_id, width=canvas.winfo_width())
+        w = canvas.winfo_width()
+        canvas.itemconfigure(inner_id, width=w)
+        # El texto de cada paso ocupa lo que queda tras el diagrama: sin este
+        # recálculo, agrandar la ventana dejaba las líneas cortadas al ancho
+        # inicial (y encogerla desbordaba la tarjeta).
+        for lbl_tit, lbl_txt, con_arte in etiquetas:
+            libre = max(180, w - 2 * PAD * 2 - 40
+                        - ((GUIDE_ART_W + 24) if con_arte else 12))
+            for lbl, extra in ((lbl_tit, 34), (lbl_txt, 0)):
+                if lbl.cget("wraplength") != libre - extra:
+                    lbl.configure(wraplength=libre - extra)
     inner.bind("<Configure>", _on_resize)
     canvas.bind("<Configure>", _on_resize)
 
@@ -203,6 +262,61 @@ def show_guide(parent, guide_key: str):
     for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
         win.bind(ev, _wheel)
     win.focus_set()
+
+
+class ScrollArea(ttk.Frame):
+    """Zona con scroll vertical. El contenido va en `.body`.
+
+    Varias partes de la app tienen más controles de los que caben en una
+    pantalla de portátil (la fase ① con sus dos columnas, o las pestañas de la
+    fase ②): sin scroll, los botones de acción del final —«Generar carta»,
+    «Analizar», «Guardar perfil»— quedaban sencillamente fuera de la ventana
+    y era imposible llegar a ellos.
+
+    La barra se esconde sola cuando el contenido cabe, para no meter ruido
+    visual donde no hace falta.
+    """
+
+    def __init__(self, master, **kw):
+        super().__init__(master, **kw)
+        self._canvas = tk.Canvas(self, bg=PALETTE["bg"], highlightthickness=0)
+        self._vs = ttk.Scrollbar(self, orient="vertical",
+                                 command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=self._on_scroll_set)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self.body = ttk.Frame(self._canvas)
+        self._win = self._canvas.create_window((0, 0), window=self.body,
+                                               anchor="nw")
+        self.body.bind("<Configure>", self._sync)
+        self._canvas.bind("<Configure>", self._sync)
+        # La rueda se enlaza solo mientras el puntero está encima: con
+        # bind_all permanente, dos zonas con scroll se robaban los eventos.
+        self._canvas.bind("<Enter>", self._bind_wheel)
+        self._canvas.bind("<Leave>", self._unbind_wheel)
+
+    def _on_scroll_set(self, first, last):
+        cabe = float(first) <= 0.0 and float(last) >= 1.0
+        if cabe and self._vs.winfo_ismapped():
+            self._vs.pack_forget()
+        elif not cabe and not self._vs.winfo_ismapped():
+            self._vs.pack(side="right", fill="y")
+        self._vs.set(first, last)
+
+    def _sync(self, _evt=None):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        self._canvas.itemconfigure(self._win, width=self._canvas.winfo_width())
+
+    def _wheel(self, evt):
+        paso = -1 if getattr(evt, "delta", 0) > 0 or getattr(evt, "num", 0) == 4 else 1
+        self._canvas.yview_scroll(paso, "units")
+
+    def _bind_wheel(self, _evt=None):
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self._canvas.bind_all(ev, self._wheel)
+
+    def _unbind_wheel(self, _evt=None):
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self._canvas.unbind_all(ev)
 
 
 class PhaseFrame(ttk.Frame):
@@ -317,16 +431,21 @@ class PhaseFrame(ttk.Frame):
             return default
 
     # --------------------------------------------------------------- log
-    def build_log(self, parent, height=9, side=None):
+    def build_log(self, parent, height=9, side=None, expand=True):
         """side="bottom" ancla el log abajo; empaquetarlo (junto a la barra de
-        acción) ANTES que el resto le da prioridad de espacio con pack."""
+        acción) ANTES que el resto le da prioridad de espacio con pack.
+
+        expand=False deja el log con su alto fijo y cede el espacio sobrante
+        al resto (útil donde el contenido principal —p. ej. las 8 pestañas de
+        «Generar hojas»— necesita todo el alto que pueda)."""
         p = PALETTE
         frame = ttk.Frame(parent)
+        relleno = "both" if expand else "x"
         if side:
-            frame.pack(side=side, fill="both", expand=True, padx=PAD,
+            frame.pack(side=side, fill=relleno, expand=expand, padx=PAD,
                        pady=(PAD, 0))
         else:
-            frame.pack(fill="both", expand=True, padx=PAD, pady=(PAD, 0))
+            frame.pack(fill=relleno, expand=expand, padx=PAD, pady=(PAD, 0))
         self.log_text = tk.Text(frame, height=height, bg=p["log_bg"],
                                 fg=p["text"], relief="solid", borderwidth=1,
                                 highlightthickness=0, wrap="word",

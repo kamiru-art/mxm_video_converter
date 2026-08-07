@@ -9,7 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import calibration, config, layoutfile, paper, rescue, scan, videoout
-from .gui_common import PAD, PhaseFrame
+from .gui_common import PAD, PhaseFrame, ScrollArea
 
 _IMG_TYPES = [("Imágenes", "*.tif *.tiff *.png *.jpg *.jpeg"),
               ("Todos los archivos", "*.*")]
@@ -364,15 +364,43 @@ class CalibPhase(PhaseFrame):
         self.var_c_block_color = tk.StringVar(value="#000000")
 
     def _build_ui(self):
-        # Log anclado abajo y empaquetado primero (prioridad de espacio).
-        self.build_log(self, height=10, side="bottom")
+        # Barra de estado + progreso, anclada abajo y empaquetada PRIMERO
+        # (con pack, quien se empaqueta antes conserva su espacio). Antes esta
+        # fase no tenía ninguna: analizar una carta EDN de 256 parches o un
+        # ColorBlocker tarda varios segundos y la ventana parecía colgada.
+        bar = ttk.Frame(self, padding=(PAD, 0, PAD, 0))
+        bar.pack(side="bottom", fill="x")
+        self.progress = ttk.Progressbar(bar, mode="determinate")
+        self.progress.pack(fill="x")
+        self.status_lbl = ttk.Label(bar, text="Listo.", style="Sub.TLabel")
+        self.status_lbl.pack(anchor="w", pady=(2, 4))
+
+        # Log anclado abajo y empaquetado antes que el contenido.
+        # Alto fijo y sin expandir: el espacio que sobra es para los
+        # formularios, no para el log.
+        self.build_log(self, height=5, side="bottom", expand=False)
         self._append_log(
             "Los perfiles guardados aquí aparecen en la fase «② Generar hojas» "
             "(perfil de impresora en la pestaña Hoja; curva de cianotipia en la "
             "pestaña Cianotipia).")
 
-        cols = ttk.Frame(self)
-        cols.pack(fill="both", expand=True)
+        # Panel de resultados: el gráfico del último análisis (ver charts.py).
+        # Se empaqueta YA (vacío no ocupa nada) para que tenga prioridad de
+        # espacio sobre las columnas: empaquetarlo después lo dejaba con cero
+        # píxeles y el gráfico no llegaba a verse nunca.
+        self.result_frame = ttk.Frame(self)
+        self.result_frame.pack(side="bottom", fill="x", padx=PAD)
+        self.result_lbl = ttk.Label(self.result_frame, anchor="center")
+        self.result_lbl.pack(pady=(PAD, 0))
+        self._result_photo = None
+
+        # Las dos columnas viven dentro de una zona con scroll: juntas piden
+        # más alto del que tiene un portátil y, sin scroll, «Generar carta de
+        # calibración…», «Analizar» y «Guardar perfil» quedaban fuera de la
+        # ventana, sin forma de alcanzarlos.
+        area = ScrollArea(self)
+        area.pack(fill="both", expand=True)
+        cols = area.body
         left = ttk.Frame(cols)
         left.pack(side="left", fill="both", expand=True)
         right = ttk.Frame(cols)
@@ -394,9 +422,10 @@ class CalibPhase(PhaseFrame):
         ttk.Label(pp, text="DPI:").pack(side="left", padx=(8, 0))
         ttk.Spinbox(pp, from_=150, to=1200, increment=50, width=6,
                     textvariable=self.var_p_dpi).pack(side="left", padx=4)
-        ttk.Button(sec, text="Generar página de prueba…",
-                   command=self._gen_printer_page).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        self.p_gen_btn = ttk.Button(sec, text="Generar página de prueba…",
+                                    command=self._gen_printer_page)
+        self.p_gen_btn.grid(row=2, column=0, columnspan=3, sticky="w",
+                            pady=(8, 4))
 
         ttk.Label(sec, text="2. Analiza el escaneo de la página impresa:",
                   style="Sub.TLabel").grid(row=3, column=0, columnspan=3, sticky="w")
@@ -409,8 +438,10 @@ class CalibPhase(PhaseFrame):
         dd.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Label(dd, text="DPI del escaneo (vacío = leer del archivo):").pack(side="left")
         ttk.Entry(dd, textvariable=self.var_p_scan_dpi, width=8).pack(side="left", padx=4)
-        ttk.Button(sec, text="Analizar escaneo", command=self._analyze_printer).grid(
-            row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        self.p_analyze_btn = ttk.Button(sec, text="Analizar escaneo",
+                                        command=self._analyze_printer)
+        self.p_analyze_btn.grid(row=6, column=0, columnspan=3, sticky="w",
+                                pady=(8, 4))
 
         nn = ttk.Frame(sec)
         nn.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -433,9 +464,11 @@ class CalibPhase(PhaseFrame):
         tg = ttk.Frame(sec)
         tg.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(tg, text="Carta:").pack(side="left")
-        ttk.Combobox(tg, values=CYANO_TARGET_LABELS,
-                     textvariable=self.var_c_target, state="readonly",
-                     width=34).pack(side="left", padx=4)
+        cb_target = ttk.Combobox(tg, values=CYANO_TARGET_LABELS,
+                                 textvariable=self.var_c_target,
+                                 state="readonly", width=34)
+        cb_target.pack(side="left", padx=4)
+        cb_target.bind("<<ComboboxSelected>>", lambda _e: self._sync_target())
         ttk.Label(sec, text="EDN 2.2 = curva fina con 256 tonos · ColorBlocker "
                             "= descubre QUÉ COLOR de tinta bloquea mejor el UV "
                             "en tu impresora (método easydigitalnegatives.com).",
@@ -451,13 +484,15 @@ class CalibPhase(PhaseFrame):
         ttk.Label(cc, text="DPI:").pack(side="left", padx=(8, 0))
         ttk.Spinbox(cc, from_=150, to=1200, increment=50, width=6,
                     textvariable=self.var_c_dpi).pack(side="left", padx=4)
-        ik = ttk.Frame(sec)
+        self.c_ink_box = ttk.Frame(sec)
+        ik = self.c_ink_box
         ik.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        ttk.Label(ik, text="Color de tinta del negativo:").grid(row=0, column=0)
+        ttk.Label(ik, text="Tinta del negativo:").grid(row=0, column=0)
         self.color_picker(ik, self.var_c_ink, row=0, col=1)
-        cp = ttk.Frame(sec)
+        self.c_profile_box = ttk.Frame(sec)
+        cp = self.c_profile_box
         cp.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        ttk.Label(cp, text="Perfil de color (ColorBlocker):").pack(side="left")
+        ttk.Label(cp, text="Perfil ColorBlocker:").pack(side="left")
         self.c_colorprofile_cb = ttk.Combobox(
             cp, textvariable=self.var_c_colorprofile, state="readonly",
             width=24, values=[NO_COLOR_PROFILE])
@@ -468,7 +503,7 @@ class CalibPhase(PhaseFrame):
         bk = ttk.Frame(sec)
         bk.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
         # color_picker usa grid: nada de pack en este frame (TclError).
-        ttk.Checkbutton(bk, text="Color del fondo de la carta:",
+        ttk.Checkbutton(bk, text="Color del fondo:",
                         variable=self.var_c_block_on).grid(
             row=0, column=0, sticky="w")
         self.color_picker(bk, self.var_c_block_color, row=0, col=1)
@@ -479,9 +514,10 @@ class CalibPhase(PhaseFrame):
                             "mide, solo bloquea el UV).",
                   style="Sub.TLabel", wraplength=380).grid(
             row=8, column=0, columnspan=3, sticky="w", pady=(2, 0))
-        ttk.Button(sec, text="Generar carta de calibración…",
-                   command=self._gen_cyano_strip).grid(
-            row=9, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        self.c_gen_btn = ttk.Button(sec, text="Generar carta de calibración…",
+                                    command=self._gen_cyano_strip)
+        self.c_gen_btn.grid(row=9, column=0, columnspan=3, sticky="w",
+                            pady=(8, 4))
 
         ttk.Label(sec, text="2. Analiza el escaneo de la CIANOTIPIA (no del acetato):",
                   style="Sub.TLabel", wraplength=380).grid(
@@ -491,8 +527,10 @@ class CalibPhase(PhaseFrame):
         ttk.Button(sec, text="Examinar…",
                    command=lambda: self._pick(self.var_c_scan)).grid(
             row=11, column=2, pady=(4, 0))
-        ttk.Button(sec, text="Analizar cianotipia", command=self._analyze_cyano).grid(
-            row=12, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        self.c_analyze_btn = ttk.Button(sec, text="Analizar cianotipia",
+                                        command=self._analyze_cyano)
+        self.c_analyze_btn.grid(row=12, column=0, columnspan=3, sticky="w",
+                                pady=(8, 4))
 
         nn = ttk.Frame(sec)
         nn.grid(row=13, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -502,12 +540,99 @@ class CalibPhase(PhaseFrame):
                                      command=self._save_cyano)
         self.c_save_btn.pack(side="left", padx=4)
         self.refresh_color_profiles()
+        self._sync_target()
         self.enable_autowrap()
+
+    def _sync_target(self):
+        """Ajusta los campos a la carta elegida.
+
+        La carta ColorBlocker imprime SUS PROPIOS colores para descubrir cuál
+        bloquea mejor: elegir ahí un color de tinta o un perfil de color no
+        hace nada, y verlos activos hacía pensar que sí. Se apagan, y los
+        botones dicen qué se va a analizar.
+        """
+        es_cb = _target_key(self.var_c_target.get()) == "colorblocker"
+        estado = "disabled" if es_cb else "normal"
+        for caja in (self.c_ink_box, self.c_profile_box):
+            for hijo in caja.winfo_children():
+                try:
+                    hijo.configure(state=estado)
+                except tk.TclError:
+                    pass
+                for nieto in hijo.winfo_children():
+                    try:
+                        nieto.configure(state=estado)
+                    except tk.TclError:
+                        pass
+        self.c_analyze_btn.configure(
+            text="Analizar ColorBlocker" if es_cb else "Analizar cianotipia")
+        self.c_gen_btn.configure(
+            text="Generar carta ColorBlocker…" if es_cb
+            else "Generar carta de calibración…")
 
     def _pick(self, var):
         f = filedialog.askopenfilename(title="Elegir escaneo", filetypes=_IMG_TYPES)
         if f:
             var.set(f)
+
+    # ------------------------------------------------------- estado/UI
+    def _botones(self):
+        return [b for b in (getattr(self, n, None) for n in
+                            ("p_gen_btn", "p_analyze_btn", "c_gen_btn",
+                             "c_analyze_btn")) if b is not None]
+
+    def _set_busy(self, busy: bool, texto: str = ""):
+        """Deshabilita las acciones y anima la barra mientras se trabaja.
+
+        Sin esto, un segundo clic quedaba «ignorado» con un mensaje en el log
+        y no había ninguna señal de que el análisis seguía en marcha."""
+        for b in self._botones():
+            try:
+                b.configure(state="disabled" if busy else "normal")
+            except tk.TclError:
+                pass
+        try:
+            if busy:
+                self.progress.configure(mode="indeterminate")
+                self.progress.start(12)
+            else:
+                self.progress.stop()
+                self.progress.configure(mode="determinate", value=0)
+        except tk.TclError:
+            pass
+        if texto:
+            self.status_lbl.configure(text=texto)
+
+    def _start(self, texto, target, *args) -> bool:
+        """Lanza un trabajo mostrando estado (o avisa si ya hay uno)."""
+        if self.busy():
+            messagebox.showinfo(
+                "Un momento",
+                "Ya hay un análisis en marcha en esta fase. Espera a que "
+                "termine antes de lanzar otro.")
+            return False
+        self._set_busy(True, texto)
+        if not self.start_worker(target, *args):
+            self._set_busy(False, "Listo.")
+            return False
+        return True
+
+    def _mostrar_grafico(self, prof: dict):
+        """Dibuja el gráfico del perfil recién analizado bajo los formularios."""
+        self._result_photo = None
+        try:
+            from PIL import ImageTk
+
+            from . import charts
+            img = charts.para_perfil(prof)
+            if img is None:
+                raise ValueError("sin gráfico para este tipo de perfil")
+            self._result_photo = ImageTk.PhotoImage(img)
+        except Exception as e:      # sin ImageTk o perfil raro: solo texto
+            self._append_log(f"   (no se pudo dibujar el gráfico: "
+                             f"{type(e).__name__})")
+            return
+        self.result_lbl.configure(image=self._result_photo)
 
     # ---------------------------------------------------------- impresora
     def _gen_printer_page(self):
@@ -522,9 +647,10 @@ class CalibPhase(PhaseFrame):
         # pasan al hilo: renderizar la página a 300 dpi tardaba lo suficiente
         # como para congelar la ventana.
         self.log("Generando página de prueba…")
-        self.start_worker(self._work_gen_printer_page, path,
-                          self.var_p_paper.get(),
-                          self.to_int(self.var_p_dpi, 300))
+        self._start("Generando página de prueba…",
+                    self._work_gen_printer_page, path,
+                    self.var_p_paper.get(),
+                    self.to_int(self.var_p_dpi, 300))
 
     def _work_gen_printer_page(self, path, paper_name, dpi):
         try:
@@ -548,9 +674,9 @@ class CalibPhase(PhaseFrame):
             scan_dpi = None
         self.log("═" * 30)
         self.log("Analizando página de prueba…")
-        self.start_worker(self._work_printer, scan_path,
-                          self.var_p_paper.get(),
-                          self.to_int(self.var_p_dpi, 300), scan_dpi)
+        self._start("Analizando la página de prueba…", self._work_printer,
+                    scan_path, self.var_p_paper.get(),
+                    self.to_int(self.var_p_dpi, 300), scan_dpi)
 
     def _work_printer(self, scan_path, paper_name, dpi, scan_dpi):
         try:
@@ -592,11 +718,12 @@ class CalibPhase(PhaseFrame):
         block = (self.var_c_block_color.get()
                  if self.var_c_block_on.get() else None)
         self.log("Generando carta de calibración…")
-        self.start_worker(self._work_gen_cyano_chart, path, target,
-                          self.var_c_paper.get(),
-                          self.to_int(self.var_c_dpi, 300),
-                          self.var_c_ink.get(), self.var_c_mirror.get(),
-                          self._color_stops(), block)
+        self._start("Generando la carta de calibración…",
+                    self._work_gen_cyano_chart, path, target,
+                    self.var_c_paper.get(),
+                    self.to_int(self.var_c_dpi, 300),
+                    self.var_c_ink.get(), self.var_c_mirror.get(),
+                    self._color_stops(), block)
 
     def _work_gen_cyano_chart(self, path, target, paper_name, dpi, ink,
                               mirror, ink_stops, block):
@@ -622,19 +749,27 @@ class CalibPhase(PhaseFrame):
             return
         self.log("═" * 30)
         self.log("Analizando cianotipia…")
-        self.start_worker(self._work_cyano, scan_path,
-                          self.var_c_paper.get(), self.to_int(self.var_c_dpi, 300),
-                          _target_key(self.var_c_target.get()))
+        block = (self.var_c_block_color.get()
+                 if self.var_c_block_on.get() else None)
+        self._start("Analizando la copia azul…", self._work_cyano, scan_path,
+                    self.var_c_paper.get(), self.to_int(self.var_c_dpi, 300),
+                    _target_key(self.var_c_target.get()),
+                    self.var_c_ink.get(), self._color_stops(), block)
 
-    def _work_cyano(self, scan_path, paper_name, dpi, target):
+    def _work_cyano(self, scan_path, paper_name, dpi, target, ink, stops,
+                    block):
         try:
             if target == "colorblocker":
                 prof = calibration.analizar_colorblocker(
                     scan_path, paper_name, dpi, log=self.log)
                 self.queue.put(("cb_done", prof))
             else:
+                # La tinta se guarda EN el perfil: una curva solo vale para el
+                # color con el que se imprimió la carta (ver la nota de la
+                # fase ② si luego se elige otro).
                 prof = calibration.analizar_tira_cianotipia(
-                    scan_path, paper_name, dpi, target=target, log=self.log)
+                    scan_path, paper_name, dpi, target=target, log=self.log,
+                    ink_color=ink, ink_stops=stops, block_color=block)
                 self.queue.put(("cyano_done", prof))
         except Exception as e:
             self.queue.put(("error", str(e)))
@@ -645,36 +780,45 @@ class CalibPhase(PhaseFrame):
         if kind == "printer_done":
             self._printer_profile = msg[1]
             p = msg[1]
+            self._set_busy(False, "Página de prueba analizada.")
             self.log(f"📋 Resultado: escala {p['scale_x'] * 100:.2f} % × "
                      f"{p['scale_y'] * 100:.2f} % · marcador recomendado "
                      f"{p['marker_recomendado_mm']:g} mm · QR recomendado "
                      f"{p['qr_recomendado_mm']:g} mm")
             for n in p.get("notas", []):
                 self.log(f"   • {n}")
+            self._mostrar_grafico(p)
             self.p_save_btn.configure(state="normal")
         elif kind == "cyano_done":
             self._cyano_profile = msg[1]
             p = msg[1]
+            self._set_busy(False, "Curva de cianotipia construida.")
             self.log(f"📋 Rango dinámico: {p['rango_dinamico'] * 100:.0f} % · "
                      f"curva de {len(p['lut'])} valores construida "
                      f"({p.get('steps', '?')} parches medidos).")
             for n in p.get("notas", []):
                 self.log(f"   • {n}")
+            self._mostrar_grafico(p)
             self.c_save_btn.configure(state="normal")
         elif kind == "cb_done":
             self._cyano_profile = msg[1]
             p = msg[1]
+            self._set_busy(False, "ColorBlocker analizado.")
             self.log(f"📋 Mejor color bloqueador: {p['mejor_color']} · "
                      f"degradado: " + " → ".join(c for _, c in p["stops"]))
             for n in p.get("notas", []):
                 self.log(f"   • {n}")
+            self._mostrar_grafico(p)
             self.var_c_ink.set(p["mejor_color"])
             self.c_save_btn.configure(state="normal")
         elif kind == "page_done":
+            self._set_busy(False, "Carta guardada: ya puedes imprimirla.")
             self.log(f"✅ {msg[1]}")
             if len(msg) > 2 and msg[2]:
                 self.log(msg[2])
         elif kind == "error":
+            self._set_busy(False, "Error.")
+            self.log(f"⚠ {msg[1]}")
             messagebox.showerror("Ups, algo falló", msg[1])
 
     def _save_printer(self):
@@ -725,7 +869,7 @@ class VideoPhase(PhaseFrame):
         self.var_out = tk.StringVar()
 
     def _build_ui(self):
-        sec = self.section(self, "Origen")
+        sec = self.section(self, "Origen", guide="video_final")
         ttk.Label(sec, text="Layout (.json) del proyecto:").grid(row=0, column=0, sticky="w")
         ttk.Entry(sec, textvariable=self.var_layout).grid(row=0, column=1,
                                                           sticky="ew", padx=4)

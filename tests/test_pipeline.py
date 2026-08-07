@@ -33,7 +33,8 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kamiru import calibration, core, cyanotype, dedup, layoutfile, markers, rescue, scan  # noqa: E402
+from kamiru import (calibration, charts, core, cyanotype, dedup, guide_art,  # noqa: E402
+                    guides, layoutfile, markers, rescue, scan)
 
 TMP = Path(tempfile.mkdtemp(prefix="kamiru_test_"))
 PASSED = []
@@ -690,6 +691,51 @@ saltos = [lut[i + 1] - lut[i] for i in range(8, 247)]
 check("curva suave en medios tonos, sin escalones", max(saltos) < 5.0,
       f"salto_max={max(saltos):.2f}")
 
+print("\n══ 7a. La calibración rechaza escaneos que no son la copia azul ══")
+# Escanear el ACETATO en vez de la copia deja la respuesta al revés (más tinta
+# ⇒ más oscuro). Antes se construía igualmente una curva "válida" que
+# arruinaba todos los negativos del proyecto en silencio.
+acet = (grayn * 255).astype(np.uint8)
+acet_path = TMP / "tira_acetato.png"
+cv2.imwrite(str(acet_path), cv2.cvtColor(acet, cv2.COLOR_GRAY2BGR))
+scan_acet = TMP / "scan_acetato.png"
+fake_scan(acet_path, scan_acet, angle_deg=0.9, scale=2.0, noise=3, seed=29)
+_err_inv = ""
+try:
+    calibration.analizar_tira_cianotipia(scan_acet, "A4", 200)
+except ValueError as _e:
+    _err_inv = str(_e)
+check("escanear el acetato en vez de la copia se rechaza",
+      "INVERTIDA" in _err_inv or "apenas se distinguen" in _err_inv,
+      _err_inv[:120] or "no lanzó ValueError")
+
+# La curva guarda CON QUÉ tinta se midió (la fase ② avisa si luego se cambia).
+prof_tinta = calibration.analizar_tira_cianotipia(
+    scan_tira, "A4", 200, ink_color="#B2FF66",
+    ink_stops=[[0, "#101010"], [255, "#B2FF66"]], block_color="#241A32")
+check("el perfil de curva recuerda la tinta con la que se midió",
+      prof_tinta["ink"] == "#B2FF66" and prof_tinta["ink_stops"]
+      and prof_tinta["block_color"] == "#241A32",
+      str(prof_tinta.get("ink")))
+
+# El marco de marcadores de las cartas usa el color del bloqueador elegido: si
+# se quedara en negro, en una impresora cuyo negro filtra UV el marco se vela
+# y la carta ya no se puede alinear.
+cb_bloq = TMP / "cb_bloq.png"
+calibration.generar_colorblocker(cb_bloq, "A4", 150, mirror=False,
+                                 block_color="#241A32")
+_g_cb = calibration.colorblocker_geometry("A4", 150)
+_mx, _my = _g_cb["marker_positions"][0]
+_lado = _g_cb["marker_side"]
+_par = np.asarray(Image.open(cb_bloq).convert("RGB"))[
+    int(_my) + _lado // 2:int(_my) + _lado // 2 + 3,
+    int(_mx):int(_mx) + _lado]
+# El píxel más oscuro del marco debe ser el color elegido (#241A32), no negro.
+_oscuro = _par.reshape(-1, 3).min(axis=0)
+check("los marcadores de la carta usan el color del bloqueador",
+      40 <= int(_oscuro[2]) <= 60 and int(_oscuro[1]) < 40,
+      f"más oscuro={_oscuro.tolist()} (se esperaba ≈ [36, 26, 50])")
+
 print("\n══ 7b. Calibración con la carta EN ESPEJO ══")
 # La carta expuesta con el acetato al revés: la copia sale espejada. Sin la
 # corrección, la alineación fallaría (o mediría los parches cruzados).
@@ -939,6 +985,75 @@ prev9f, _ = core.render_preview(s9f, frame_paths[:4], labels=labels[:4],
 check("vista previa con soft-proof funciona", prev9f.size[0] > 100)
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 9g. Soft-proof con tinta de COLOR ══")
+# Un verde flúor a densidad plena es CLARO en luminancia: leer la claridad
+# como transparencia (lo que se hacía antes) daba la simulación al revés
+# justo en las zonas que más bloquean.
+stops_verde = [[0, "#FFFFFF"], [255, "#B2FF66"]]
+gris_lineal = Image.fromarray(np.tile(np.arange(256, dtype=np.uint8), (8, 1)), "L")
+neg_verde = cyanotype.make_negative(gris_lineal, stops=stops_verde)
+sim_verde = np.asarray(cyanotype.simulate_print(neg_verde, stops=stops_verde))
+papel_ref, azul_ref = np.array([245, 242, 230]), np.array([23, 49, 92])
+check("tinta de color a densidad plena → papel (no azul)",
+      np.abs(sim_verde[4, 255].astype(int) - papel_ref).max() <= 12,
+      f"d=255 → {sim_verde[4, 255].tolist()}")
+check("sin tinta → azul de Prusia",
+      np.abs(sim_verde[4, 0].astype(int) - azul_ref).max() <= 12,
+      f"d=0 → {sim_verde[4, 0].tolist()}")
+_lum_sim = sim_verde[4, :, 2].astype(int)
+check("la simulación con tinta de color es monótona",
+      all(_lum_sim[i] >= _lum_sim[i + 1] - 3 for i in range(255)),
+      "la exposición debe caer al subir la densidad")
+
+# ════════════════════════════════════════════════════════════════
+print("\n══ 9h. Diagramas de las guías y gráficos de calibración ══")
+_pasos = [(clave, paso) for clave, g in guides.GUIDES.items()
+          for paso in g["pasos"]]
+_sin_arte = [f"{c}/{p[1][:24]}" for c, p in _pasos if len(p) < 4 or not p[3]]
+check("todos los pasos de las guías tienen diagrama", not _sin_arte,
+      ", ".join(_sin_arte[:4]))
+_faltan = sorted({p[3] for _, p in _pasos if len(p) > 3} - set(guide_art.DIAGRAMS))
+check("todos los diagramas referenciados existen", not _faltan, str(_faltan))
+_malos = []
+for _nombre in guide_art.DIAGRAMS:
+    _im = guide_art.render(_nombre, 150)
+    if _im is None or _im.size[0] != 150:
+        _malos.append(_nombre)
+        continue
+    _a = np.asarray(_im.convert("L"))
+    if _a.std() < 6:            # un dibujo en blanco no enseña nada
+        _malos.append(f"{_nombre}(vacío)")
+check(f"los {len(guide_art.DIAGRAMS)} diagramas se dibujan con contenido",
+      not _malos, str(_malos[:5]))
+check("un diagrama inexistente devuelve None (no rompe la guía)",
+      guide_art.render("no_existe_este_diagrama") is None)
+
+# Cada botón «?» de la interfaz nombra una guía: si el nombre no existe, el
+# botón simplemente no hace NADA al pulsarlo (fallo silencioso).
+import re as _re  # noqa: E402
+_claves_ui = set()
+for _f in ("app.py", "gui_phases.py"):
+    _src = (Path(__file__).resolve().parents[1] / "kamiru" / _f).read_text(
+        encoding="utf-8")
+    _claves_ui |= set(_re.findall(r'guide="([^"]+)"', _src))
+    _claves_ui |= set(_re.findall(r'show_guide\([^,]+,\s*"([^"]+)"', _src))
+_huerfanas = sorted(_claves_ui - set(guides.GUIDES))
+check(f"los {len(_claves_ui)} botones «?» apuntan a guías que existen",
+      not _huerfanas, str(_huerfanas))
+
+_g_curva = charts.para_perfil(prof_c)
+_g_color = charts.para_perfil(prof_cb)
+_g_impr = charts.para_perfil(prof)
+check("gráfico de la curva de cianotipia",
+      _g_curva is not None and np.asarray(_g_curva.convert("L")).std() > 10)
+check("gráfico del ColorBlocker",
+      _g_color is not None and np.asarray(_g_color.convert("L")).std() > 10)
+check("gráfico del perfil de impresora",
+      _g_impr is not None and np.asarray(_g_impr.convert("L")).std() > 10)
+check("un perfil desconocido no produce gráfico",
+      charts.para_perfil({"tipo": "otra_cosa"}) is None)
+
+# ════════════════════════════════════════════════════════════════
 print("\n══ 10. Compatibilidad con layout v1 (app antigua) ══")
 v1 = {
     "lienzo": {"ancho_px": 2480, "alto_px": 3508, "ppi": 300,
@@ -1048,6 +1163,70 @@ if _tk_ok:
         except Exception:
             _emoji_ok = False
         check("el log tolera emojis fuera del BMP (📋)", _emoji_ok)
+
+        # La fase ② tenía DOS sondeos sobre la misma cola y ningún panel de
+        # log: los avisos se perdían al azar. Ahora hay un solo sondeo (el
+        # permanente de PhaseFrame) y un log donde caen de verdad.
+        _a.sheets_phase.log("aviso de prueba de la fase 2")
+        for _ in range(6):
+            _a.update()
+            _a.after(60)
+        _a.update()
+        _txt_log = _a.sheets_phase.log_text.get("1.0", "end")
+        check("los avisos de «Generar hojas» llegan a su log",
+              "aviso de prueba de la fase 2" in _txt_log,
+              "el mensaje se perdió entre sondeos")
+
+        # Guías con diagramas: la ventana debe abrirse y contener imágenes.
+        _win = None
+        try:
+            from kamiru.gui_common import show_guide as _sg
+            _sg(_a.calib_phase, "calibracion_cianotipia")
+            _a.update()
+            # La guía es hija del FRAME de la fase, no de la ventana raíz.
+            _tops = [w for w in _a.calib_phase.winfo_children()
+                     if w.winfo_class() == "Toplevel"]
+            _win = _tops[-1] if _tops else None
+            _n_art = len(getattr(_win, "_diagramas", []) or [])
+        except Exception as _e:
+            _n_art = -1
+        check("la guía se abre con un diagrama por paso", _n_art >= 5,
+              f"imágenes en la ventana: {_n_art}")
+        if _win is not None:
+            _win.destroy()
+
+        # ColorBlocker: color de tinta y perfil de color no pintan nada ahí,
+        # y dejarlos activos hacía creer que sí.
+        _cf = _a.calib_phase
+        _cf.var_c_target.set("EDN ColorBlocker 3 (elegir color de tinta)")
+        _cf._sync_target()
+        _a.update()
+        _estados = [str(h.cget("state"))
+                    for caja in (_cf.c_ink_box, _cf.c_profile_box)
+                    for h in caja.winfo_children()
+                    if "state" in h.configure()]
+        check("con ColorBlocker se apagan los campos de tinta",
+              _estados and all(e == "disabled" for e in _estados),
+              str(_estados))
+        _cf.var_c_target.set("Tira Kamiru (21 parches)")
+        _cf._sync_target()
+        _a.update()
+        _estados2 = [str(h.cget("state"))
+                     for caja in (_cf.c_ink_box, _cf.c_profile_box)
+                     for h in caja.winfo_children()
+                     if "state" in h.configure()]
+        check("con la tira Kamiru vuelven a estar activos",
+              _estados2 and all(e != "disabled" for e in _estados2),
+              str(_estados2))
+
+        # El gráfico del análisis debe caber en la ventana (antes se
+        # empaquetaba después de las columnas y se quedaba con 0 px).
+        _cf._mostrar_grafico(prof_c)
+        _a.update()
+        check("el gráfico de resultados se muestra",
+              _cf.result_lbl.winfo_viewable()
+              and _cf.result_lbl.winfo_height() > 40,
+              f"alto={_cf.result_lbl.winfo_height()}")
         _a.destroy()
     except Exception as _e:
         check("la app construye todas las fases y pestañas", False,
