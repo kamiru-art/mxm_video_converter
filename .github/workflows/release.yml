@@ -33,6 +33,9 @@ jobs:
   build:
     name: Build (${{ matrix.nombre }})
     runs-on: ${{ matrix.os }}
+    # Prueba + PyInstaller tardan unos minutos; el tope evita que un cuelgue
+    # se coma un runner durante horas (el defecto son 6 h).
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

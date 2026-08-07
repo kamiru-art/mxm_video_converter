@@ -33,6 +33,9 @@ jobs:
   test:
     name: Test (${{ matrix.nombre }})
     runs-on: ${{ matrix.os }}
+    # La prueba tarda 2-3 minutos; con el tope por defecto (6 h) un cuelgue
+    # ocuparía un runner toda la tarde antes de darse por fallado.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
