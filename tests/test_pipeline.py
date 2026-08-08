@@ -163,6 +163,104 @@ check("layout con timeline", len(layout["timeline"]) == 7)
 check("layout con parche de grises", bool(layout.get("parche_grises")))
 
 # ════════════════════════════════════════════════════════════════
+print("\n══ 1b. Fotogramas con transparencia (fondo, borde y dedup) ══")
+
+
+def make_alpha_frame(path, size=(320, 240), circle=(50, 40, 240, 200),
+                     color=(200, 60, 80, 255), garbage=0):
+    """PNG RGBA: sujeto opaco sobre fondo 100 % transparente cuyo RGB oculto
+    es `garbage` (como los PNG de un video con alfa: bajo el alfa suele
+    quedar negro u otros restos del codificador)."""
+    w, h = size
+    arr = np.zeros((h, w, 4), np.uint8)
+    arr[..., :3] = garbage
+    img = Image.fromarray(arr, "RGBA")
+    ImageDraw.Draw(img).ellipse(list(circle), fill=tuple(color))
+    img.save(path)
+    return str(path)
+
+
+alfa_dir = TMP / "frames_alfa"
+alfa_dir.mkdir()
+alfa_paths = [
+    make_alpha_frame(alfa_dir / f"alfa_{i + 1:03d}.png",
+                     circle=(50 + 14 * i, 40 + 6 * i, 240 - 10 * i, 200),
+                     color=(200, 60 + 45 * i, 80, 255))
+    for i in range(4)
+]
+labels_a = [f"alfa_{i + 1:03d}" for i in range(4)]
+
+
+def _page_and_bbox(res):
+    lay = layoutfile.load(res["layout"])
+    page = np.asarray(Image.open(res["pages"][0]).convert("RGB"))
+    return page, lay["hojas"][0]["frames"][labels_a[0]]["bbox"]
+
+
+# a) Por defecto: la zona transparente se funde con el fondo de la hoja
+#    (antes convert("RGB") la dejaba NEGRA y gastaba tinta a lo tonto).
+res_a = core.generate(settings_base(TMP / "hojas_alfa_ninguno",
+                                    gray_patch_on=False, out_name="alfa"),
+                      alfa_paths, labels=labels_a)
+page_a, (ax1, ay1, ax2, ay2) = _page_and_bbox(res_a)
+esquina = page_a[ay1 + 4, ax1 + 4]
+check("transparencia se funde con la hoja (blanco, no negro)",
+      (esquina > 245).all(), str(esquina))
+
+# b) Fondo completo del fotograma con color personalizable.
+res_b = core.generate(settings_base(TMP / "hojas_alfa_color",
+                                    gray_patch_on=False, out_name="alfa",
+                                    alpha_mode="color",
+                                    alpha_bg_color="#FF0000"),
+                      alfa_paths, labels=labels_a)
+page_b, (bx1, by1, bx2, by2) = _page_and_bbox(res_b)
+esquina = page_b[by1 + 4, bx1 + 4]
+check("fondo completo del color elegido (rojo)",
+      esquina[0] > 200 and esquina[1] < 60 and esquina[2] < 60, str(esquina))
+centro = page_b[(by1 + by2) // 2, (bx1 + bx2) // 2]
+check("el sujeto opaco no se tiñe con el fondo",
+      abs(int(centro[0]) - 200) < 20, str(centro))
+
+# c) Solo un borde (personalizable) alrededor del fotograma.
+res_c = core.generate(settings_base(TMP / "hojas_alfa_borde",
+                                    gray_patch_on=False, out_name="alfa",
+                                    alpha_mode="borde",
+                                    alpha_border_color="#0000FF",
+                                    alpha_border_mm=1.0),
+                      alfa_paths, labels=labels_a)
+page_c, (cx1, cy1, cx2, cy2) = _page_and_bbox(res_c)
+cmx = (cx1 + cx2) // 2
+borde = page_c[cy1 - 3, cmx]
+dentro = page_c[cy1 + 6, cx1 + 6]
+check("borde del color elegido alrededor del frame (azul)",
+      borde[2] > 200 and borde[0] < 60 and borde[1] < 60, str(borde))
+check("dentro del frame sigue el fondo de hoja (sin relleno)",
+      (dentro > 245).all(), str(dentro))
+
+# d) Dedup con transparencia: la basura RGB bajo el alfa no debe contar.
+dup_a = make_alpha_frame(alfa_dir / "dup_a.png", garbage=0)
+dup_b = make_alpha_frame(alfa_dir / "dup_b.png", garbage=190)
+rep_idx_t, _ = dedup.find_duplicates([dup_a, dup_b], threshold=4)
+check("dedup agrupa transparentes idénticos (ignora la basura bajo el alfa)",
+      len(rep_idx_t) == 1, f"reps={rep_idx_t}")
+rep_idx_d, _ = dedup.find_duplicates([alfa_paths[0], alfa_paths[3]],
+                                     threshold=4)
+check("dedup NO agrupa transparentes distintos", len(rep_idx_d) == 2,
+      f"reps={rep_idx_d}")
+
+# e) En cianotipia el aplanado cae a blanco (→ blanco papel en la copia).
+res_e = core.generate(settings_base(TMP / "hojas_alfa_cyan",
+                                    gray_patch_on=False, out_name="alfa",
+                                    mode="cianotipia", cyan_mirror=False,
+                                    cyan_bg="completo",
+                                    cyan_frame_border_mm=0.0),
+                      alfa_paths, labels=labels_a)
+page_e, (ex1, ey1, ex2, ey2) = _page_and_bbox(res_e)
+esquina = page_e[ey1 + 4, ex1 + 4]
+check("cianotipia: transparencia = densidad máxima en el negativo",
+      (esquina < 10).all(), str(esquina))
+
+# ════════════════════════════════════════════════════════════════
 print("\n══ 2. Escaneo simulado + procesamiento (marcadores tapados) ══")
 scans1 = TMP / "scans_normal"
 scans1.mkdir()

@@ -63,6 +63,15 @@ PAGE_NUMBERING = [
 # Modos de impresión.
 MODES = ["normal", "cianotipia"]
 
+# Cómo tratar los fotogramas CON TRANSPARENCIA (videos/PNG sin fondo):
+#   "ninguno" -> las zonas transparentes se funden con el fondo de la hoja
+#                (blanco normalmente: no gasta tinta).
+#   "color"   -> el rectángulo completo del fotograma se rellena con un color
+#                elegido (negro u otro).
+#   "borde"   -> fondo de hoja + un marco de color alrededor del fotograma
+#                (delimita el frame sin gastar tinta en el fondo).
+ALPHA_MODES = ["ninguno", "color", "borde"]
+
 # Valores nominales de la tira de parches de grises (0 = negro, 255 = blanco).
 PATCH_LEVELS = [0, 64, 128, 192, 255]
 
@@ -89,6 +98,16 @@ class Settings:
         self.margin_mm = float(kw.get("margin_mm", 10.0))
         self.gutter_mm = float(kw.get("gutter_mm", 5.0))   # espaciado entre frames
         self.bg_color = kw.get("bg_color", "#FFFFFF")
+
+        # ── Fotogramas con transparencia (canal alfa) ────────────────────
+        # Antes el alfa se descartaba al convertir a RGB y las zonas
+        # transparentes salían del color oculto bajo el alfa (negro,
+        # normalmente): un video sin fondo imprimía un fondo negro entero.
+        # Ver ALPHA_MODES: "ninguno" (fondo de hoja) | "color" | "borde".
+        self.alpha_mode = kw.get("alpha_mode", "ninguno")
+        self.alpha_bg_color = kw.get("alpha_bg_color", "#000000")
+        self.alpha_border_color = kw.get("alpha_border_color", "#000000")
+        self.alpha_border_mm = float(kw.get("alpha_border_mm", 0.5))
 
         # Cuadrícula
         self.cols = int(kw.get("cols", 4))
@@ -397,7 +416,9 @@ def _unique_key(usadas: set, base: str) -> str:
 # de salida (dependen de la máquina/sesión).
 _SNAPSHOT_FIELDS = [
     "paper", "orientation", "dpi", "custom_w_mm", "custom_h_mm", "margin_mm",
-    "gutter_mm", "bg_color", "cols", "rows", "labels_on", "base_name",
+    "gutter_mm", "bg_color", "alpha_mode", "alpha_bg_color",
+    "alpha_border_color", "alpha_border_mm", "cols", "rows", "labels_on",
+    "base_name",
     "separator", "leading_zeros", "start_index", "font_path", "font_size_pt",
     "label_gap_mm", "label_color", "page_num_on", "page_num_corner",
     "page_num_prefix", "page_num_start", "page_num_zeros", "page_num_size_pt",
@@ -721,6 +742,41 @@ def _page_bg_color(s: Settings):
     return s.bg_color
 
 
+def has_alpha(im: Image.Image) -> bool:
+    """True si la imagen tiene transparencia real (canal alfa o paleta con
+    índice transparente)."""
+    if im.mode in ("RGBA", "LA", "PA"):
+        return True
+    return im.mode == "P" and "transparency" in im.info
+
+
+def _alpha_base_color(s: Settings):
+    """Color sobre el que se aplanan las zonas transparentes de un fotograma.
+
+    - alpha_mode "color": el color elegido (fondo completo del fotograma).
+    - Resto: en modo normal, el fondo de la hoja (el fotograma se funde con
+      el papel y no gasta tinta); en cianotipia, blanco (que en el negativo
+      es densidad máxima → blanco papel en la copia azul, igual que la zona
+      muerta con fondo completo).
+    """
+    if (s.alpha_mode or "ninguno").lower().startswith("color"):
+        return s.alpha_bg_color
+    if s.is_cyanotype:
+        return "#FFFFFF"
+    return s.bg_color
+
+
+def flatten_alpha(im: Image.Image, base_color) -> Image.Image:
+    """Aplana una imagen con transparencia sobre un color y devuelve RGB.
+
+    convert("RGB") a secas DESCARTA el alfa y deja lo que hubiera en los
+    canales de color debajo (negro, normalmente): hay que componer sobre el
+    color de destino, no descartar."""
+    rgba = im.convert("RGBA")
+    base = Image.new("RGBA", rgba.size, base_color)
+    return Image.alpha_composite(base, rgba).convert("RGB")
+
+
 def _label_text_color(s: Settings) -> str:
     if s.is_cyanotype:
         # Texto = densidad 0 (transparente): sale AZUL OSCURO en la copia,
@@ -938,7 +994,11 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
 
         try:
             with Image.open(fpath) as im:
-                im = im.convert("RGB") if im.mode not in ("RGB", "L") else im
+                tiene_alfa = has_alpha(im)
+                if tiene_alfa:
+                    im = flatten_alpha(im, _alpha_base_color(s))
+                elif im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
                 src_w, src_h = im.size
                 scale = min(L.cell_w / src_w, L.img_area_h / src_h)
                 new_w = max(1, int(round(src_w * scale)))
@@ -969,6 +1029,15 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
             draw.rectangle([px - bw, py - bw,
                             px + new_w - 1 + bw, py + new_h - 1 + bw],
                            outline=_ink_full_color(s), width=bw)
+        elif (tiene_alfa and not s.is_cyanotype
+              and (s.alpha_mode or "ninguno").lower().startswith("borde")
+              and s.alpha_border_mm > 0):
+            # Marco POR FUERA del fotograma transparente (no tapa imagen):
+            # delimita el frame sobre el papel sin entintar todo el fondo.
+            bw = max(1, paper.mm_to_px(s.alpha_border_mm, L.dpi))
+            draw.rectangle([px - bw, py - bw,
+                            px + new_w - 1 + bw, py + new_h - 1 + bw],
+                           outline=s.alpha_border_color, width=bw)
 
         text = _label_text_for(s, labels, numbers, global_idx)
         clave = _unique_key(claves_usadas, text) if record is not None else text
