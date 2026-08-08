@@ -233,6 +233,12 @@ color, para que la curva mida tu proceso real completo.
   elige la combinación que deja los fotogramas más grandes — siempre igual o
   mejor que eligiendo a mano. Si intercambió la cuadrícula, te lo dice al
   terminar.
+- **Fotogramas con transparencia** (videos/PNG sin fondo): elige qué hacer
+  con las zonas transparentes. Por defecto se **funden con el fondo de la
+  hoja** (sobre papel blanco no gastan nada de tinta). También puedes
+  rellenar **todo el fotograma con un color** (negro u otro, personalizable)
+  o dibujar **solo un borde** de color y grosor personalizables que delimite
+  el fotograma sin entintar el fondo. Solo afecta a imágenes con canal alfa.
 - **Perfil de impresora**: si ya calibraste (fase ①), elígelo aquí. La app
   compensará la escala real de tu impresora y con el botón
   *"Aplicar tamaños recomendados"* usará los tamaños de marcador/QR que se

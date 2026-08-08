@@ -22,6 +22,15 @@ HASH_SIZE = 16  # 16x16 → 256 bits
 def dhash(path, hash_size: int = HASH_SIZE) -> int:
     """dHash de una imagen: gradiente horizontal binarizado."""
     with Image.open(path) as im:
+        if im.mode in ("RGBA", "LA", "PA") or \
+                (im.mode == "P" and "transparency" in im.info):
+            # Con transparencia, convert("L") descarta el alfa y lee la
+            # BASURA de color que quede debajo (varía entre codificaciones):
+            # dos fotogramas visualmente idénticos daban hashes distintos.
+            # Aplanados sobre blanco, el hash ve lo mismo que la impresión.
+            rgba = im.convert("RGBA")
+            base = Image.new("RGBA", rgba.size, "#FFFFFF")
+            im = Image.alpha_composite(base, rgba)
         img = im.convert("L").resize((hash_size + 1, hash_size), Image.LANCZOS)
     px = list(img.getdata())
     bits = 0

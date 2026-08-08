@@ -99,6 +99,15 @@ def content_histogram(frame_paths, max_frames: int = HIST_MAX_FRAMES) -> np.ndar
     for p in paths:
         try:
             with Image.open(p) as im:
+                if im.mode in ("RGBA", "LA", "PA") or \
+                        (im.mode == "P" and "transparency" in im.info):
+                    # Aplanar sobre blanco: si no, el histograma cuenta la
+                    # basura de color escondida bajo las zonas transparentes
+                    # (negro, normalmente) y la adaptación al contenido
+                    # regala rango tonal a píxeles que no se imprimen.
+                    rgba = im.convert("RGBA")
+                    im = Image.alpha_composite(
+                        Image.new("RGBA", rgba.size, "#FFFFFF"), rgba)
                 g = np.asarray(im.convert("L").resize((96, 96)))
         except Exception:
             continue

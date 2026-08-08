@@ -102,6 +102,11 @@ class SheetsPhase(PhaseFrame):
         v.var_margin = tk.DoubleVar(value=10.0)
         v.var_gutter = tk.DoubleVar(value=5.0)
         v.var_bg = tk.StringVar(value="#FFFFFF")
+        # Fotogramas con transparencia: ninguno | color | borde
+        v.var_alpha_mode = tk.StringVar(value="ninguno")
+        v.var_alpha_bg = tk.StringVar(value="#000000")
+        v.var_alpha_border_color = tk.StringVar(value="#000000")
+        v.var_alpha_border_mm = tk.DoubleVar(value=0.5)
         v.var_printer_profile = tk.StringVar(value=NO_PRINTER)
         # Etiquetas
         v.var_labels_on = tk.BooleanVar(value=True)
@@ -405,6 +410,39 @@ class SheetsPhase(PhaseFrame):
                     textvariable=self.var_margin).grid(row=1, column=1, sticky="w", padx=4, pady=(6, 0))
         ttk.Label(sec, text="Color de fondo:").grid(row=2, column=0, sticky="w", pady=(6, 0))
         self.color_picker(sec, self.var_bg, row=2, col=1)
+
+        sec = self.section(tab, "Fotogramas con transparencia (videos/PNG sin fondo)")
+        ttk.Radiobutton(
+            sec, text="Fundirlos con el fondo de la hoja, sin borde "
+                      "(recomendado: sobre papel blanco no gasta nada de tinta)",
+            variable=self.var_alpha_mode, value="ninguno").grid(
+            row=0, column=0, columnspan=3, sticky="w")
+        fila_color = ttk.Frame(sec)
+        fila_color.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Radiobutton(fila_color, text="Rellenar TODO el fotograma con un "
+                                         "color de fondo:",
+                        variable=self.var_alpha_mode, value="color").grid(
+            row=0, column=0, sticky="w")
+        self.color_picker(fila_color, self.var_alpha_bg, row=0, col=1)
+        fila_borde = ttk.Frame(sec)
+        fila_borde.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Radiobutton(fila_borde, text="Solo un borde alrededor del "
+                                         "fotograma, de color:",
+                        variable=self.var_alpha_mode, value="borde").grid(
+            row=0, column=0, sticky="w")
+        self.color_picker(fila_borde, self.var_alpha_border_color, row=0, col=1)
+        ttk.Label(fila_borde, text="Grosor (mm):").grid(
+            row=0, column=2, sticky="w", padx=(PAD, 0), pady=(6, 0))
+        ttk.Spinbox(fila_borde, from_=0.1, to=5.0, increment=0.1, width=6,
+                    textvariable=self.var_alpha_border_mm).grid(
+            row=0, column=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(sec, text="Solo afecta a imágenes CON canal alfa (p. ej. "
+                            "video con fondo eliminado o PNG recortados). "
+                            "Antes salían con fondo negro; ahora eliges: "
+                            "fundido con la hoja, fondo de color o solo un "
+                            "marco que delimite el fotograma.",
+                  style="Sub.TLabel", wraplength=740).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         sec = self.section(tab, "Perfil de impresora (de la fase ① Calibración)")
         ttk.Label(sec, text="Perfil:").grid(row=0, column=0, sticky="w")
@@ -1078,6 +1116,10 @@ class SheetsPhase(PhaseFrame):
             margin_mm=self.to_float(self.var_margin, 10),
             gutter_mm=self.to_float(self.var_gutter, 5),
             bg_color=self.var_bg.get(),
+            alpha_mode=self.var_alpha_mode.get(),
+            alpha_bg_color=self.var_alpha_bg.get(),
+            alpha_border_color=self.var_alpha_border_color.get(),
+            alpha_border_mm=self.to_float(self.var_alpha_border_mm, 0.5),
             cols=self.to_int(self.var_cols, 4), rows=self.to_int(self.var_rows, 5),
             labels_on=self.var_labels_on.get(), base_name=self.var_base.get(),
             separator=self.var_sep.get(), leading_zeros=self.to_int(self.var_zeros, 1),
