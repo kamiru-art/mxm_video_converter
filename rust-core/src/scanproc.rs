@@ -2,8 +2,8 @@
 //! Alinea cada escaneo con los marcadores ArUco (multi-estrategia, espejo y
 //! polaridad automáticos), lo identifica por QR y recorta cada fotograma.
 
-use crate::aruco::{detect_markers, params_for_mode, Dict, PARAMS_CYANO};
-use crate::geometry::{apply_h, find_homography_dlt, find_homography_ransac, Pt, H3};
+use crate::aruco::{detect_markers, params_for_mode, Dict};
+use crate::geometry::{apply_h, find_homography_ransac, Pt, H3};
 use crate::img::{DynImg, Gray, Rgb};
 use crate::imgproc::{clahe, flat_field, normalize_minmax};
 use crate::layoutfile;

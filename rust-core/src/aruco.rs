@@ -5,7 +5,7 @@ use crate::aruco_dicts as dicts;
 use crate::geometry::{find_homography_dlt, Pt};
 use crate::img::Gray;
 use crate::imgproc::{
-    adaptive_threshold_inv, approx_poly, find_contours, is_convex, otsu_threshold, polygon_area,
+    adaptive_threshold_inv, approx_poly, find_contours, is_convex, polygon_area,
 };
 use std::collections::HashMap;
 

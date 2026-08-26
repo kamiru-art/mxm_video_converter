@@ -90,13 +90,26 @@ pub fn decode_qr(gray: &Gray) -> Option<String> {
     }
     let mut variants: Vec<Gray> = Vec::new();
     let mut base = gray.clone();
-    if base.w.min(base.h) < 240 {
-        let k = ((280.0 / base.w.min(base.h) as f32).round() as usize).max(2);
+    if base.w.min(base.h) < 360 {
+        let k = ((400.0 / base.w.min(base.h) as f32).round() as usize).max(2);
         base = resize_gray(&base, base.w * k, base.h * k, Filter::Triangle);
     }
     variants.push(base.clone());
     let t = otsu_threshold(&base);
     variants.push(threshold_binary(&base, t));
+    // Nitidez (unsharp): los módulos ablandados por remuestreo bicúbico
+    // recuperan contraste — clave para QRs de ~2 px/módulo re-warpeados.
+    let sharp = {
+        let blur = crate::imgproc::gaussian_blur_gray(&base, 2.0);
+        let mut d = base.clone();
+        for i in 0..d.data.len() {
+            let v = base.data[i] as f32 + 1.2 * (base.data[i] as f32 - blur.data[i] as f32);
+            d.data[i] = v.round().clamp(0.0, 255.0) as u8;
+        }
+        d
+    };
+    variants.push(threshold_binary(&sharp, otsu_threshold(&sharp)));
+    variants.push(sharp);
     let bs = ((base.w.min(base.h) / 6) | 1).max(31);
     let adap = adaptive_threshold_inv(&base, bs, 5.0);
     // adaptive_threshold_inv marca lo OSCURO como 255: invertir para binario normal
@@ -154,5 +167,44 @@ mod tests {
         let img = qr_image(&text, 240, true); // invertido (negativo)
         let got = decode_qr(&img).expect("QR invertido debería decodificarse");
         assert_eq!(got, text);
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use super::*;
+    use crate::img::{resize_gray, Filter};
+
+    #[test]
+    fn small_qr_sizes_decode() {
+        for size in [40usize, 47, 59, 70, 100] {
+            let text = format!("KQR|{size}");
+            let img = qr_image(&text, size, false);
+            let got = decode_qr(&img);
+            println!("size={size} -> {:?}", got);
+        }
+        // y con padding blanco alrededor (como el crop del análisis)
+        let img = qr_image("KQR|8", 47, false);
+        let mut padded = Gray::new(75, 75, 255);
+        for y in 0..47 { for x in 0..47 { padded.data[(y+14)*75 + (x+14)] = img.at(x, y); } }
+        println!("padded 47 -> {:?}", decode_qr(&padded));
+        let up = resize_gray(&padded, 300, 300, Filter::Triangle);
+        println!("upscaled -> {:?}", decode_qr(&up));
+    }
+
+    #[test]
+    fn qr_from_printer_test_page() {
+        let page = crate::calib::render_printer_test("A4", 150);
+        let g = crate::calib::printer_test_geometry("A4", 150);
+        for (mmv, bbox, texto) in &g.qr_test {
+            let pad = ((bbox[2] - bbox[0]) as f64 * 0.3) as i64;
+            let crop = page.crop(
+                (bbox[0] - pad).max(0) as usize,
+                (bbox[1] - pad).max(0) as usize,
+                (bbox[2] + pad) as usize,
+                (bbox[3] + pad) as usize,
+            );
+            println!("{mmv} mm ({}x{}) -> {:?} (esperado {texto})", crop.w, crop.h, decode_qr_rgb(&crop));
+        }
     }
 }
