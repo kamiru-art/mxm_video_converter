@@ -1,0 +1,121 @@
+# CI/CD for MXM Studio.
+#
+# Every push and pull request runs the full test pyramid:
+#   1. rust  — native tests of the core (includes synthetic end-to-end
+#              roundtrips: sheet → simulated scan → recovered frames).
+#   2. web   — compiles the core to WebAssembly, builds the site and runs
+#              the browser end-to-end test (real Chrome, workers + WASM).
+# Every push to `main` that passes both then deploys automatically to
+# Cloudflare (mxm.sebastianlopez.me), Pages-style.
+#
+# Deploy requires two repository secrets:
+#   CLOUDFLARE_API_TOKEN  — API token with "Workers Scripts: Edit"
+#   CLOUDFLARE_ACCOUNT_ID — the Cloudflare account id
+# Until the token secret exists, the deploy step reports itself as skipped
+# and the workflow stays green.
+
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust core (tests + clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+      - name: Tests (native, includes e2e roundtrips)
+        run: cargo test --release
+        working-directory: rust-core
+      - name: Clippy (informational)
+        run: cargo clippy --release --all-targets 2>&1 | tail -5
+        working-directory: rust-core
+
+  web:
+    name: Web (WASM build + browser E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Compile core to WebAssembly
+        run: wasm-pack build --release --target web --out-dir ../web/src/wasm
+        working-directory: rust-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+      - name: Browser end-to-end test (headless Chrome)
+        run: npm run test:e2e
+        working-directory: web
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Production build
+        run: npm run build
+        working-directory: web
+      - name: Upload site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: web/dist
+          retention-days: 3
+
+  deploy:
+    name: Deploy to Cloudflare
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: web/dist
+      - name: Check deploy credentials
+        id: creds
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CF_TOKEN" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CLOUDFLARE_API_TOKEN secret is not set — skipping deploy. Add it in Settings → Secrets to enable automatic deploys."
+          fi
+      - name: Deploy (wrangler)
+        if: steps.creds.outputs.have == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: web

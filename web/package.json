@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:e2e": "cp ../../riso_effect/example_01.mp4 public/e2e_sample.mp4 2>/dev/null; MXM_E2E=1 vite build && node e2e-run.mjs; rm -f public/e2e_sample.mp4"
+    "test:e2e": "MXM_E2E=1 vite build && node e2e-run.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "^25.9.0",
