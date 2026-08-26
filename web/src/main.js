@@ -39,6 +39,11 @@ document.getElementById('phase-nav').addEventListener('click', (e) => {
   if (btn) show(btn.dataset.view);
 });
 
+window.addEventListener('hashchange', () => {
+  const v = location.hash.replace('#', '');
+  if (mounters[v]) show(v);
+});
+
 const initial = location.hash.replace('#', '');
 show(mounters[initial] ? initial : 'hojas');
 

@@ -1,19 +1,12 @@
-# Ejecuta la prueba de integración en los tres sistemas en cada push y en cada
-# pull request.
-#
-# Antes, la única CI del repositorio vivía en release.yml, que solo se dispara
-# al publicar (tag «v*» o rama «release/**»): un pull request no ejecutaba NADA
-# y los fallos aparecían cuando ya se estaba construyendo el release. Aquí solo
-# se prueba (sin PyInstaller), así que tarda minutos en vez de decenas.
+# CI de MXM Studio: prueba el núcleo Rust (con sus tests de integración de
+# punta a punta) y construye la web en cada push y pull request.
+# La app de escritorio original vive en legacy-desktop/ y ya no se prueba aquí.
 
 name: Tests
 
 on:
-  # Solo main y los pull requests: una rama con PR abierto disparaba los dos
-  # eventos y gastaba el doble de runners para probar el mismo commit. Las
-  # ramas «release/**» las cubre release.yml, que además construye.
   push:
-    branches: ["main"]
+    branches: ["main", "web-wasm"]
   pull_request:
   workflow_dispatch:
 
@@ -21,50 +14,44 @@ permissions:
   contents: read
 
 concurrency:
-  # Un push nuevo sobre la misma rama cancela la ejecución anterior.
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  PYTHONUTF8: "1"   # consola UTF-8 también en Windows (emojis del test/log)
-  UV_PYTHON_PREFERENCE: only-system
-
 jobs:
-  test:
-    name: Test (${{ matrix.nombre }})
-    runs-on: ${{ matrix.os }}
-    # La prueba tarda 2-3 minutos; con el tope por defecto (6 h) un cuelgue
-    # ocuparía un runner toda la tarde antes de darse por fallado.
+  rust:
+    name: Núcleo Rust (tests nativos)
+    runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            nombre: windows
-          - os: macos-latest
-            nombre: macos-apple-silicon
-          - os: ubuntu-22.04
-            nombre: linux
     steps:
       - uses: actions/checkout@v4
-
-      - name: Instalar uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          version: "0.8.17"
-          enable-cache: true
+          workspaces: rust-core
+      - name: Tests
+        run: cargo test --release
+        working-directory: rust-core
 
-      - uses: actions/setup-python@v5
+  web:
+    name: Web (wasm + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: "3.12"
-
-      - name: Instalar dependencias (exactamente las de uv.lock)
-        shell: bash
-        run: uv sync --frozen --extra headless
-
-      - name: Prueba de integración
-        shell: bash
-        # En Windows y macOS hay display, así que el humo de la GUI corre de
-        # verdad; en el runner de Linux se salta solo (lo dice el propio test).
-        run: uv run --frozen --extra headless python tests/test_pipeline.py
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+      - name: Instalar wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Compilar núcleo a WebAssembly
+        run: wasm-pack build --release --target web --out-dir ../web/src/wasm
+        working-directory: rust-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Construir la web
+        run: npm ci && npm run build
+        working-directory: web

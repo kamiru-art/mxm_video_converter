@@ -7,10 +7,10 @@ export default defineConfig({
     target: 'es2022',
     chunkSizeWarningLimit: 4000,
     rollupOptions: {
-      input: {
-        main: resolve(import.meta.dirname, 'index.html'),
-        e2e: resolve(import.meta.dirname, 'e2e.html'),
-      },
+      input: process.env.MXM_E2E
+        ? { main: resolve(import.meta.dirname, 'index.html'),
+            e2e: resolve(import.meta.dirname, 'e2e.html') }
+        : { main: resolve(import.meta.dirname, 'index.html') },
     },
   },
   worker: {

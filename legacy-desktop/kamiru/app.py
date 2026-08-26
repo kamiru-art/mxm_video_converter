@@ -1747,7 +1747,7 @@ class App(tk.Tk):
         ttk.Button(fila, text="?  ¿Cómo es el flujo?", style="Help.TButton",
                    command=lambda: show_guide(self, "flujo")).pack(
             side="left", padx=(12, 0))
-        ttk.Label(head, text="Hecho con cariño para Kamila 💚  ·  ① calibra → "
+        ttk.Label(head, text="Hecho con cariño 💚  ·  ① calibra → "
                              "② genera hojas → pinta o expón ☀️ → ③ procesa "
                              "escaneos → ④ video  ·  sin Photoshop, sin "
                              "pérdida de calidad",

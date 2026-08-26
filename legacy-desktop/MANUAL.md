@@ -585,5 +585,5 @@ La app está pensada para aprovechar máquinas potentes:
 
 ---
 
-*Hecho con cariño para Kamila 💚 — si algo no se entiende, es culpa del
+*Hecho con cariño 💚 — si algo no se entiende, es culpa del
 manual, no tuya: pide que lo mejoren.*

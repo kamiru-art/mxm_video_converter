@@ -3,7 +3,7 @@
 CALIBRACIÓN DE IMPRESORA
     1. La app genera una PÁGINA DE PRUEBA con marcadores ArUco de posición
        conocida, una rampa de tonos y marcadores/QRs de varios tamaños.
-    2. Kamila la imprime al 100 % (sin "ajustar a página") y la escanea.
+    2. Se imprime al 100 % (sin "ajustar a página") y la escanea.
     3. La app analiza el escaneo y mide:
        - la ESCALA real de impresión (si la impresora encoge/estira la página),
        - la RESPUESTA TONAL (cómo imprime los grises),
@@ -15,7 +15,7 @@ CALIBRACIÓN DE CIANOTIPIA (estilo "easy digital negatives", integrado)
     1. La app genera una TIRA DE CALIBRACIÓN: un negativo para acetato con
        parches de densidad conocida (de transparente a tinta plena), con el
        mismo color de tinta y espejado que usará en sus negativos reales.
-    2. Kamila la imprime en acetato, expone la cianotipia al sol, la revela,
+    2. Se imprime en acetato, se expone la cianotipia al sol, la revela,
        la seca y la escanea.
     3. La app mide el tono azul real que produjo cada densidad y construye la
        CURVA DE COMPENSACIÓN (LUT) que lineariza los tonos y aprovecha todo el

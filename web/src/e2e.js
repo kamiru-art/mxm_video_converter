@@ -120,6 +120,31 @@ async function main() {
     log(`cianotipia: ok=${cyResult.ok} marcadores=${cyResult.marcadores}/${cyResult.marcadores_total} frames=${cyRes.frames.length} estrategia=${cyResult.estrategia}`);
     if (!cyResult.ok || cyRes.frames.length !== 2) throw new Error(`cianotipia falló: ${cyRes.result}`);
 
+    // fase ①/④ con VIDEO REAL (WebCodecs): extraer y reconstruir
+    try {
+      const vresp = await fetch('/e2e_sample.mp4');
+      if (vresp.ok) {
+        const vblob = new Blob([await vresp.arrayBuffer()], { type: 'video/mp4' });
+        vblob.name = 'e2e_sample.mp4';
+        const { extractFrames, buildVideo } = await import('./video.js');
+        const got = [];
+        const meta = await extractFrames(vblob, {
+          start: 0, end: 3, fps: 2,
+          onFrame: async (blob) => got.push(blob),
+        });
+        log(`video: ${meta.count} frames extraídos a 2 fps (nativo ${meta.fps.toFixed(1)} fps)`);
+        if (got.length < 5) throw new Error('extracción de video incompleta');
+        const getters = got.map((b) => () => createImageBitmap(b));
+        const out2 = await buildVideo(getters, 2);
+        log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
+        if (out2.bytes.length < 5000) throw new Error('video de salida sospechosamente pequeño');
+      } else {
+        log('· (sin muestra de video: prueba de WebCodecs omitida)');
+      }
+    } catch (e) {
+      throw new Error(`flujo de video: ${e.message}`);
+    }
+
     document.title = 'E2E-OK';
     log('✅ E2E OK');
   } catch (e) {

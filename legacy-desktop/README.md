@@ -1,7 +1,7 @@
 # Kamiru Studio 💚☀️
 
 Una sola app de escritorio (con ventana, **sin tocar código, sin Photoshop**)
-para todo el flujo de animación *mixed media* y *cianotipia* de Kamila:
+para todo el flujo de animación *mixed media* y *cianotipia*:
 
 ```
 🎬 video (o carpeta de imágenes)

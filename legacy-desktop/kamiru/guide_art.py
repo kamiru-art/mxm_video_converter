@@ -5,7 +5,7 @@ aquí se DIBUJA con Pillow, sin archivos externos, para que el ejecutable siga
 siendo un único binario y los dibujos se vean nítidos en cualquier pantalla.
 
 Filosofía de los dibujos: enseñar la FÍSICA del paso, no decorar. Cada diagrama
-muestra el objeto real que Kamila tiene delante en ese momento (la hoja, el
+muestra el objeto real que se tiene delante en ese momento (la hoja, el
 acetato, el sol, el escáner, la curva medida) y, cuando el paso trata de un
 error frecuente, muestra el contraste correcto/incorrecto.
 

@@ -29,6 +29,10 @@ env:
   # en blanco. El de setup-python lo trae garantizado.
   UV_PYTHON_PREFERENCE: only-system
 
+defaults:
+  run:
+    working-directory: legacy-desktop
+
 jobs:
   build:
     name: Build (${{ matrix.nombre }})
@@ -115,6 +119,8 @@ jobs:
           path: |
             Kamiru-Studio-*.zip
             Kamiru-Studio-*.tar.gz
+            legacy-desktop/Kamiru-Studio-*.zip
+            legacy-desktop/Kamiru-Studio-*.tar.gz
           if-no-files-found: error
 
   release:

@@ -56,8 +56,8 @@ La lista completa, con la explicación técnica de cada función:
 | `legacy-desktop/` | La app de escritorio original en Python (v2, jubilada pero funcional). |
 | `docs/` | Documentación funcional y manual. |
 
-No hay servidor: el sitio es 100 % estático (Cloudflare Pages) y funciona
-offline una vez cargado. Los proyectos, presets y perfiles de calibración se
+No hay servidor: el sitio es 100 % estático (Cloudflare Workers con assets
+estáticos) y funciona offline una vez cargado. Los proyectos, presets y perfiles de calibración se
 guardan en tu propio navegador y se pueden exportar/importar como JSON.
 
 Los `layout.json` generados por la versión de escritorio (v1 y v2) se
@@ -68,10 +68,13 @@ procesan sin cambios: los proyectos viejos siguen vivos.
 Requisitos: Rust (con target `wasm32-unknown-unknown`), `wasm-pack`, Node 18+.
 
 ```bash
-cd rust-core && cargo test          # tests del núcleo (nativo, rápidos)
-wasm-pack build rust-core --target web --out-dir ../web/src/wasm
-cd web && npm install && npm run dev    # desarrollo
-npm run build                            # producción (web/dist)
+cd rust-core && cargo test              # tests del núcleo (nativo, rápidos)
+wasm-pack build --release --target web --out-dir ../web/src/wasm
+cd ../web && npm install
+npm run dev                             # desarrollo
+npm run test:e2e                        # prueba de punta a punta en Chrome
+npm run build                           # producción (web/dist)
+npx wrangler deploy                     # publicar (Cloudflare Workers + assets)
 ```
 
 ## Licencia

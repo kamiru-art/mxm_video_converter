@@ -6,7 +6,7 @@ Cada guía es un dict con:
     pasos:   lista de (emoji, título del paso, explicación, diagrama)
 
 El cuarto elemento es el nombre de un diagrama de guide_art.py, que se dibuja
-AL LADO del texto de ese paso. El objetivo es que Kamila pueda seguir
+AL LADO del texto de ese paso. El objetivo es que cualquiera pueda seguir
 cualquier parte del flujo sin leer el manual completo: cada paso dice QUÉ es,
 PARA QUÉ sirve y CÓMO hacerlo, y el dibujo muestra el objeto físico del que se
 está hablando (la hoja, el acetato, el sol, el escáner, la curva medida).
