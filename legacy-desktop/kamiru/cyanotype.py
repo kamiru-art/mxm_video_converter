@@ -17,7 +17,7 @@ Conceptos clave:
   revés: aquí la app GENERA el negativo ya corregido): la química de la
   cianotipia no responde linealmente a la densidad del negativo. Con la
   calibración (ver calibration.py) se mide la respuesta real del proceso de
-  Kamila (su impresora + su acetato + su emulsión + su sol) y se construye una
+  cada quien (su impresora + su acetato + su emulsión + su sol) y se construye una
   LUT de 256 valores que lineariza los tonos finales y aprovecha todo el rango
   dinámico.
 
