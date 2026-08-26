@@ -1,0 +1,158 @@
+//! Códigos QR: generación (corrección H) y decodificación robusta.
+//! El payload compacto v2 se mantiene: "K2|proyecto|hoja|celda|etiqueta"
+//! (el prefijo se conserva por compatibilidad con proyectos existentes).
+
+use crate::img::{resize_gray, Filter, Gray};
+use crate::imgproc::{adaptive_threshold_inv, otsu_threshold, threshold_binary};
+use qrcode::{EcLevel, QrCode};
+
+pub const QR_PREFIX: &str = "K2";
+
+pub fn qr_payload(project: &str, sheet_num: i64, cell_idx: i64, label: &str) -> String {
+    let proj = project.replace('|', "/");
+    let lab = label.replace('|', "/");
+    format!("{QR_PREFIX}|{proj}|{sheet_num}|{cell_idx}|{lab}")
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QrIdentity {
+    pub proyecto: Option<String>,
+    pub hoja: Option<i64>,
+    pub celda: Option<i64>,
+    pub etiqueta: String,
+}
+
+pub fn parse_qr_payload(text: &str) -> Option<QrIdentity> {
+    if text.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = text.split('|').collect();
+    if parts.len() == 5 && parts[0] == QR_PREFIX {
+        if let (Ok(h), Ok(c)) = (parts[2].parse::<i64>(), parts[3].parse::<i64>()) {
+            return Some(QrIdentity {
+                proyecto: Some(parts[1].to_string()),
+                hoja: Some(h),
+                celda: Some(c),
+                etiqueta: parts[4].to_string(),
+            });
+        }
+        return None;
+    }
+    // QRs v1: solo el nombre del frame
+    Some(QrIdentity { proyecto: None, hoja: None, celda: None, etiqueta: text.to_string() })
+}
+
+/// Genera un QR con corrección H y zona de silencio de 2 módulos, reescalado
+/// NEAREST al tamaño pedido (como la app original).
+pub fn qr_image(text: &str, size_px: usize, inverted: bool) -> Gray {
+    let code = QrCode::with_error_correction_level(text.as_bytes(), EcLevel::H)
+        .unwrap_or_else(|_| QrCode::new(b"?").unwrap());
+    let n = code.width();
+    let border = 2usize;
+    let total = n + 2 * border;
+    let mut out = Gray::new(size_px, size_px, 255);
+    for y in 0..size_px {
+        let my = y * total / size_px;
+        for x in 0..size_px {
+            let mx = x * total / size_px;
+            let dark = if my < border || mx < border || my >= border + n || mx >= border + n {
+                false
+            } else {
+                code[(mx - border, my - border)] == qrcode::Color::Dark
+            };
+            let mut v = if dark { 0u8 } else { 255u8 };
+            if inverted {
+                v = 255 - v;
+            }
+            out.data[y * size_px + x] = v;
+        }
+    }
+    out
+}
+
+fn try_decode(gray: &Gray) -> Option<String> {
+    let mut img = rqrr::PreparedImage::prepare_from_greyscale(gray.w, gray.h, |x, y| gray.at(x, y));
+    for grid in img.detect_grids() {
+        if let Ok((_, content)) = grid.decode() {
+            if !content.is_empty() {
+                return Some(content);
+            }
+        }
+    }
+    None
+}
+
+/// Decodifica un QR probando varias mejoras de imagen (gris ampliado, Otsu,
+/// umbral adaptativo, polaridad invertida) — port del pipeline original.
+pub fn decode_qr(gray: &Gray) -> Option<String> {
+    if gray.w < 8 || gray.h < 8 {
+        return None;
+    }
+    let mut variants: Vec<Gray> = Vec::new();
+    let mut base = gray.clone();
+    if base.w.min(base.h) < 240 {
+        let k = ((280.0 / base.w.min(base.h) as f32).round() as usize).max(2);
+        base = resize_gray(&base, base.w * k, base.h * k, Filter::Triangle);
+    }
+    variants.push(base.clone());
+    let t = otsu_threshold(&base);
+    variants.push(threshold_binary(&base, t));
+    let bs = ((base.w.min(base.h) / 6) | 1).max(31);
+    let adap = adaptive_threshold_inv(&base, bs, 5.0);
+    // adaptive_threshold_inv marca lo OSCURO como 255: invertir para binario normal
+    variants.push(adap.invert());
+    // polaridad invertida (QR claro sobre fondo oscuro)
+    variants.push(base.invert());
+    variants.push(threshold_binary(&base, t).invert());
+
+    for v in &variants {
+        if let Some(s) = try_decode(v) {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// Variante RGB: prueba luminancia y canal rojo (clave en cianotipia:
+/// el azul de Prusia es casi negro en el canal rojo).
+pub fn decode_qr_rgb(rgb: &crate::img::Rgb) -> Option<String> {
+    if let Some(s) = decode_qr(&rgb.to_gray()) {
+        return Some(s);
+    }
+    decode_qr(&rgb.red_channel())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_roundtrip() {
+        let p = qr_payload("mi proyecto", 3, 7, "abc_012");
+        let id = parse_qr_payload(&p).unwrap();
+        assert_eq!(id.proyecto.as_deref(), Some("mi proyecto"));
+        assert_eq!(id.hoja, Some(3));
+        assert_eq!(id.celda, Some(7));
+        assert_eq!(id.etiqueta, "abc_012");
+        // v1
+        let id = parse_qr_payload("nombre_suelto").unwrap();
+        assert_eq!(id.hoja, None);
+        assert_eq!(id.etiqueta, "nombre_suelto");
+    }
+
+    #[test]
+    fn qr_encode_decode_roundtrip() {
+        let text = qr_payload("proj", 1, 0, "abc_001");
+        let img = qr_image(&text, 240, false);
+        let got = decode_qr(&img).expect("QR debería decodificarse");
+        assert_eq!(got, text);
+    }
+
+    #[test]
+    fn qr_decode_inverted() {
+        let text = qr_payload("proj", 2, 5, "xy_9");
+        let img = qr_image(&text, 240, true); // invertido (negativo)
+        let got = decode_qr(&img).expect("QR invertido debería decodificarse");
+        assert_eq!(got, text);
+    }
+}
