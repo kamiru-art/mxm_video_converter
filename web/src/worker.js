@@ -65,7 +65,7 @@ self.onmessage = async (ev) => {
   try {
     await ready;
     const h = handlers[cmd];
-    if (!h) throw new Error(`Comando desconocido: ${cmd}`);
+    if (!h) throw new Error(`Unknown command: ${cmd}`);
     const out = h(args ?? {});
     if (out && typeof out === 'object' && 'value' in out && 'transfer' in out) {
       self.postMessage({ id, ok: true, value: out.value }, out.transfer);

@@ -33,9 +33,9 @@ pub fn paper_mm(name: &str) -> Option<(f64, f64)> {
         "A6" => Some((105.0, 148.0)),
         "B4" => Some((250.0, 353.0)),
         "B5" => Some((176.0, 250.0)),
-        "Carta (Letter)" => Some((215.9, 279.4)),
-        "Oficio (Legal)" => Some((215.9, 355.6)),
-        "Tabloide (Tabloid)" => Some((279.4, 431.8)),
+        "Carta (Letter)" | "Letter" => Some((215.9, 279.4)),
+        "Oficio (Legal)" | "Legal" => Some((215.9, 355.6)),
+        "Tabloide (Tabloid)" | "Tabloid" => Some((279.4, 431.8)),
         _ => None, // Personalizado
     }
 }
@@ -423,7 +423,7 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     let content_w = (page_w - 2 * margin) as f64;
     let content_h = (page_h - 2 * margin) as f64;
     if content_w <= 0.0 || content_h <= 0.0 {
-        return Err("Los márgenes son demasiado grandes para el tamaño de hoja.".into());
+        return Err("The margins are too large for the sheet size.".into());
     }
     let cell_w = (content_w - ((cols - 1) as i64 * gutter) as f64) / cols as f64;
     let cell_h = (content_h - ((rows - 1) as i64 * gutter) as f64) / rows as f64;
@@ -431,8 +431,8 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     let img_area_h = cell_h - label_area as f64;
     if cell_w <= 1.0 || img_area_h <= 1.0 {
         return Err(
-            "No hay espacio suficiente para las celdas. Reduce columnas/filas, márgenes, \
-             espaciado o halo, o sube el tamaño de hoja/DPI."
+            "Not enough room for the cells. Reduce columns/rows, margins, \
+             gutter or halo, or increase the sheet size/DPI."
                 .into(),
         );
     }
@@ -911,7 +911,7 @@ pub fn render_page(
             let pos: (i64, i64) = if s.registration_on {
                 let sep = l.halo_px + (l.halo_px / 2).max(4) + l.marker_quiet.max(8);
                 let mut clear = l.marker_margin + l.marker_patch + sep;
-                if s.is_cyanotype() && corner == "Superior izquierda" {
+                if s.is_cyanotype() && (corner == "Superior izquierda" || corner == "Top left") {
                     let tri_h = (l.marker_side / 2).max(8);
                     clear = l.marker_margin + l.marker_patch + 2 * l.halo_px + l.marker_quiet.max(6)
                         + tri_h + l.halo_px + (l.halo_px / 2).max(4) + l.marker_quiet.max(8);
@@ -919,17 +919,17 @@ pub fn render_page(
                 let y_top = l.marker_margin + (l.marker_patch - th) / 2;
                 let y_bot = l.page_h - l.marker_margin - l.marker_patch + (l.marker_patch - th) / 2;
                 match corner {
-                    "Inferior derecha" => (l.page_w - clear - tw, y_bot),
-                    "Inferior izquierda" => (clear, y_bot),
-                    "Superior derecha" => (l.page_w - clear - tw, y_top),
+                    "Inferior derecha" | "Bottom right" => (l.page_w - clear - tw, y_bot),
+                    "Inferior izquierda" | "Bottom left" => (clear, y_bot),
+                    "Superior derecha" | "Top right" => (l.page_w - clear - tw, y_top),
                     _ => (clear, y_top),
                 }
             } else {
                 let pad = (l.margin / 3).max(mm_to_px(3.0, l.dpi));
                 match corner {
-                    "Inferior derecha" => (l.page_w - pad - tw, l.page_h - pad - th),
-                    "Inferior izquierda" => (pad, l.page_h - pad - th),
-                    "Superior derecha" => (l.page_w - pad - tw, pad),
+                    "Inferior derecha" | "Bottom right" => (l.page_w - pad - tw, l.page_h - pad - th),
+                    "Inferior izquierda" | "Bottom left" => (pad, l.page_h - pad - th),
+                    "Superior derecha" | "Top right" => (l.page_w - pad - tw, pad),
                     _ => (pad, pad),
                 }
             };
@@ -1063,25 +1063,25 @@ pub fn cyanotype_size_warnings(s: &Settings) -> Vec<String> {
     }
     if s.marker_size_mm < 10.0 {
         avisos.push(format!(
-            "Marcadores de {} mm: para cianotipia se recomiendan ≥ 10 mm (los pequeños se degradan con la química).",
+            "{} mm markers: for cyanotype, ≥ 10 mm is recommended (small ones degrade with the chemistry).",
             s.marker_size_mm
         ));
     }
     if s.qr_on && s.qr_size_mm < 12.0 {
         avisos.push(format!(
-            "QRs de {} mm: para cianotipia se recomiendan ≥ 12 mm para que sigan siendo legibles tras exponer y lavar.",
+            "{} mm QRs: for cyanotype, ≥ 12 mm is recommended so they stay readable after exposing and washing.",
             s.qr_size_mm
         ));
     }
     if s.marker_margin_mm < 6.0 {
         avisos.push(format!(
-            "Margen de marcadores de {} mm: en cianotipia conviene ≥ 6 mm porque los bordes del papel acumulan manchas de brocha y roturas.",
+            "{} mm marker margin: for cyanotype, ≥ 6 mm is advised because paper edges collect brush stains and tears.",
             s.marker_margin_mm
         ));
     }
     if cyan_saving(s) && s.cyan_halo_mm < 4.0 {
         avisos.push(format!(
-            "Halo entintado de {} mm: en modo ahorro conviene ≥ 4 mm para que marcadores y QRs queden sobre blanco garantizado.",
+            "{} mm inked halo: in ink-saving mode, ≥ 4 mm is advised so markers and QRs sit on guaranteed white.",
             s.cyan_halo_mm
         ));
     }
@@ -1090,7 +1090,7 @@ pub fn cyanotype_size_warnings(s: &Settings) -> Vec<String> {
             let c = cyan::hex_to_rgb(bc);
             if (c[0] as u32 + c[1] as u32 + c[2] as u32) / 3 > 160 {
                 avisos.push(format!(
-                    "El color del bloqueador ({bc}) es muy claro: puede dejar pasar UV y velar los fondos/halos de la copia."
+                    "The blocker color ({bc}) is very light: it may let UV through and fog the print's backgrounds/halos."
                 ));
             }
         }

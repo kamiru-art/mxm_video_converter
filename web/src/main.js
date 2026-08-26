@@ -1,4 +1,4 @@
-// MXM Studio — arranque y navegación entre fases.
+// MXM Studio — bootstrap and phase navigation.
 
 import './style.css';
 import { mountPhase1 } from './phase1.js';
@@ -47,8 +47,8 @@ window.addEventListener('hashchange', () => {
 const initial = location.hash.replace('#', '');
 show(mounters[initial] ? initial : 'hojas');
 
-// precalentar el núcleo WASM
+// warm up the WASM core
 run('version', {}).then(
-  (v) => console.log(`mxm-core ${v} listo`),
-  (e) => toast(`No se pudo cargar el núcleo WebAssembly: ${e.message}`, 'err'),
+  (v) => console.log(`mxm-core ${v} ready`),
+  (e) => toast(`Could not load the WebAssembly core: ${e.message}`, 'err'),
 );

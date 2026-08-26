@@ -117,10 +117,10 @@ pub fn render_printer_test(paper: &str, dpi: u32) -> Rgb {
         canvas.paste(&gray_to_rgb_img(&patch), px, py);
     }
     let band = g.ramp[0].0[0];
-    draw_text(&mut canvas, "MXM Studio — Prueba de impresora", band, band, f_big, [0, 0, 0]);
+    draw_text(&mut canvas, "MXM Studio — Printer test", band, band, f_big, [0, 0, 0]);
     draw_text(
         &mut canvas,
-        &format!("Imprime esta página al 100 % (SIN «ajustar a página») en {paper} a {dpi} DPI. Luego escanéala completa y analízala en la app."),
+        &format!("Print this page at 100 % (WITHOUT \"fit to page\") on {paper} at {dpi} DPI. Then scan it whole and analyze it in the app."),
         band,
         band + mm(6.0, dpi),
         f_small,
@@ -130,19 +130,19 @@ pub fn render_printer_test(paper: &str, dpi: u32) -> Rgb {
         canvas.fill_rect(bbox[0], bbox[1], bbox[2], bbox[3], [nivel, nivel, nivel]);
         canvas.stroke_rect(bbox[0], bbox[1], bbox[2], bbox[3], 1, [120, 120, 120]);
     }
-    draw_text(&mut canvas, "Rampa tonal (blanco → negro)", g.ramp[0].0[0], g.ramp[0].0[1] - mm(5.0, dpi), f_small, [0, 0, 0]);
+    draw_text(&mut canvas, "Tonal ramp (white → black)", g.ramp[0].0[0], g.ramp[0].0[1] - mm(5.0, dpi), f_small, [0, 0, 0]);
     for &(mid, mmv, (x, y), s_px, q_px) in &g.size_test {
         let patch = marker_patch_gray(Dict::Dict4x4_50, mid, s_px, q_px);
         canvas.paste(&gray_to_rgb_img(&patch), x, y);
         draw_text(&mut canvas, &format!("{mmv} mm"), x, y + s_px + 2 * q_px + mm(1.0, dpi), f_small, [0, 0, 0]);
     }
-    draw_text(&mut canvas, "Tamaños de marcador ArUco", g.size_test[0].2 .0, g.size_test[0].2 .1 - mm(5.0, dpi), f_small, [0, 0, 0]);
+    draw_text(&mut canvas, "ArUco marker sizes", g.size_test[0].2 .0, g.size_test[0].2 .1 - mm(5.0, dpi), f_small, [0, 0, 0]);
     for (mmv, bbox, texto) in &g.qr_test {
         let q = qr::qr_image(texto, (bbox[2] - bbox[0]) as usize, false);
         canvas.paste(&gray_to_rgb_img(&q), bbox[0], bbox[1]);
         draw_text(&mut canvas, &format!("{mmv} mm"), bbox[0], bbox[3] + mm(1.0, dpi), f_small, [0, 0, 0]);
     }
-    draw_text(&mut canvas, "Tamaños de QR", g.qr_test[0].1[0], g.qr_test[0].1[1] - mm(5.0, dpi), f_small, [0, 0, 0]);
+    draw_text(&mut canvas, "QR sizes", g.qr_test[0].1[0], g.qr_test[0].1[1] - mm(5.0, dpi), f_small, [0, 0, 0]);
     canvas
 }
 
@@ -157,7 +157,7 @@ fn align_to_canonical(
     let det = detect_oriented(&mut img, Dict::Dict4x4_50, &expected, mode);
     if det.found.len() < 3 {
         return Err(format!(
-            "Solo se detectaron {} marcadores de referencia; se necesitan al menos 3. Escanea la página completa y derecha.",
+            "Only {} reference markers were detected; at least 3 are needed. Scan the whole page, right side up.",
             det.found.len()
         ));
     }
@@ -169,7 +169,7 @@ fn align_to_canonical(
         .map(|(k, v)| (k.to_string(), json!(v)))
         .collect::<serde_json::Map<String, Value>>());
     let s = estimate_scale(&refined, &bboxes_json)
-        .ok_or_else(|| "No se pudo estimar la escala del escaneo.".to_string())?;
+        .ok_or_else(|| "Could not estimate the scan scale.".to_string())?;
     let mut src = Vec::new();
     let mut dst = Vec::new();
     for (mid, corners) in &refined {
@@ -183,7 +183,7 @@ fn align_to_canonical(
         }
     }
     let (m, _) = find_homography_ransac(&src, &dst, 12.0)
-        .ok_or_else(|| "No se pudo alinear el escaneo (homografía degenerada).".to_string())?;
+        .ok_or_else(|| "Could not align the scan (degenerate homography).".to_string())?;
     let out_w = (cal.page_w as f64 * s).round() as usize;
     let out_h = (cal.page_h as f64 * s).round() as usize;
     let rgb8 = img.to_rgb8();
@@ -267,15 +267,15 @@ pub fn analyze_printer_test(
             let sx = med(sx_list);
             let sy = med(sy_list);
             if (sx - 1.0).abs() > 0.03 || (sy - 1.0).abs() > 0.03 {
-                notas.push("La impresora escala más de un 3 %: probablemente el controlador tiene activado «ajustar a página». Desactívalo e imprime al 100 %.".into());
+                notas.push("The printer scales by more than 3 %: the driver probably has \"fit to page\" enabled. Disable it and print at 100 %.".into());
             }
             scale_x = Some((sx * 10000.0).round() / 10000.0);
             scale_y = Some((sy * 10000.0).round() / 10000.0);
         } else {
-            notas.push("No se pudieron medir distancias suficientes para la escala.".into());
+            notas.push("Not enough distances could be measured for the scale.".into());
         }
     } else {
-        notas.push("No se indicó el DPI del escaneo: no se pudo medir la escala de impresión (solo respuesta tonal y tamaños mínimos).".into());
+        notas.push("Scan DPI not provided: print scale could not be measured (only tonal response and minimum sizes).".into());
     }
 
     // Respuesta tonal
@@ -289,7 +289,7 @@ pub fn analyze_printer_test(
         let vals: Vec<f64> = tono.iter().map(|t| t[1].as_f64().unwrap()).collect();
         let (mn, mx) = vals.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
         if mx - mn < 60.0 {
-            notas.push("La rampa tonal tiene poco contraste en el escaneo; revisa la exposición del escáner.".into());
+            notas.push("The tonal ramp has little contrast in the scan; check the scanner exposure.".into());
         }
     }
 
@@ -305,7 +305,7 @@ pub fn analyze_printer_test(
     let marker_min = detectados_mm.first().cloned();
     let marker_rec = match marker_min {
         None => {
-            notas.push("Ningún marcador del test de tamaños se detectó: usa marcadores de 10-12 mm y revisa la calidad de impresión.".into());
+            notas.push("No marker in the size test was detected: use 10-12 mm markers and check print quality.".into());
             12.0
         }
         Some(m) => ((m * 1.25 * 2.0).round() / 2.0).max(5.0),
@@ -333,7 +333,7 @@ pub fn analyze_printer_test(
     let qr_min = qr_ok.first().cloned();
     let qr_rec = match qr_min {
         None => {
-            notas.push("Ningún QR del test se pudo leer: usa QRs de 12 mm o más.".into());
+            notas.push("No QR in the test could be read: use QRs of 12 mm or larger.".into());
             12.0
         }
         Some(m) => ((m * 1.2 * 2.0).round() / 2.0).max(8.0),
@@ -441,14 +441,14 @@ pub fn render_cyanotype_strip(
     }
     let band = g.patches[0].0[0];
     let titulo = if target == "edn256" {
-        "MXM Studio — Calibración de cianotipia (carta EDN 2.2, 256 tonos)"
+        "MXM Studio — Cyanotype calibration (EDN 2.2 chart, 256 tones)"
     } else {
-        "MXM Studio — Calibración de cianotipia (tira de 21 parches)"
+        "MXM Studio — Cyanotype calibration (21-patch strip)"
     };
     draw_text(&mut canvas, titulo, band, mm(CAL_MARGIN_MM, dpi) + mm(1.0, dpi) + g.cal.marker_side + 2 * g.cal.marker_quiet, f_big, text_color);
     draw_text(
         &mut canvas,
-        "Imprime en acetato al 100 %, expón tu cianotipia como siempre, revela, seca y escanea el RESULTADO AZUL (no el acetato).",
+        "Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE RESULT (not the film).",
         band,
         g.patches[0].0[1] - mm(6.0, dpi),
         f_small,
@@ -584,16 +584,16 @@ pub fn analyze_cyanotype_strip(
         }
     }
     if respuesta.len() < 5.max(g.patches.len() / 2) {
-        return Err("No se pudieron medir suficientes parches; revisa que el escaneo esté completo, plano y bien iluminado.".into());
+        return Err("Not enough patches could be measured; check that the scan is complete, flat and well lit.".into());
     }
 
     let (rango_d, invertida, plana) = cyan::response_summary(&respuesta);
     if invertida {
-        return Err("La respuesta medida está INVERTIDA: los parches con más tinta salieron más oscuros. Lo habitual es haber escaneado el ACETATO en vez de la copia azul; escanea la cianotipia seca y vuelve a analizar.".into());
+        return Err("The measured response is INVERTED: patches with more ink came out darker. Usually this means you scanned the FILM instead of the blue print; scan the dried cyanotype and analyze again.".into());
     }
     if plana {
         return Err(format!(
-            "Los parches de la carta apenas se distinguen entre sí (rango {:.0} %). Suele ser exposición muy corta o muy larga, o un escaneo con el contraste al mínimo.",
+            "The chart patches are barely distinguishable (range {:.0} %). Usually the exposure was too short or too long, or the scan has minimum contrast.",
             rango_d * 100.0
         ));
     }
@@ -659,10 +659,10 @@ pub fn analyze_cyanotype_strip(
     let rango = (y_max - y_min) / 255.0;
     let mut notas: Vec<String> = Vec::new();
     if rango < 0.35 {
-        notas.push("Rango dinámico bajo (<35 %). Sugerencias: aumenta la exposición, verifica que la tinta plena del acetato bloquee la luz (o usa el ColorBlocker) y revisa el lavado.".into());
+        notas.push("Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (or use the ColorBlocker) and check the wash.".into());
     }
     if rango > 0.85 {
-        notas.push("Excelente rango dinámico. 💙".into());
+        notas.push("Excellent dynamic range. 💙".into());
     }
 
     // LUT: inversión numérica y→densidad sobre la malla fina.
@@ -796,7 +796,7 @@ pub fn render_colorblocker(paper: &str, dpi: u32, mirror: bool, block_color: Opt
     let x0 = g.patches[0].0[0];
     draw_text(
         &mut canvas,
-        "MXM Studio — EDN ColorBlocker (elige el color que mejor bloquea el UV)",
+        "MXM Studio — EDN ColorBlocker (pick the color that blocks UV best)",
         x0,
         g.patches[0].0[1] - mm(11.0, dpi),
         mm(3.6, dpi) as f32,
@@ -804,7 +804,7 @@ pub fn render_colorblocker(paper: &str, dpi: u32, mirror: bool, block_color: Opt
     );
     draw_text(
         &mut canvas,
-        "Imprime en acetato al 100 % en MÁXIMA calidad, expón tu cianotipia como siempre, revela, seca y escanea el resultado azul.",
+        "Print on transparency film at 100 % at MAXIMUM quality, expose your cyanotype as usual, develop, dry and scan the blue result.",
         x0,
         g.patches[0].0[1] - mm(6.0, dpi),
         mm(2.2, dpi) as f32,
@@ -833,7 +833,7 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         }
     }
     if missing > g.patches.len() / 5 {
-        return Err("No se pudieron medir suficientes parches del ColorBlocker; revisa el escaneo.".into());
+        return Err("Not enough ColorBlocker patches could be measured; check the scan.".into());
     }
     // reemplazar NaN por la media global
     let mut acc = 0.0f64;
@@ -862,7 +862,7 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         }
     }
     if vmax - vmin < 10.0 {
-        return Err("La carta apenas tiene contraste: la exposición fue demasiado corta o larga.".into());
+        return Err("The chart has almost no contrast: the exposure was far too short or too long.".into());
     }
     for col in v.iter_mut() {
         for x in col.iter_mut() {
@@ -933,15 +933,15 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
     let negro_v = v[CB_HUE_COLS].iter().cloned().fold(f64::MIN, f64::max);
     if best_col < CB_HUE_COLS && best_v > negro_v + 15.0 {
         notas.push(format!(
-            "En tu impresora, el color {mejor_hex} bloquea el UV claramente mejor que el negro: úsalo como tinta de los negativos."
+            "On your printer, the color {mejor_hex} blocks UV clearly better than black: use it as the negatives' ink."
         ));
     } else if best_col >= CB_HUE_COLS {
-        notas.push("En tu impresora el negro/gris es el mejor bloqueador: puedes seguir usando tinta negra.".into());
+        notas.push("On your printer black/gray is the best blocker: you can keep using black ink.".into());
     }
     let malos = monotona.iter().filter(|&&m| !m).count();
     if malos > 0 {
         notas.push(format!(
-            "{malos} matiz(es) no siguieron el orden nominal de la carta (normal: colores que casi no bloquean el UV). No se descartan."
+            "{malos} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV). They are not discarded."
         ));
     }
 

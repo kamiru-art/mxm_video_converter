@@ -661,7 +661,7 @@ fn identify_sheet<'a>(
                 }
                 if let Some(hn) = payload.hoja {
                     if let Some(hoja) = layoutfile::sheet_by_number(layout, hn) {
-                        return Some((hoja, format!("QR de '{}'", payload.etiqueta)));
+                        return Some((hoja, format!("QR from '{}'", payload.etiqueta)));
                     }
                 }
                 // v1: buscar la hoja que contiene la etiqueta
@@ -740,7 +740,7 @@ pub fn process_scan(
     let page_w = lienzo["ancho_px"].as_f64().unwrap_or(0.0);
     let page_h = lienzo["alto_px"].as_f64().unwrap_or(0.0);
     if page_w <= 0.0 || page_h <= 0.0 || (page_w * page_h) as usize > MAX_IMAGE_PIXELS {
-        fail!("El layout declara un lienzo imposible ({page_w}×{page_h} px).");
+        fail!("The layout declares an impossible canvas ({page_w}×{page_h} px).");
     }
     let minfo = &layout["marcadores"];
     let dict = Dict::from_name(minfo["dict"].as_str().unwrap_or("DICT_4X4_50"));
@@ -750,7 +750,7 @@ pub fn process_scan(
         .map(|o| o.keys().filter_map(|k| k.parse().ok()).collect())
         .unwrap_or_default();
     if expected.is_empty() {
-        fail!("El layout no es válido o está incompleto (sin marcadores).");
+        fail!("The layout is invalid or incomplete (no markers).");
     }
     res["marcadores_total"] = json!(expected.len());
 
@@ -761,14 +761,14 @@ pub fn process_scan(
     res["espejado"] = json!(det.flipped);
     if det.flipped {
         if layout.get("espejado").and_then(|v| v.as_bool()).unwrap_or(true) {
-            warn!("El escaneo llegó EN ESPEJO (¿acetato expuesto al revés?); se volteó automáticamente antes de procesar.");
+            warn!("The scan arrived MIRRORED (film exposed flipped?); it was flipped back automatically before processing.");
         } else {
-            warn!("Escaneo en espejo (esperado: el negativo se generó sin espejado); se volteó automáticamente.");
+            warn!("Mirrored scan (unexpected: the negative was generated without mirroring); flipped back automatically.");
         }
     }
     if det.found.len() < 2.max(opts.min_markers) {
         fail!(
-            "Solo se detectaron {} de {} marcadores (mínimo: {}). Revisa que los marcadores no estén tapados y que la hoja completa esté en el escaneo.",
+            "Only {} of {} markers were detected (minimum: {}). Check that the markers are not covered and that the whole sheet is inside the scan.",
             det.found.len(),
             expected.len(),
             opts.min_markers
@@ -777,7 +777,7 @@ pub fn process_scan(
     let polaridad = if det.inverted { "invertida_primero" } else { "ambas" };
     let det_mode = if det.escalated { "cianotipia".to_string() } else { mode.clone() };
     if det.inverted {
-        warn!("Marcadores con POLARIDAD INVERTIDA (¿hoja de modo normal expuesta como cianotipia?); se detectaron en negativo.");
+        warn!("Markers with INVERTED POLARITY (normal-mode sheet exposed as cyanotype?); they were detected in negative.");
     }
 
     // 2. Afinado a resolución completa.
@@ -786,7 +786,7 @@ pub fn process_scan(
     // 3. Escala medida.
     let mut s = match estimate_scale(&refined, layout_bboxes) {
         Some(s) if (0.2..=12.0).contains(&s) => s,
-        other => fail!("No se pudo estimar la escala del escaneo (s={:?}).", other),
+        other => fail!("Could not estimate the scan scale (s={:?}).", other),
     };
     let diag = ((page_w * s).powi(2) + (page_h * s).powi(2)).sqrt();
     let thresh = (0.001 * diag).max(8.0);
@@ -796,7 +796,7 @@ pub fn process_scan(
     if !extra.is_empty() {
         let mut ids: Vec<u32> = extra.keys().cloned().collect();
         ids.sort();
-        warn!("Recuperados {} marcador(es) en la segunda pasada guiada ({:?}).", extra.len(), ids);
+        warn!("Recovered {} marker(s) in the guided second pass ({:?}).", extra.len(), ids);
         refined.extend(extra);
         res["marcadores"] = json!(refined.len());
         if let Some(s2) = estimate_scale(&refined, layout_bboxes) {
@@ -810,7 +810,7 @@ pub fn process_scan(
     // 4. Homografía RANSAC con todas las esquinas.
     let (src, dst) = correspondences(&refined, layout_bboxes, s);
     if src.is_empty() {
-        fail!("Ningún marcador detectado existe en el layout.");
+        fail!("No detected marker exists in the layout.");
     }
     // advertencia de dispersión
     {
@@ -820,16 +820,16 @@ pub fn process_scan(
         let y2 = dst.iter().map(|p| p.1).fold(f64::MIN, f64::max);
         let cover = ((x2 - x1) * (y2 - y1)) / (page_w * s * page_h * s).max(1.0);
         if cover < 0.25 {
-            warn!("Los marcadores detectados cubren poca superficie de la hoja; la alineación puede perder precisión en los bordes lejanos.");
+            warn!("The detected markers cover little of the sheet; alignment may lose precision near the far edges.");
         }
     }
     let (mut m, mask) = match find_homography_ransac(&src, &dst, thresh) {
         Some(r) => r,
-        None => fail!("No se pudo calcular la homografía (marcadores degenerados)."),
+        None => fail!("Could not compute the homography (degenerate markers)."),
     };
     let inliers = mask.iter().filter(|&&b| b).count();
     if inliers < 8 {
-        warn!("Pocos puntos consistentes en la alineación ({inliers}).");
+        warn!("Few consistent points in the alignment ({inliers}).");
     }
 
     // 4b. Control de precisión por residuos.
@@ -847,7 +847,7 @@ pub fn process_scan(
                 refined.remove(mid);
             }
             res["marcadores"] = json!(refined.len());
-            warn!("Marcador(es) {:?} descartados por residuo inconsistente (> {:.1} mm).", malos, lim / px_mm);
+            warn!("Marker(s) {:?} discarded due to inconsistent residual (> {:.1} mm).", malos, lim / px_mm);
             let (src2, dst2) = correspondences(&refined, layout_bboxes, s);
             if let Some((m2, _)) = find_homography_ransac(&src2, &dst2, thresh) {
                 m = m2;
@@ -860,7 +860,7 @@ pub fn process_scan(
             let residual_mm = (v2[v2.len() / 2] / px_mm * 1000.0).round() / 1000.0;
             res["residual_mm"] = json!(residual_mm);
             if residual_mm > RESIDUAL_WARN_MM {
-                warn!("Alineación imprecisa (residuo ±{residual_mm:.1} mm): el papel probablemente se deformó al mojarse. Los recortes se corrigen localmente con los marcadores cercanos.");
+                warn!("Imprecise alignment (residual ±{residual_mm:.1} mm): the paper probably warped when wet. Crops are corrected locally using nearby markers.");
             }
         }
     }
@@ -876,7 +876,7 @@ pub fn process_scan(
     let out_w = (page_w * s).round() as usize;
     let out_h = (page_h * s).round() as usize;
     if out_w == 0 || out_h == 0 || out_w * out_h > MAX_IMAGE_PIXELS {
-        fail!("El enderezado pedido es desproporcionado ({out_w}×{out_h} px); revisa el layout.");
+        fail!("The requested rectification is disproportionate ({out_w}×{out_h} px); check the layout.");
     }
     let mut warp = crate::geometry::warp_perspective(&img, &m, out_w, out_h);
     drop(img);
@@ -885,7 +885,7 @@ pub fn process_scan(
     if opts.normalize_patches {
         if let Some(patch_info) = layout.get("parche_grises").filter(|v| !v.is_null()) {
             if normalize_with_patches(&mut warp, patch_info, s, local.as_ref()) {
-                warn!("Niveles normalizados con la tira de parches.");
+                warn!("Levels normalized with the patch strip.");
             }
         }
     }
@@ -899,11 +899,11 @@ pub fn process_scan(
                 let reclamada = numero.and_then(|n| claimed_sheets.get(&n));
                 match reclamada {
                     Some(otro) if otro != scan_name => {
-                        warn!("Ningún QR legible y la hoja {} ya fue identificada por QR en '{}': este escaneo va a 'sin_identificar' para no sobrescribirla.", numero.unwrap(), otro);
+                        warn!("No readable QR and sheet {} was already identified by QR in '{}': this scan goes to 'unidentified' to avoid overwriting it.", numero.unwrap(), otro);
                     }
                     _ => {
-                        hoja = Some((&hojas[0], "única hoja del layout".into()));
-                        warn!("Ningún QR legible: hoja identificada por descarte (el layout tiene una sola hoja). Verifica en el informe que el escaneo corresponde a este proyecto.");
+                        hoja = Some((&hojas[0], "only sheet in the layout".into()));
+                        warn!("No readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.");
                     }
                 }
             }
@@ -920,7 +920,7 @@ pub fn process_scan(
     let (hoja, via) = match hoja {
         Some(hv) => hv,
         None => {
-            warn!("Ningún QR legible: recortes guardados como 'sin identificar'.");
+            warn!("No readable QR: crops saved as 'unidentified'.");
             if let Some(pl) = plantilla {
                 if let Some(fs) = pl.get("frames").and_then(|v| v.as_object()) {
                     let mut items: Vec<(&String, &Value)> = fs.iter().collect();
@@ -935,7 +935,7 @@ pub fn process_scan(
                     }
                 }
             }
-            res["error"] = json!("QRs ilegibles: no se pudo identificar la hoja.");
+            res["error"] = json!("Unreadable QRs: the sheet could not be identified.");
             return ScanOutput { result: res, frames: frames_out, unidentified, overlay };
         }
     };
@@ -954,7 +954,7 @@ pub fn process_scan(
             let mut crop = match crop_frame(&warp, b, s, opts.bleed, local.as_ref()) {
                 Some(c) => c,
                 None => {
-                    warn!("Recorte vacío para '{etiqueta}'.");
+                    warn!("Empty crop for '{etiqueta}'.");
                     continue;
                 }
             };

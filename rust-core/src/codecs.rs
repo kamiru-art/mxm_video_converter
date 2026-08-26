@@ -10,7 +10,7 @@ pub const MAX_DECODE_PIXELS: u64 = 250_000_000;
 /// Decodifica bytes de un archivo de imagen a DynImg (8 o 16 bits RGB).
 /// Devuelve además si tenía canal alfa (se aplana sobre blanco).
 pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
-    let fmt = image::guess_format(bytes).map_err(|e| format!("Formato no reconocido: {e}"))?;
+    let fmt = image::guess_format(bytes).map_err(|e| format!("Unrecognized format: {e}"))?;
     // tope de píxeles contra bombas de descompresión
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
     reader.set_format(fmt);
@@ -21,10 +21,10 @@ pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
         l.max_alloc = Some(MAX_DECODE_PIXELS * 8);
         l
     });
-    let img = reader.decode().map_err(|e| format!("No se pudo decodificar la imagen: {e}"))?;
+    let img = reader.decode().map_err(|e| format!("Could not decode the image: {e}"))?;
     let (w, h) = (img.width() as u64, img.height() as u64);
     if w * h > MAX_DECODE_PIXELS {
-        return Err(format!("Imagen demasiado grande ({w}×{h})."));
+        return Err(format!("Image too large ({w}×{h})."));
     }
     let has_alpha = img.color().has_alpha();
     let sixteen = img.color().bits_per_pixel() / img.color().channel_count() as u16 > 8;

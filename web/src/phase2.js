@@ -18,7 +18,7 @@ function layoutSummary(layout) {
   const hojas = layout.hojas ?? [];
   let frames = 0;
   for (const h of hojas) frames += Object.keys(h.frames ?? {}).length;
-  return `${layout.proyecto ? `«${layout.proyecto}» · ` : ''}modo ${layout.modo ?? 'normal'} · ${hojas.length} hoja(s) · ${frames} fotogramas esperados`;
+  return `${layout.proyecto ? `“${layout.proyecto}” · ` : ''}mode ${layout.modo ?? 'normal'} · ${hojas.length} sheet(s) · ${frames} expected frames`;
 }
 
 function expectedLabels(layout) {
@@ -30,18 +30,18 @@ function expectedLabels(layout) {
 }
 
 export function mountPhase2(root) {
-  const layoutInfo = el('div', { class: 'hint' }, 'Carga el layout.json que generó la fase ① (o la app de escritorio v1/v2).');
+  const layoutInfo = el('div', { class: 'hint' }, 'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).');
 
-  const useCurrentBtn = el('button', { class: 'btn ghost small', style: 'margin-top:6px' }, 'Usar el layout del proyecto actual');
+  const useCurrentBtn = el('button', { class: 'btn ghost small', style: 'margin-top:6px' }, 'Use the current project layout');
   useCurrentBtn.addEventListener('click', () => {
-    if (!project.layoutJson) { toast('Todavía no has generado hojas en esta sesión.', 'err'); return; }
+    if (!project.layoutJson) { toast('You have not generated sheets in this session yet.', 'err'); return; }
     ph2.layout = JSON.parse(project.layoutJson);
-    ph2.layoutName = 'layout del proyecto actual';
+    ph2.layoutName = 'current project layout';
     layoutInfo.textContent = `✔ ${layoutSummary(ph2.layout)}`;
   });
 
   const layoutDz = dropzone({
-    label: 'Suelta aquí el layout.json',
+    label: 'Drop the layout.json here',
     accept: '.json,application/json',
     onFiles: async ([f]) => {
       try {
@@ -49,7 +49,7 @@ export function mountPhase2(root) {
         ph2.layoutName = f.name;
         layoutInfo.textContent = `✔ ${f.name} — ${layoutSummary(ph2.layout)}`;
       } catch (e) {
-        toast(`No se pudo leer el layout: ${e.message}`, 'err');
+        toast(`Could not read the layout: ${e.message}`, 'err');
       }
     },
   });
@@ -57,10 +57,10 @@ export function mountPhase2(root) {
   // opciones
   const bleedIn = numberInput(1.5, { min: 0, max: 20, step: 0.5 });
   const minMarkersIn = numberInput(3, { min: 2, max: 12 });
-  const modeSel = select([['auto', 'Automático (según el layout)'], ['normal', 'Normal'], ['cianotipia', 'Cianotipia']], 'auto');
-  const resizeCheck = check('Reescalar cada fotograma a su tamaño digital original', false);
-  const patchesCheck = check('Normalizar niveles con la tira de grises (si la hoja la lleva)', false);
-  const fineCheck = check('Corrección local para papel deformado (recomendado en cianotipia)', true);
+  const modeSel = select([['auto', 'Automatic (from the layout)'], ['normal', 'Normal'], ['cianotipia', 'Cyanotype']], 'auto');
+  const resizeCheck = check('Resize each frame to its original digital size', false);
+  const patchesCheck = check('Normalize levels with the gray strip (if the sheet has one)', false);
+  const fineCheck = check('Local correction for warped paper (recommended for cyanotype)', true);
 
   // procesamiento
   const prog = progressBar();
@@ -69,15 +69,15 @@ export function mountPhase2(root) {
   const framesState = el('div');
 
   const scansDz = dropzone({
-    label: 'Suelta aquí tus escaneos (en cualquier orden y orientación)',
-    sublabel: 'TIFF / PNG / JPG / WebP — 8 o 16 bits, a cualquier resolución. Varios a la vez.',
+    label: 'Drop your scans here (any order, any orientation)',
+    sublabel: 'TIFF / PNG / JPG / WebP — 8 or 16 bit, any resolution. Several at once.',
     accept: '.tif,.tiff,.png,.jpg,.jpeg,.webp,.bmp,image/*',
     multiple: true,
     onFiles: (files) => processScans(files),
   });
 
   async function processScans(files) {
-    if (!ph2.layout) { toast('Primero carga el layout.json del proyecto.', 'err'); return; }
+    if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
     prog.show();
     const opts = JSON.stringify({
       bleed: (parseFloat(bleedIn.value) || 1.5) / 100,
@@ -103,7 +103,7 @@ export function mountPhase2(root) {
       for (const fr of r.frames) project.processedFrames.set(fr.label, fr.png);
       ph2.results.push({ result, frames: r.frames, sinIdentificar: r.sin_identificar, overlay: r.overlay });
       done++;
-      prog.set(done / files.length, `${done}/${files.length} escaneos`);
+      prog.set(done / files.length, `${done}/${files.length} scans`);
       renderResults();
     });
     // en paralelo (varios workers WASM), salvo layouts de una sola hoja
@@ -112,12 +112,12 @@ export function mountPhase2(root) {
     await Promise.all(Array.from({ length: width }, async () => {
       while (queue.length) {
         const job = queue.shift();
-        try { await job(); } catch (e) { toast(`Error en un escaneo: ${e.message}`, 'err'); done++; }
+        try { await job(); } catch (e) { toast(`Error in one scan: ${e.message}`, 'err'); done++; }
       }
     }));
     prog.hide();
     renderResults();
-    toast('Procesamiento terminado. Revisa el informe.', 'ok');
+    toast('Processing finished. Check the report.', 'ok');
   }
 
   function renderResults() {
@@ -126,8 +126,8 @@ export function mountPhase2(root) {
       const thumbs = el('div', { class: 'thumbs' });
       if (overlay) {
         thumbs.append(el('div', { class: 'thumb', style: 'grid-column: span 3; aspect-ratio:auto' },
-          el('img', { src: URL.createObjectURL(new Blob([overlay], { type: 'image/jpeg' })), alt: 'alineación' }),
-          el('div', { class: 'tag' }, 'alineación: verde=marcador, rojo=perdido, azul=frames, naranja=QRs')));
+          el('img', { src: URL.createObjectURL(new Blob([overlay], { type: 'image/jpeg' })), alt: 'alignment' }),
+          el('div', { class: 'tag' }, 'alignment: green=marker, red=missing, blue=frames, orange=QRs')));
       }
       for (const f of [...frames, ...sinIdentificar].slice(0, 24)) {
         thumbs.append(el('div', { class: 'thumb' },
@@ -147,7 +147,7 @@ export function mountPhase2(root) {
       ), el('tr', {}, el('td', {}), el('td', { colspan: '6' }, thumbs)));
     }
     const table = el('table', { class: 'report' },
-      el('tr', {}, ...['', 'Escaneo', 'Hoja', 'Marcadores', 'Alineación', 'Frames', 'Notas'].map((h) => el('th', {}, h))),
+      el('tr', {}, ...['', 'Scan', 'Sheet', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h))),
       rows);
 
     // faltantes
@@ -158,10 +158,10 @@ export function mountPhase2(root) {
       if (ph2.results.length) {
         missingBox = missing.length
           ? el('div', { class: 'missing-box' },
-              el('strong', {}, `Fotogramas faltantes (${missing.length}): `),
+              el('strong', {}, `Missing frames (${missing.length}): `),
               missing.join(', '),
-              el('div', { style: 'margin-top:6px' }, 'Usa «Hojas de rescate» abajo para reimprimir solo estos.'))
-          : el('div', { class: 'allok-box' }, el('strong', {}, '🎉 No falta ningún fotograma.'));
+              el('div', { style: 'margin-top:6px' }, 'Use “Rescue sheets” below to reprint only these.'))
+          : el('div', { class: 'allok-box' }, el('strong', {}, '🎉 No frames missing.'));
         rescueSection.style.display = missing.length ? '' : 'none';
         rescueMissing = missing;
       }
@@ -172,7 +172,7 @@ export function mountPhase2(root) {
       ph2.results.length ? downloadRow : '',
     );
     framesState.textContent = project.processedFrames.size
-      ? `${project.processedFrames.size} fotogramas recuperados en memoria (listos para la fase ④).`
+      ? `${project.processedFrames.size} recovered frames in memory (ready for phase ④).`
       : '';
   }
 
@@ -191,12 +191,12 @@ export function mountPhase2(root) {
         files.set('informe.json', new TextEncoder().encode(JSON.stringify(informe, null, 2)));
         files.set('informe.csv', new TextEncoder().encode(informeCsv()));
         const zip = await makeZip(files);
-        download(zip, 'fotogramas_procesados.zip', 'application/zip');
+        download(zip, 'processed_frames.zip', 'application/zip');
       },
-    }, '⬇ Descargar fotogramas + informe (ZIP)'),
+    }, '⬇ Download frames + report (ZIP)'),
     el('button', {
       class: 'btn ghost-light small', onclick: () => { ph2.results = []; ph2.claims = {}; project.processedFrames.clear(); renderResults(); },
-    }, 'Limpiar resultados'),
+    }, 'Clear results'),
   );
 
   function buildInforme() {
@@ -229,19 +229,19 @@ export function mountPhase2(root) {
   const rescueOriginals = new Map(); // nombre → File
   const rescueInfo = el('div', { class: 'hint' });
   const rescueDz = dropzone({
-    label: 'Suelta la carpeta de originales del proyecto (…_originales/)',
-    sublabel: 'Las copias que la fase ① guardó junto al layout. Con ellas se reimprimen SOLO los fotogramas fallidos.',
+    label: 'Drop the project originals folder (…_originales/)',
+    sublabel: 'The copies phase ① saved next to the layout. They let you reprint ONLY the failed frames.',
     accept: 'image/*,.tif,.tiff', multiple: true, dark: true,
     onFiles: (files) => {
       for (const f of files) rescueOriginals.set(f.name.replace(/\.[^.]+$/, ''), f);
-      rescueInfo.textContent = `${rescueOriginals.size} originales cargados.`;
+      rescueInfo.textContent = `${rescueOriginals.size} originals loaded.`;
     },
   });
   const rescueProg = progressBar();
   rescueProg.hide();
   const rescueBtn = el('button', { class: 'btn blue', onclick: async () => {
     if (!ph2.layout?.ajustes) {
-      toast('Este layout no incluye los ajustes de generación (¿es de la versión v1?). Genera las hojas con MXM Studio para poder usar rescate.', 'err');
+      toast('This layout has no generation settings (is it from v1?). Generate the sheets with MXM Studio to use rescue.', 'err');
       return;
     }
     const found = [];
@@ -265,9 +265,9 @@ export function mountPhase2(root) {
       else sinOriginal.push(et);
     }
     if (sinOriginal.length) {
-      toast(`Sin copia original (no se pueden reimprimir): ${sinOriginal.join(', ')}`, 'err');
+      toast(`No original copy (cannot be reprinted): ${sinOriginal.join(', ')}`, 'err');
     }
-    if (!found.length) { toast('No se encontró la copia original de ningún faltante.', 'err'); return; }
+    if (!found.length) { toast('No original copy found for any missing frame.', 'err'); return; }
     rescueBtn.disabled = true;
     rescueProg.show();
     try {
@@ -315,39 +315,39 @@ export function mountPhase2(root) {
       });
       const zip = await makeZip(out.files);
       download(zip, `${ajustes.out_name}.zip`, 'application/zip');
-      toast(`Hojas de rescate generadas con ${found.length} fotograma(s). Imprime, pinta/expón, escanea y procesa apuntando al layout de rescate.`, 'ok');
+      toast(`Rescue sheets generated with ${found.length} frame(s). Print, paint/expose, scan and process against the rescue layout.`, 'ok');
     } catch (e) {
       console.error(e);
-      toast(`Error en el rescate: ${e.message ?? e}`, 'err');
+      toast(`Rescue failed: ${e.message ?? e}`, 'err');
     } finally {
       rescueBtn.disabled = false;
       rescueProg.hide();
     }
-  } }, '🛟 Generar hojas de rescate');
+  } }, '🛟 Generate rescue sheets');
 
   const rescueSection = el('div', { style: 'display:none; margin-top:16px' },
-    el('h2', {}, 'Hojas de rescate'),
+    el('h2', {}, 'Rescue sheets'),
     rescueDz, rescueInfo, rescueBtn, rescueProg.root,
   );
 
   const paper = el('div', { class: 'paper' },
-    el('h2', {}, '② Procesar escaneos'),
-    el('div', { class: 'hint' }, 'La app endereza cada hoja con los marcadores, la identifica por sus QR y recorta cada fotograma. Sin Photoshop.'),
+    el('h2', {}, '② Process scans'),
+    el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its QRs and crops every frame. No Photoshop.'),
     layoutDz, useCurrentBtn, layoutInfo,
-    el('h3', {}, 'Opciones'),
+    el('h3', {}, 'Options'),
     el('div', { class: 'row' },
-      field('Bleed (% por lado)', bleedIn, 'Recorte perimetral para evitar bordes de papel.'),
-      field('Marcadores mínimos', minMarkersIn),
-      field('Modo de detección', modeSel),
+      field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
+      field('Minimum markers', minMarkersIn),
+      field('Detection mode', modeSel),
     ),
     resizeCheck.label, patchesCheck.label, fineCheck.label,
-    el('h3', {}, 'Escaneos'),
+    el('h3', {}, 'Scans'),
     scansDz,
     prog.root,
   );
 
   const bench = el('div', { class: 'bench' },
-    el('h2', {}, 'Informe de procesamiento'),
+    el('h2', {}, 'Processing report'),
     framesState,
     resultsBox,
     rescueSection,

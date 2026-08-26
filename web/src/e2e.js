@@ -52,7 +52,7 @@ async function main() {
       videoMeta: { fps_extraccion: 4 }, keepOriginals: false,
     });
     const sheetPng = out.files.get('e2e_p1.png');
-    if (!sheetPng) throw new Error('no se generó la hoja');
+    if (!sheetPng) throw new Error('sheet was not generated');
     log(`hoja generada (${sheetPng.length} bytes), PDF: ${out.files.has('e2e.pdf')}, layout: ${!!out.layoutJson}`);
 
     // "escanear": dibujar la hoja rotada 2° sobre un lienzo mayor
@@ -133,11 +133,11 @@ async function main() {
           onFrame: async (blob) => got.push(blob),
         });
         log(`video: ${meta.count} frames extraídos a 2 fps (nativo ${meta.fps.toFixed(1)} fps)`);
-        if (got.length < 5) throw new Error('extracción de video incompleta');
+        if (got.length < 5) throw new Error('incomplete video extraction');
         const getters = got.map((b) => () => createImageBitmap(b));
         const out2 = await buildVideo(getters, 2);
         log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
-        if (out2.bytes.length < 5000) throw new Error('video de salida sospechosamente pequeño');
+        if (out2.bytes.length < 5000) throw new Error('suspiciously small output video');
       } else {
         log('· (sin muestra de video: prueba de WebCodecs omitida)');
       }

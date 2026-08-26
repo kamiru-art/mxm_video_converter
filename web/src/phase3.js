@@ -4,20 +4,20 @@ import { run } from './pool.js';
 import { el, toast, download, dropzone, field, numberInput, select, check, pngUrl } from './ui.js';
 import * as store from './store.js';
 
-const PAPERS = ['A4', 'A3', 'A5', 'Carta (Letter)'];
+const PAPERS = ['A4', 'A3', 'A5', ['Carta (Letter)', 'Letter']];
 
 function profileSaver(kind, getData) {
-  const name = el('input', { type: 'text', placeholder: 'nombre del perfil' });
+  const name = el('input', { type: 'text', placeholder: 'profile name' });
   const btn = el('button', {
     class: 'btn blue small', onclick: () => {
       const n = name.value.trim();
       const data = getData();
-      if (!n || !data) { toast('Analiza primero y ponle nombre al perfil.', 'err'); return; }
+      if (!n || !data) { toast('Analyze first and give the profile a name.', 'err'); return; }
       store.saveProfile(kind, n, data);
-      toast(`Perfil «${n}» guardado. Ya puedes usarlo en la fase ①.`, 'ok');
+      toast(`Profile “${n}” saved. You can now use it in phase ①.`, 'ok');
     },
-  }, 'Guardar perfil');
-  return el('div', { class: 'row tight' }, field('Guardar como', name), btn);
+  }, 'Save profile');
+  return el('div', { class: 'row tight' }, field('Save as', name), btn);
 }
 
 /** Dibuja respuesta medida + curva en un canvas. */
@@ -57,7 +57,7 @@ function drawCurve(canvas, { respuesta = [], lut = [] }) {
   }
   ctx.fillStyle = '#57503F';
   ctx.font = '11px IBM Plex Mono, monospace';
-  ctx.fillText('rojo: respuesta medida · azul: curva de compensación', 8, 14);
+  ctx.fillText('red: measured response · blue: compensation curve', 8, 14);
 }
 
 export function mountPhase3(root) {
@@ -68,18 +68,18 @@ export function mountPhase3(root) {
   let aResult = null;
   const aOut = el('div');
   const cardA = el('div', { class: 'paper' },
-    el('h2', {}, 'Perfil de impresora'),
-    el('div', { class: 'hint' }, 'Mide la escala real de tu impresora, su respuesta tonal y el tamaño mínimo fiable de marcadores y QRs.'),
-    el('div', { class: 'row' }, field('Papel', aPaper), field('DPI', aDpi)),
+    el('h2', {}, 'Printer profile'),
+    el('div', { class: 'hint' }, 'Measures your printer’s real scale, its tonal response and the minimum reliable marker/QR sizes.'),
+    el('div', { class: 'row' }, field('Paper', aPaper), field('DPI', aDpi)),
     el('button', {
       class: 'btn ghost small', onclick: async () => {
         const png = await run('printer_test_png', { paper: aPaper.value, dpi: parseInt(aDpi.value, 10) });
-        download(png, 'prueba_impresora.png', 'image/png');
-        toast('Imprime la página al 100 % (sin «ajustar a página»), escanéala completa y súbela aquí.', 'ok');
+        download(png, 'printer_test.png', 'image/png');
+        toast('Print the page at 100 % (no “fit to page”), scan it whole and drop it here.', 'ok');
       },
-    }, '⬇ Descargar página de prueba'),
+    }, '⬇ Download test page'),
     el('div', { style: 'margin-top:10px' }, dropzone({
-      label: 'Suelta el ESCANEO de la página impresa',
+      label: 'Drop the SCAN of the printed page',
       accept: 'image/*,.tif,.tiff',
       onFiles: async ([f]) => {
         try {
@@ -91,16 +91,16 @@ export function mountPhase3(root) {
           aResult = JSON.parse(res);
           aOut.replaceChildren(
             el('div', { class: 'allok-box', style: 'color:inherit' },
-              el('div', {}, `Escala medida: ${(aResult.scale_x * 100).toFixed(2)} % × ${(aResult.scale_y * 100).toFixed(2)} %`),
-              el('div', {}, `Marcador mínimo detectado: ${aResult.marker_min_mm ?? '—'} mm → usa ≥ ${aResult.marker_recomendado_mm} mm`),
-              el('div', {}, `QR mínimo legible: ${aResult.qr_min_mm ?? '—'} mm → usa ≥ ${aResult.qr_recomendado_mm} mm`),
+              el('div', {}, `Measured scale: ${(aResult.scale_x * 100).toFixed(2)} % × ${(aResult.scale_y * 100).toFixed(2)} %`),
+              el('div', {}, `Smallest detected marker: ${aResult.marker_min_mm ?? '—'} mm → use ≥ ${aResult.marker_recomendado_mm} mm`),
+              el('div', {}, `Smallest readable QR: ${aResult.qr_min_mm ?? '—'} mm → use ≥ ${aResult.qr_recomendado_mm} mm`),
             ),
             aResult.notas?.length ? el('ul', { class: 'warnlist', style: 'color:#8a6d3b' }, aResult.notas.map((n) => el('li', {}, n))) : '',
           );
         } catch (e) { toast(String(e.message ?? e), 'err'); }
       },
     })),
-    field('DPI del escaneo (para medir la escala)', aScanDpi, 'El DPI al que escaneaste la página impresa.'),
+    field('Scan DPI (to measure the scale)', aScanDpi, 'The DPI you scanned the printed page at.'),
     aOut,
     profileSaver('impresora', () => aResult),
   );
@@ -108,31 +108,31 @@ export function mountPhase3(root) {
   // ── B. Curva de cianotipia ────────────────────────────────
   const bPaper = select(PAPERS, 'A4');
   const bDpi = numberInput(300, { min: 150, max: 600 });
-  const bTarget = select([['kamiru21', 'Tira de 21 parches (rápida)'], ['edn256', 'Carta EDN 2.2 — 256 tonos (fina)']], 'kamiru21');
+  const bTarget = select([['kamiru21', '21-patch strip (quick)'], ['edn256', 'EDN 2.2 chart — 256 tones (fine)']], 'kamiru21');
   const bInk = el('input', { type: 'color', value: '#000000' });
-  const bMirror = check('Espejada (como tus negativos reales)', true);
+  const bMirror = check('Mirrored (like your real negatives)', true);
   let bResult = null;
   const bOut = el('div');
   const bCanvas = el('canvas', { class: 'curveplot', width: 360, height: 240, style: 'width:100%; max-width:380px; margin-top:8px' });
   bCanvas.style.display = 'none';
   const cardB = el('div', { class: 'paper' },
-    el('h2', {}, 'Curva de cianotipia'),
-    el('div', { class: 'hint' }, 'Mide la respuesta real de TU proceso (impresora + acetato + química + sol) y construye la curva de compensación — método Easy Digital Negatives integrado.'),
-    el('div', { class: 'row' }, field('Papel', bPaper), field('DPI', bDpi)),
-    field('Carta', bTarget),
-    el('div', { class: 'row tight' }, field('Tinta del negativo', bInk), bMirror.label),
+    el('h2', {}, 'Cyanotype curve'),
+    el('div', { class: 'hint' }, 'Measures the real response of YOUR process (printer + film + chemistry + sun) and builds the compensation curve — Easy Digital Negatives method built in.'),
+    el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
+    field('Chart', bTarget),
+    el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
     el('button', {
       class: 'btn ghost small', onclick: async () => {
         const png = await run('cyan_strip_png', {
           paper: bPaper.value, dpi: parseInt(bDpi.value, 10), ink: bInk.value,
           mirror: bMirror.input.checked, target: bTarget.value,
         });
-        download(png, 'carta_cianotipia.png', 'image/png');
-        toast('Imprime en acetato al 100 %, expón tu cianotipia como siempre, revela, seca y escanea la COPIA AZUL (no el acetato).', 'ok');
+        download(png, 'cyanotype_chart.png', 'image/png');
+        toast('Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).', 'ok');
       },
-    }, '⬇ Descargar carta (negativo para acetato)'),
+    }, '⬇ Download chart (negative for film)'),
     el('div', { style: 'margin-top:10px' }, dropzone({
-      label: 'Suelta el ESCANEO de la copia azul',
+      label: 'Drop the SCAN of the blue print',
       accept: 'image/*,.tif,.tiff',
       onFiles: async ([f]) => {
         try {
@@ -147,7 +147,7 @@ export function mountPhase3(root) {
           drawCurve(bCanvas, { respuesta: bResult.respuesta, lut: bResult.lut });
           bOut.replaceChildren(
             el('div', { class: 'allok-box', style: 'color:inherit' },
-              `Rango dinámico medido: ${(bResult.rango_dinamico * 100).toFixed(0)} % · curva de 256 puntos construida.`),
+              `Measured dynamic range: ${(bResult.rango_dinamico * 100).toFixed(0)} % · 256-point curve built.`),
             bResult.notas?.length ? el('ul', { class: 'warnlist', style: 'color:#8a6d3b' }, bResult.notas.map((n) => el('li', {}, n))) : '',
           );
         } catch (e) { toast(String(e.message ?? e), 'err'); }
@@ -160,13 +160,13 @@ export function mountPhase3(root) {
   // ── C. ColorBlocker ───────────────────────────────────────
   const cPaper = select(PAPERS, 'A4');
   const cDpi = numberInput(300, { min: 150, max: 600 });
-  const cMirror = check('Espejada', true);
+  const cMirror = check('Mirrored', true);
   let cResult = null;
   const cOut = el('div');
   const cardC = el('div', { class: 'paper' },
     el('h2', {}, 'EDN ColorBlocker'),
-    el('div', { class: 'hint' }, '36 matices × 21 variantes: descubre qué color de tinta bloquea mejor el UV en TU impresora (el negro no siempre gana) y construye un degradado de 3 paradas.'),
-    el('div', { class: 'row' }, field('Papel', cPaper), field('DPI', cDpi)),
+    el('div', { class: 'hint' }, '36 hues × 21 variants: find which ink color blocks UV best on YOUR printer (black doesn’t always win) and build a 3-stop gradient.'),
+    el('div', { class: 'row' }, field('Paper', cPaper), field('DPI', cDpi)),
     cMirror.label,
     el('button', {
       class: 'btn ghost small', onclick: async () => {
@@ -174,11 +174,11 @@ export function mountPhase3(root) {
           paper: cPaper.value, dpi: parseInt(cDpi.value, 10), mirror: cMirror.input.checked,
         });
         download(png, 'colorblocker.png', 'image/png');
-        toast('Imprime en acetato al 100 % en MÁXIMA calidad, expón, revela, seca y escanea la copia azul.', 'ok');
+        toast('Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.', 'ok');
       },
-    }, '⬇ Descargar carta ColorBlocker'),
+    }, '⬇ Download ColorBlocker chart'),
     el('div', { style: 'margin-top:10px' }, dropzone({
-      label: 'Suelta el ESCANEO de la copia azul',
+      label: 'Drop the SCAN of the blue print',
       accept: 'image/*,.tif,.tiff',
       onFiles: async ([f]) => {
         try {
@@ -193,8 +193,8 @@ export function mountPhase3(root) {
           });
           cOut.replaceChildren(
             el('div', { class: 'allok-box', style: 'color:inherit' },
-              el('div', {}, 'Mejor bloqueador de UV: ', sw(cResult.mejor_color), el('code', {}, cResult.mejor_color)),
-              el('div', { style: 'margin-top:4px' }, 'Degradado (sombras → luces): ',
+              el('div', {}, 'Best UV blocker: ', sw(cResult.mejor_color), el('code', {}, cResult.mejor_color)),
+              el('div', { style: 'margin-top:4px' }, 'Gradient (shadows → highlights): ',
                 ...(cResult.stops ?? []).map((s) => sw(s[1]))),
             ),
             cResult.notas?.length ? el('ul', { class: 'warnlist', style: 'color:#8a6d3b' }, cResult.notas.map((n) => el('li', {}, n))) : '',
@@ -208,19 +208,19 @@ export function mountPhase3(root) {
 
   // ── exportar/importar perfiles ────────────────────────────
   const cardD = el('div', { class: 'paper' },
-    el('h2', {}, 'Tus perfiles y presets'),
-    el('div', { class: 'hint' }, 'Viven en este navegador. Exporta un JSON para llevarlos a otra máquina o guardarlos con el proyecto.'),
+    el('h2', {}, 'Your profiles & presets'),
+    el('div', { class: 'hint' }, 'They live in this browser. Export a JSON to move them to another machine or keep them with the project.'),
     el('div', { class: 'row' },
       el('button', {
         class: 'btn ghost small', onclick: () => {
-          download(new TextEncoder().encode(store.exportAll()), 'mxm_perfiles.json', 'application/json');
+          download(new TextEncoder().encode(store.exportAll()), 'mxm_profiles.json', 'application/json');
         },
-      }, '⬇ Exportar todo'),
+      }, '⬇ Export everything'),
       dropzone({
-        label: 'Importar perfiles (JSON)', accept: '.json',
+        label: 'Import profiles (JSON)', accept: '.json',
         onFiles: async ([f]) => {
-          try { store.importAll(await f.text()); toast('Perfiles importados.', 'ok'); }
-          catch (e) { toast(`No se pudo importar: ${e.message}`, 'err'); }
+          try { store.importAll(await f.text()); toast('Profiles imported.', 'ok'); }
+          catch (e) { toast(`Import failed: ${e.message}`, 'err'); }
         },
       }),
     ),

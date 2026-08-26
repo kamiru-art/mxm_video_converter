@@ -13,7 +13,7 @@ import {
 export async function probeVideo(file) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
   const track = await input.getPrimaryVideoTrack();
-  if (!track) throw new Error('El archivo no tiene pista de video (o el formato no es compatible).');
+  if (!track) throw new Error('The file has no video track (or the format is not supported).');
   const duration = await input.computeDuration();
   let fps = 0;
   try {
@@ -86,7 +86,7 @@ function canvasToBlob(canvas, type) {
  * Devuelve {bytes, mime, ext}.
  */
 export async function buildVideo(frameGetters, fps, onProgress) {
-  if (!frameGetters.length) throw new Error('No hay fotogramas para armar el video.');
+  if (!frameGetters.length) throw new Error('There are no frames to build the video.');
   // dimensiones del primero, normalizadas a pares (requisito H.264)
   const first = await frameGetters[0]();
   const w = Math.max(2, Math.floor(first.width / 2) * 2);
@@ -102,7 +102,7 @@ export async function buildVideo(frameGetters, fps, onProgress) {
     const ok = await getFirstEncodableVideoCodec([c.codec], { width: w, height: h });
     if (ok) { chosen = c; break; }
   }
-  if (!chosen) throw new Error('Este navegador no puede codificar video (WebCodecs no disponible). Prueba Chrome/Edge, o descarga los fotogramas y arma el video con otra herramienta.');
+  if (!chosen) throw new Error('This browser cannot encode video (WebCodecs unavailable). Try Chrome/Edge, or download the frames and assemble the video with another tool.');
 
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext('2d');

@@ -79,26 +79,26 @@ export function mountPhase4(root) {
   function refresh() {
     const l = currentLayout();
     layoutInfo.textContent = l
-      ? `Layout: ${(l.proyecto || 'proyecto')} · ${l.timeline?.length || 'sin'} posiciones en la línea de tiempo`
-      : 'Carga un layout.json (o procesa escaneos en la fase ②).';
+      ? `Layout: ${(l.proyecto || 'project')} · ${l.timeline?.length || 'no'} positions in the timeline`
+      : 'Load a layout.json (or process scans in phase ②).';
     if (l?.video?.fps_extraccion) fpsIn.value = l.video.fps_extraccion;
     const disponibles = availableMap();
-    stateInfo.textContent = `${disponibles.size} fotogramas disponibles (fase ② en memoria + los que sueltes aquí).`;
+    stateInfo.textContent = `${disponibles.size} frames available (phase ② in memory + whatever you drop here).`;
     if (l) {
       const { files, missing } = framesFromTimeline(l, disponibles);
       missingBox.replaceChildren(missing.length
-        ? el('div', { class: 'missing-box' }, el('strong', {}, `Faltan ${missing.length}: `), missing.slice(0, 40).join(', ') + (missing.length > 40 ? '…' : ''))
-        : el('div', { class: 'allok-box' }, `🎬 Las ${files.length} posiciones del video tienen fotograma.`));
+        ? el('div', { class: 'missing-box' }, el('strong', {}, `Missing ${missing.length}: `), missing.slice(0, 40).join(', ') + (missing.length > 40 ? '…' : ''))
+        : el('div', { class: 'allok-box' }, `🎬 All ${files.length} video positions have a frame.`));
     }
   }
 
-  const buildBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:10px' }, '🎬 Reconstruir video');
+  const buildBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:10px' }, '🎬 Rebuild video');
   buildBtn.addEventListener('click', async () => {
     const l = currentLayout();
-    if (!l) { toast('No hay layout.', 'err'); return; }
+    if (!l) { toast('No layout.', 'err'); return; }
     const { files, missing } = framesFromTimeline(l, availableMap());
-    if (!files.length) { toast('No hay fotogramas para armar el video.', 'err'); return; }
-    if (missing.length && !confirm(`Faltan ${missing.length} fotogramas; el video saltará esas posiciones. ¿Continuar?`)) return;
+    if (!files.length) { toast('There are no frames to build the video.', 'err'); return; }
+    if (missing.length && !confirm(`${missing.length} frames are missing; the video will skip those positions. Continue?`)) return;
     buildBtn.disabled = true;
     prog.show();
     try {
@@ -109,15 +109,15 @@ export function mountPhase4(root) {
         return createImageBitmap(f.data);
       });
       const fps = parseFloat(fpsIn.value) || 12;
-      const out = await buildVideo(getters, fps, (i, n) => prog.set(i / n, `codificando ${i}/${n}`));
+      const out = await buildVideo(getters, fps, (i, n) => prog.set(i / n, `encoding ${i}/${n}`));
       const name = `${sanitizeLabel(l.proyecto || 'video')}.${out.ext}`;
       download(out.bytes, name, out.mime);
       preview.src = URL.createObjectURL(new Blob([out.bytes], { type: out.mime }));
       preview.style.display = '';
-      toast(`Video reconstruido (${out.ext.toUpperCase()}, ${fps} fps).`, 'ok');
+      toast(`Video rebuilt (${out.ext.toUpperCase()}, ${fps} fps).`, 'ok');
     } catch (e) {
       console.error(e);
-      toast(`No se pudo codificar: ${e.message ?? e}`, 'err');
+      toast(`Encoding failed: ${e.message ?? e}`, 'err');
     } finally {
       buildBtn.disabled = false;
       prog.hide();
@@ -125,10 +125,10 @@ export function mountPhase4(root) {
   });
 
   const paper = el('div', { class: 'paper' },
-    el('h2', {}, '④ Video final'),
-    el('div', { class: 'hint' }, 'Reconstruye la película con los fotogramas procesados en su orden original, reutilizando los dibujos deduplicados en todas sus posiciones.'),
+    el('h2', {}, '④ Final video'),
+    el('div', { class: 'hint' }, 'Rebuilds the film with the processed frames in their original order, reusing deduplicated drawings in all their positions.'),
     dropzone({
-      label: 'Layout.json del proyecto (opcional si vienes de la fase ②)',
+      label: 'Project layout.json (optional if you come from phase ②)',
       accept: '.json',
       onFiles: async ([f]) => {
         try { layout = JSON.parse(await f.text()); refresh(); }
@@ -136,10 +136,10 @@ export function mountPhase4(root) {
       },
     }),
     layoutInfo,
-    el('h3', {}, 'Fotogramas'),
+    el('h3', {}, 'Frames'),
     dropzone({
-      label: 'Añadir fotogramas procesados desde archivos (opcional)',
-      sublabel: 'Si procesaste los escaneos en otra sesión, suelta aquí la carpeta de fotogramas.',
+      label: 'Add processed frames from files (optional)',
+      sublabel: 'If you processed the scans in another session, drop the frames folder here.',
       accept: 'image/*,.tif,.tiff', multiple: true,
       onFiles: (files) => {
         for (const f of files) extraFrames.set(sanitizeLabel(f.name.replace(/\.[^.]+$/, '')), f);
@@ -148,15 +148,15 @@ export function mountPhase4(root) {
     }),
     stateInfo,
     missingBox,
-    field('Fotogramas por segundo', fpsIn, 'Se lee del proyecto; puedes cambiarlo.'),
+    field('Frames per second', fpsIn, 'Read from the project; you can change it.'),
     buildBtn,
     prog.root,
   );
 
   const bench = el('div', { class: 'bench' },
-    el('h2', {}, 'Resultado'),
+    el('h2', {}, 'Result'),
     el('div', { class: 'hint', style: 'color:var(--cian-300)' },
-      'El video se codifica en tu navegador (H.264 MP4 si tu navegador puede; WebM si no). Para códecs de edición (ProRes), usa los fotogramas sueltos en tu editor.'),
+      'The video is encoded in your browser (H.264 MP4 when supported; WebM otherwise). For editing codecs (ProRes), use the individual frames in your editor.'),
     preview,
   );
 

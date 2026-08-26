@@ -32,7 +32,7 @@ fn err(e: impl std::fmt::Display) -> JsValue {
 }
 
 fn parse_settings(settings_json: &str) -> Result<Settings, JsValue> {
-    serde_json::from_str(settings_json).map_err(|e| err(format!("Ajustes inválidos: {e}")))
+    serde_json::from_str(settings_json).map_err(|e| err(format!("Invalid settings: {e}")))
 }
 
 #[derive(serde::Deserialize)]
@@ -49,14 +49,14 @@ struct FrameMeta {
 
 fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsValue> {
     let metas: Vec<FrameMeta> =
-        serde_json::from_str(meta_json).map_err(|e| err(format!("Meta de frames inválida: {e}")))?;
+        serde_json::from_str(meta_json).map_err(|e| err(format!("Invalid frame metadata: {e}")))?;
     let mut out = Vec::with_capacity(metas.len());
     for m in metas {
         let rgba = if m.offset >= 0 {
             let start = m.offset as usize;
             let len = m.w * m.h * 4;
             if start + len > pixels.len() {
-                return Err(err("Buffer de píxeles más corto que el meta"));
+                return Err(err("Pixel buffer shorter than the metadata"));
             }
             Some(pixels[start..start + len].to_vec())
         } else {
@@ -115,7 +115,7 @@ pub fn render_sheet(
     let l = sheet::build_layout(&s, (first_w, first_h)).map_err(err)?;
     let frames = parse_frames(meta_json, pixels)?;
     let labels: Vec<String> =
-        serde_json::from_str(labels_json).map_err(|e| err(format!("Etiquetas inválidas: {e}")))?;
+        serde_json::from_str(labels_json).map_err(|e| err(format!("Invalid labels: {e}")))?;
     let res = sheet::render_page(&s, &l, &frames, &labels, sheet_num as i64, render);
     let out = Object::new();
     if let Some(mut img) = res.image {
@@ -174,7 +174,7 @@ pub fn dedup_hashes(meta_json: &str, pixels: &[u8]) -> Result<String, JsValue> {
     let frames = parse_frames(meta_json, pixels)?;
     let mut out = Vec::new();
     for f in frames {
-        let rgba = f.rgba.ok_or_else(|| err("Frame sin píxeles"))?;
+        let rgba = f.rgba.ok_or_else(|| err("Frame without pixels"))?;
         // aplanar sobre blanco (lo que ve la impresión)
         let mut rgb = Vec::with_capacity(f.w * f.h * 3);
         for p in rgba.chunks_exact(4) {
@@ -435,6 +435,6 @@ impl Pdf {
     }
 
     pub fn finish(&mut self) -> Result<Vec<u8>, JsValue> {
-        self.inner.take().map(|b| b.finish()).ok_or_else(|| err("PDF ya finalizado"))
+        self.inner.take().map(|b| b.finish()).ok_or_else(|| err("PDF already finalized"))
     }
 }

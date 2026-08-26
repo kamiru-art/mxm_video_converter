@@ -9,9 +9,9 @@ import { generateSheets, resolveCyanCurve, packThumbs, packImageData, settingsFo
 import * as store from './store.js';
 import { makeZip } from './zip.js';
 
-const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', 'Carta (Letter)', 'Oficio (Legal)', 'Tabloide (Tabloid)', 'Personalizado'];
-const ORIENTATIONS = ['Mejor ajuste (automático)', 'Vertical', 'Horizontal'];
-const CORNERS = ['Inferior derecha', 'Inferior izquierda', 'Superior derecha', 'Superior izquierda'];
+const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', ['Carta (Letter)', 'Letter'], ['Oficio (Legal)', 'Legal'], ['Tabloide (Tabloid)', 'Tabloid'], ['Personalizado', 'Custom']];
+const ORIENTATIONS = [['Mejor ajuste (automático)', 'Best fit (automatic)'], 'Vertical', 'Horizontal'];
+const CORNERS = [['Inferior derecha', 'Bottom right'], ['Inferior izquierda', 'Bottom left'], ['Superior derecha', 'Top right'], ['Superior izquierda', 'Top left']];
 
 export function defaultSettings() {
   return {
@@ -97,7 +97,7 @@ export function computePlan() {
 async function computeDedup(statusEl) {
   const positions = selectIndices(project.frames.length, ph1.include, ph1.exclude);
   if (!positions.length) { ph1.dedupGroups = null; return; }
-  statusEl.textContent = 'analizando dibujos repetidos…';
+  statusEl.textContent = 'analyzing repeated drawings…';
   const thumbs = [];
   for (const pos of positions) thumbs.push(await ensureThumb(pos - 1));
   const { meta, pixels } = packThumbs(thumbs);
@@ -106,8 +106,8 @@ async function computeDedup(statusEl) {
   ph1.dedupGroups = groups;
   const dups = groups.rep_of.filter((r, i) => r !== i).length;
   statusEl.textContent = dups
-    ? `↺ ${dups} fotograma(s) repetidos: se imprimen una sola vez y se reutilizan al armar el video.`
-    : 'sin dibujos repetidos en la selección.';
+    ? `↺ ${dups} repeated frame(s): printed once and reused when the video is rebuilt.`
+    : 'no repeated drawings in the selection.';
 }
 
 // ── Interfaz ──────────────────────────────────────────────────
@@ -116,20 +116,20 @@ export function mountPhase1(root) {
   const s = ph1.settings;
 
   // ---------- panel de origen ----------
-  const framesInfo = el('div', { class: 'hint' }, 'Sin fotogramas todavía.');
+  const framesInfo = el('div', { class: 'hint' }, 'No frames yet.');
   const thumbsGrid = el('div', { class: 'thumbs' });
   const extractProg = progressBar();
   extractProg.hide();
 
   const startIn = numberInput(0, { min: 0, step: 0.1 });
-  const endIn = el('input', { type: 'number', min: 0, step: 0.1, placeholder: 'fin' });
+  const endIn = el('input', { type: 'number', min: 0, step: 0.1, placeholder: 'end' });
   const fpsIn = el('input', { type: 'number', min: 0, step: 0.1, value: 4, placeholder: 'fps' });
-  const allFrames = check('TODOS los fotogramas (cuadro a cuadro)', false);
+  const allFrames = check('ALL frames (frame by frame)', false);
 
   let pendingVideo = null;
   const videoInfo = el('div', { class: 'hint' });
 
-  const extractBtn = el('button', { class: 'btn blue small', disabled: '' }, 'Extraer fotogramas');
+  const extractBtn = el('button', { class: 'btn blue small', disabled: '' }, 'Extract frames');
   extractBtn.addEventListener('click', async () => {
     if (!pendingVideo) return;
     extractBtn.disabled = true;
@@ -146,10 +146,10 @@ export function mountPhase1(root) {
         onProgress: (i, est) => extractProg.set(est ? i / est : 0.5, `fotograma ${i}${est ? ` de ~${est}` : ''}`),
       });
       project.videoMeta = { fps_extraccion: meta.fps, origen: meta.origen };
-      toast(`${meta.count} fotogramas extraídos sin pérdida (PNG).`, 'ok');
+      toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
       afterFramesChanged();
     } catch (e) {
-      toast(`No se pudo extraer: ${e.message}`, 'err');
+      toast(`Extraction failed: ${e.message}`, 'err');
     } finally {
       extractBtn.disabled = false;
       extractProg.hide();
@@ -157,8 +157,8 @@ export function mountPhase1(root) {
   });
 
   const dz = dropzone({
-    label: 'Suelta aquí tu video o una carpeta de imágenes',
-    sublabel: 'MP4 / MOV / WebM / MKV — o PNG, JPG, TIFF, WebP (también de 16 bits). Nada se sube a ningún sitio.',
+    label: 'Drop your video or a folder of images here',
+    sublabel: 'MP4 / MOV / WebM / MKV — or PNG, JPG, TIFF, WebP (16-bit too). Nothing gets uploaded anywhere.',
     accept: 'video/*,image/*,.tif,.tiff',
     multiple: true,
     onFiles: async (fileList) => {
@@ -168,7 +168,7 @@ export function mountPhase1(root) {
         pendingVideo = videos[0];
         try {
           const p = await probeVideo(pendingVideo);
-          videoInfo.textContent = `${pendingVideo.name} — ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}. Elige rango/fps y pulsa «Extraer».`;
+          videoInfo.textContent = `${pendingVideo.name} — ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}. Pick range/fps and press “Extract”.`;
           endIn.value = p.duration.toFixed(1);
           extractBtn.disabled = false;
         } catch (e) {
@@ -193,27 +193,27 @@ export function mountPhase1(root) {
           }
           project.frames.push({ name: f.name, blob: f, thumb: null, w, h, hasAlpha, needsWasmDecode });
         }
-        project.videoMeta = { origen: 'imágenes', fps_extraccion: 12 };
-        toast(`${project.frames.length} imágenes cargadas.`, 'ok');
+        project.videoMeta = { origen: 'images', fps_extraccion: 12 };
+        toast(`${project.frames.length} images loaded.`, 'ok');
         afterFramesChanged();
       }
     },
   });
 
   // ---------- selección, nombres, dedup ----------
-  const includeIn = el('input', { type: 'text', placeholder: 'ej. 1, 3-5 (vacío = todos)' });
-  const excludeIn = el('input', { type: 'text', placeholder: 'ej. 8, 12' });
+  const includeIn = el('input', { type: 'text', placeholder: 'e.g. 1, 3-5 (empty = all)' });
+  const excludeIn = el('input', { type: 'text', placeholder: 'e.g. 8, 12' });
   includeIn.addEventListener('change', () => { ph1.include = includeIn.value; afterFramesChanged(); });
   excludeIn.addEventListener('change', () => { ph1.exclude = excludeIn.value; afterFramesChanged(); });
 
-  const namingSel = select([['auto', 'Autoincremental (abc_001…)'], ['original', 'Nombre del archivo original']], ph1.naming);
-  const numberingSel = select([['continua', 'Continua (1, 2, 3…)'], ['original', 'Original (posición en el video)']], ph1.numbering);
-  const pageNumberingSel = select([['continua', 'Continua (1, 2, 3…)'], ['original', 'Original (según los fotogramas)']], ph1.pageNumbering);
+  const namingSel = select([['auto', 'Auto-increment (abc_001…)'], ['original', 'Original file name']], ph1.naming);
+  const numberingSel = select([['continua', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
+  const pageNumberingSel = select([['continua', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
   namingSel.addEventListener('change', () => { ph1.naming = namingSel.value; refreshPreview(); });
   numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value; refreshPreview(); });
   pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value; refreshPreview(); });
 
-  const dedupCheck = check('Detectar dibujos repetidos (imprimir una sola vez)', ph1.dedupOn);
+  const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
   const dedupStatus = el('div', { class: 'hint' });
   dedupCheck.input.addEventListener('change', async () => {
     ph1.dedupOn = dedupCheck.input.checked;
@@ -261,8 +261,8 @@ export function mountPhase1(root) {
   function persist() { store.saveSettings(s); }
 
   const customRow = el('div', { class: 'row' },
-    field('Ancho (mm)', bindNum('custom_w_mm', numberInput(210, { min: 30 }))),
-    field('Alto (mm)', bindNum('custom_h_mm', numberInput(297, { min: 30 }))),
+    field('Width (mm)', bindNum('custom_w_mm', numberInput(210, { min: 30 }))),
+    field('Height (mm)', bindNum('custom_h_mm', numberInput(297, { min: 30 }))),
   );
   const paperSel = bindSel('paper', select(PAPERS, s.paper));
   const syncCustom = () => { customRow.style.display = paperSel.value === 'Personalizado' ? '' : 'none'; };
@@ -270,8 +270,8 @@ export function mountPhase1(root) {
   syncCustom();
 
   // ---------- cianotipia ----------
-  const modeCheck = check('MODO CIANOTIPIA: generar negativos para acetato', String(s.mode).startsWith('cian'));
-  const cyanBox = el('fieldset', {}, el('legend', {}, '☀️ Cianotipia'));
+  const modeCheck = check('CYANOTYPE MODE: generate negatives for transparency film', String(s.mode).startsWith('cian'));
+  const cyanBox = el('fieldset', {}, el('legend', {}, '☀️ Cyanotype'));
   modeCheck.input.addEventListener('change', () => {
     s.mode = modeCheck.input.checked ? 'cianotipia' : 'normal';
     cyanBody.style.display = modeCheck.input.checked ? '' : 'none';
@@ -279,18 +279,18 @@ export function mountPhase1(root) {
     persist(); refreshPreview();
   });
 
-  const curveProfiles = () => [['', '(sin curva: lineal)'], ...store.listProfiles('cianotipia').map((n) => [n, n])];
+  const curveProfiles = () => [['', '(no curve: linear)'], ...store.listProfiles('cianotipia').map((n) => [n, n])];
   const curveSel = select(curveProfiles(), '');
   curveSel.addEventListener('change', () => {
     const p = curveSel.value ? store.loadProfile('cianotipia', curveSel.value) : null;
     s.cyan_curve = p?.lut ?? null;
     ph1.cyanResponse = p?.respuesta ?? null;
     if (p?.ink && p.ink !== s.cyan_ink && !s.cyan_ink_stops) {
-      toast(`Ojo: esta curva se midió con la tinta ${p.ink} y ahora usas ${s.cyan_ink}.`);
+      toast(`Heads up: this curve was measured with ink ${p.ink} and you are now using ${s.cyan_ink}.`);
     }
     persist(); refreshPreview();
   });
-  const inkProfiles = () => [['', '(tinta simple)'], ...store.listProfiles('cianotipia_color').map((n) => [n, n])];
+  const inkProfiles = () => [['', '(plain ink)'], ...store.listProfiles('cianotipia_color').map((n) => [n, n])];
   const inkProfSel = select(inkProfiles(), '');
   inkProfSel.addEventListener('change', () => {
     const p = inkProfSel.value ? store.loadProfile('cianotipia_color', inkProfSel.value) : null;
@@ -298,7 +298,7 @@ export function mountPhase1(root) {
       s.cyan_ink_stops = p.stops ?? null;
       s.cyan_ink = p.mejor_color ?? s.cyan_ink;
       if (p.mejor_color) s.cyan_block_color = p.mejor_color;
-      toast(`Degradado ColorBlocker aplicado (${p.mejor_color ?? ''}).`, 'ok');
+      toast(`ColorBlocker gradient applied (${p.mejor_color ?? ''}).`, 'ok');
     } else {
       s.cyan_ink_stops = null;
     }
@@ -306,29 +306,29 @@ export function mountPhase1(root) {
   });
 
   const cyanBody = el('div', {},
-    bindCheck('cyan_mirror', check('Espejar (impresión emulsión-contra-emulsión)', s.cyan_mirror)),
+    bindCheck('cyan_mirror', check('Mirror (emulsion-to-emulsion printing)', s.cyan_mirror)),
     el('div', { class: 'row' },
-      field('Color de tinta', bindColor('cyan_ink', el('input', { type: 'color' }))),
-      field('Perfil de color (ColorBlocker)', inkProfSel),
+      field('Ink color', bindColor('cyan_ink', el('input', { type: 'color' }))),
+      field('Ink color profile (ColorBlocker)', inkProfSel),
     ),
-    field('Curva de compensación (perfil de cianotipia)', curveSel,
-      'Se calibra en la fase ③. Sin curva, densidad = brillo original.'),
+    field('Compensation curve (cyanotype profile)', curveSel,
+      'Calibrated in phase ③. Without a curve, density = original brightness.'),
     el('div', { class: 'row' },
-      field('Fuerza de la curva (%)', bindNum('cyan_curve_strength', numberInput(100, { min: 0, max: 100 }))),
-      field('Adaptación al contenido (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 }))),
-      field('Micro-contraste (%)', bindNum('cyan_clarity', numberInput(0, { min: 0, max: 100 }))),
+      field('Curve strength (%)', bindNum('cyan_curve_strength', numberInput(100, { min: 0, max: 100 }))),
+      field('Content adaptation (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 }))),
+      field('Micro-contrast (%)', bindNum('cyan_clarity', numberInput(0, { min: 0, max: 100 }))),
     ),
-    field('Fondo del negativo', bindSel('cyan_bg', select([['ahorro', 'AHORRO de tinta (solo halos entintados)'], ['completo', 'Completo (todo el fondo entintado)']], s.cyan_bg))),
+    field('Negative background', bindSel('cyan_bg', select([['ahorro', 'INK-SAVING (inked halos only)'], ['completo', 'Full (entire background inked)']], s.cyan_bg))),
     el('div', { class: 'row' },
-      field('Halo entintado (mm)', bindNum('cyan_halo_mm', numberInput(5, { min: 0, step: 0.5 }))),
-      field('Borde bloqueador (mm)', bindNum('cyan_frame_border_mm', numberInput(0.8, { min: 0, step: 0.1 }))),
+      field('Inked halo (mm)', bindNum('cyan_halo_mm', numberInput(5, { min: 0, step: 0.5 }))),
+      field('Blocking border (mm)', bindNum('cyan_frame_border_mm', numberInput(0.8, { min: 0, step: 0.1 }))),
     ),
   );
   cyanBody.style.display = String(s.mode).startsWith('cian') ? '' : 'none';
   cyanBox.append(modeCheck.label, cyanBody);
 
   // ---------- perfil de impresora ----------
-  const printerProfiles = () => [['', '(sin compensación)'], ...store.listProfiles('impresora').map((n) => [n, n])];
+  const printerProfiles = () => [['', '(no compensation)'], ...store.listProfiles('impresora').map((n) => [n, n])];
   const printerSel = select(printerProfiles(), '');
   printerSel.addEventListener('change', () => {
     const p = printerSel.value ? store.loadProfile('impresora', printerSel.value) : null;
@@ -338,19 +338,19 @@ export function mountPhase1(root) {
     if (p?.qr_recomendado_mm) s.qr_size_mm = Math.max(s.qr_size_mm, p.qr_recomendado_mm);
     binds.forEach((b) => b());
     persist(); refreshPreview();
-    if (p) toast(`Perfil de impresora aplicado (escala ${(p.scale_x * 100).toFixed(1)} % × ${(p.scale_y * 100).toFixed(1)} %).`, 'ok');
+    if (p) toast(`Printer profile applied (scale ${(p.scale_x * 100).toFixed(1)} % × ${(p.scale_y * 100).toFixed(1)} %).`, 'ok');
   });
 
   // ---------- presets ----------
-  const presetSel = select([['', '(elegir preset…)'], ...store.listProfiles('presets').map((n) => [n, n])], '');
-  const presetName = el('input', { type: 'text', placeholder: 'nombre del preset' });
+  const presetSel = select([['', '(choose a preset…)'], ...store.listProfiles('presets').map((n) => [n, n])], '');
+  const presetName = el('input', { type: 'text', placeholder: 'preset name' });
   const refreshPresetList = () => {
-    presetSel.replaceChildren(...[['', '(elegir preset…)'], ...store.listProfiles('presets').map((n) => [n, n])]
+    presetSel.replaceChildren(...[['', '(choose a preset…)'], ...store.listProfiles('presets').map((n) => [n, n])]
       .map(([v, l]) => el('option', { value: v }, l)));
   };
   const presetsRow = el('div', {},
     el('div', { class: 'row tight' },
-      field('Presets guardados', presetSel),
+      field('Saved presets', presetSel),
       el('button', {
         class: 'btn ghost small', onclick: () => {
           if (!presetSel.value) return;
@@ -360,18 +360,18 @@ export function mountPhase1(root) {
             Object.assign(ph1, p.fase ?? {});
             binds.forEach((b) => b());
             persist(); refreshPreview();
-            toast(`Preset «${presetSel.value}» cargado.`, 'ok');
+            toast(`Preset “${presetSel.value}” loaded.`, 'ok');
           }
         },
-      }, 'Cargar'),
+      }, 'Load'),
       el('button', {
         class: 'btn danger small', onclick: () => {
           if (presetSel.value) { store.deleteProfile('presets', presetSel.value); refreshPresetList(); }
         },
-      }, 'Borrar'),
+      }, 'Delete'),
     ),
     el('div', { class: 'row tight' },
-      field('Guardar ajustes actuales como', presetName),
+      field('Save current settings as', presetName),
       el('button', {
         class: 'btn ghost small', onclick: () => {
           const name = presetName.value.trim();
@@ -381,9 +381,9 @@ export function mountPhase1(root) {
             fase: { naming: ph1.naming, numbering: ph1.numbering, pageNumbering: ph1.pageNumbering, dedupOn: ph1.dedupOn },
           });
           refreshPresetList();
-          toast(`Preset «${name}» guardado.`, 'ok');
+          toast(`Preset “${name}” saved.`, 'ok');
         },
-      }, 'Guardar'),
+      }, 'Save'),
     ),
   );
 
@@ -391,10 +391,10 @@ export function mountPhase1(root) {
   const genProg = progressBar();
   genProg.hide();
   const warnBox = el('ul', { class: 'warnlist' });
-  const genBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:8px' }, '🖨️ Generar hojas (ZIP: PNG + PDF + layout.json)');
+  const genBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:8px' }, '🖨️ Generate sheets (ZIP: PNG + PDF + layout.json)');
   genBtn.addEventListener('click', async () => {
     const plan = computePlan();
-    if (!plan.printed.length) { toast('No hay fotogramas que imprimir.', 'err'); return; }
+    if (!plan.printed.length) { toast('There are no frames to print.', 'err'); return; }
     genBtn.disabled = true;
     genProg.show();
     try {
@@ -419,13 +419,13 @@ export function mountPhase1(root) {
       });
       project.layoutJson = out.layoutJson;
       warnBox.replaceChildren(...out.avisos.map((a) => el('li', {}, a)));
-      genProg.set(1, 'empaquetando ZIP…');
-      const zip = await makeZip(out.files, (i, n) => genProg.set(1, `empaquetando ${i}/${n}`));
+      genProg.set(1, 'packing ZIP…');
+      const zip = await makeZip(out.files, (i, n) => genProg.set(1, `packing ${i}/${n}`));
       download(zip, `${sanitizeLabel(s.out_name || 'hojas')}.zip`, 'application/zip');
-      toast(`Listo: ${out.numPages} hoja(s). Imprime al 100 % (sin «ajustar a página»).`, 'ok');
+      toast(`Done: ${out.numPages} sheet(s). Print at 100 % (no “fit to page”).`, 'ok');
     } catch (e) {
       console.error(e);
-      toast(`Error al generar: ${e.message ?? e}`, 'err');
+      toast(`Generation failed: ${e.message ?? e}`, 'err');
     } finally {
       genBtn.disabled = false;
       genProg.hide();
@@ -433,13 +433,13 @@ export function mountPhase1(root) {
   });
 
   // ---------- vista previa ----------
-  const previewImg = el('img', { alt: 'Vista previa de la hoja', style: 'display:none' });
+  const previewImg = el('img', { alt: 'Sheet preview', style: 'display:none' });
   previewImg.addEventListener('load', () => { previewImg.style.display = ''; });
   const previewInfo = el('div', { class: 'progress-note', style: 'margin-top:8px; text-align:center' });
   const prevBtn = el('button', { onclick: () => { ph1.previewPage--; refreshPreview(); } }, '‹');
   const nextBtn = el('button', { onclick: () => { ph1.previewPage++; refreshPreview(); } }, '›');
   const pageLabel = el('span', {}, '—');
-  const simulateToggle = check('Simular copia azul final', false);
+  const simulateToggle = check('Simulate final blue print', false);
   simulateToggle.input.addEventListener('change', () => { ph1.previewSimulate = simulateToggle.input.checked; refreshPreview(); });
   simulateToggle.label.style.color = 'var(--cian-200)';
   simulateToggle.label.parentElement;
@@ -481,8 +481,8 @@ export function mountPhase1(root) {
         if (old) URL.revokeObjectURL(old);
       }
       const info = JSON.parse(await run('compute_layout', { settings: settingsForCore(settingsPrev), firstW: first.w, firstH: first.h }));
-      pageLabel.textContent = `hoja ${ph1.previewPage + 1} / ${plan.numPages}`;
-      previewInfo.textContent = `${info.landscape ? 'horizontal' : 'vertical'} · cuadrícula ${info.cols}×${info.rows}${info.grid_swapped ? ' (intercambiada por mejor ajuste)' : ''} · ${plan.printed.length} frames en ${plan.numPages} hoja(s)`;
+      pageLabel.textContent = `sheet ${ph1.previewPage + 1} / ${plan.numPages}`;
+      previewInfo.textContent = `${info.landscape ? 'landscape' : 'portrait'} · grid ${info.cols}×${info.rows}${info.grid_swapped ? ' (swapped by best fit)' : ''} · ${plan.printed.length} frames on ${plan.numPages} sheet(s)`;
       warnBox.replaceChildren(...(info.avisos ?? []).map((a) => el('li', {}, a)));
     } catch (e) {
       console.error('preview', e);
@@ -508,7 +508,7 @@ export function mountPhase1(root) {
       thumbsGrid.append(el('div', { class: `thumb${dupSet.has(k) ? ' dup' : ''}` }, img,
         el('div', { class: 'tag' }, plan.rawLabels[k])));
     }
-    framesInfo.textContent = `${project.frames.length} fotogramas cargados · ${plan.positions.length} seleccionados · ${plan.printed.length} a imprimir`;
+    framesInfo.textContent = `${project.frames.length} frames loaded · ${plan.positions.length} selected · ${plan.printed.length} to print`;
   }
 
   async function afterFramesChanged() {
@@ -528,84 +528,84 @@ export function mountPhase1(root) {
 
   // ---------- montaje ----------
   const paper = el('div', { class: 'paper' },
-    el('h2', {}, '① Generar hojas de contacto'),
-    el('div', { class: 'hint' }, 'De un video (o imágenes) a hojas imprimibles con marcadores de registro.'),
+    el('h2', {}, '① Generate contact sheets'),
+    el('div', { class: 'hint' }, 'From a video (or images) to printable sheets with registration markers.'),
     dz, videoInfo,
     el('div', { class: 'row tight', style: 'margin-top:8px' },
-      field('Inicio (s)', startIn), field('Fin (s)', endIn), field('fps', fpsIn),
+      field('Start (s)', startIn), field('End (s)', endIn), field('fps', fpsIn),
     ),
     allFrames.label,
     extractBtn, extractProg.root,
 
-    el('h3', {}, 'Selección y nombres'),
+    el('h3', {}, 'Selection & names'),
     el('div', { class: 'row' },
-      field('Incluir fotogramas', includeIn), field('Excluir', excludeIn),
+      field('Include frames', includeIn), field('Exclude', excludeIn),
     ),
-    field('Etiquetas', namingSel),
+    field('Labels', namingSel),
     el('div', { class: 'row' },
-      field('Nombre base', bindText('base_name', el('input', { type: 'text' }))),
-      field('Separador', bindText('separator', el('input', { type: 'text' }))),
-      field('Dígitos', bindNum('leading_zeros', numberInput(3, { min: 1, max: 8 }), { integer: true })),
-      field('Desde', bindNum('start_index', numberInput(1, { min: 0 }), { integer: true })),
+      field('Base name', bindText('base_name', el('input', { type: 'text' }))),
+      field('Separator', bindText('separator', el('input', { type: 'text' }))),
+      field('Digits', bindNum('leading_zeros', numberInput(3, { min: 1, max: 8 }), { integer: true })),
+      field('From', bindNum('start_index', numberInput(1, { min: 0 }), { integer: true })),
     ),
-    field('Numeración de etiquetas', numberingSel),
+    field('Label numbering', numberingSel),
     dedupCheck.label, dedupStatus,
 
-    el('h3', {}, 'Hoja y cuadrícula'),
+    el('h3', {}, 'Sheet & grid'),
     el('div', { class: 'row' },
-      field('Papel', paperSel),
-      field('Orientación', bindSel('orientation', select(ORIENTATIONS, s.orientation))),
+      field('Paper', paperSel),
+      field('Orientation', bindSel('orientation', select(ORIENTATIONS, s.orientation))),
     ),
     customRow,
     el('div', { class: 'row' },
-      field('Columnas', bindNum('cols', numberInput(4, { min: 1, max: 20 }), { integer: true })),
-      field('Filas', bindNum('rows', numberInput(5, { min: 1, max: 20 }), { integer: true })),
+      field('Columns', bindNum('cols', numberInput(4, { min: 1, max: 20 }), { integer: true })),
+      field('Rows', bindNum('rows', numberInput(5, { min: 1, max: 20 }), { integer: true })),
       field('DPI', bindNum('dpi', numberInput(300, { min: 72, max: 1200 }), { integer: true })),
     ),
     el('div', { class: 'row' },
-      field('Margen (mm)', bindNum('margin_mm', numberInput(10, { min: 0 }))),
-      field('Espaciado (mm)', bindNum('gutter_mm', numberInput(5, { min: 0 }))),
-      field('Fuente (pt)', bindNum('font_size_pt', numberInput(9, { min: 4 }))),
+      field('Margin (mm)', bindNum('margin_mm', numberInput(10, { min: 0 }))),
+      field('Gutter (mm)', bindNum('gutter_mm', numberInput(5, { min: 0 }))),
+      field('Font (pt)', bindNum('font_size_pt', numberInput(9, { min: 4 }))),
     ),
 
-    el('h3', {}, 'Numerador de hoja'),
+    el('h3', {}, 'Sheet number'),
     el('div', { class: 'row' },
-      field('Posición', bindSel('page_num_corner', select(CORNERS, s.page_num_corner))),
-      field('Prefijo', bindText('page_num_prefix', el('input', { type: 'text' }))),
-      field('Desde', bindNum('page_num_start', numberInput(1, { min: 0 }), { integer: true })),
+      field('Position', bindSel('page_num_corner', select(CORNERS, s.page_num_corner))),
+      field('Prefix', bindText('page_num_prefix', el('input', { type: 'text' }))),
+      field('From', bindNum('page_num_start', numberInput(1, { min: 0 }), { integer: true })),
     ),
-    field('Numeración de hojas', pageNumberingSel),
+    field('Sheet numbering', pageNumberingSel),
 
-    el('h3', {}, 'Registro (para escanear de vuelta)'),
-    bindCheck('registration_on', check('Marcadores ArUco + QR por fotograma (imprescindible para la fase ②)', s.registration_on)),
+    el('h3', {}, 'Registration (to scan back)'),
+    bindCheck('registration_on', check('ArUco markers + one QR per frame (required for phase ②)', s.registration_on)),
     el('div', { class: 'row' },
-      field('Marcadores', bindSel('marker_count', select([['4', '4 (esquinas)'], ['8', '8 (recomendado)'], ['12', '12 (máxima tolerancia)']], String(s.marker_count)))),
-      field('Tamaño (mm)', bindNum('marker_size_mm', numberInput(8, { min: 4, step: 0.5 }))),
-      field('Margen (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
+      field('Markers', bindSel('marker_count', select([['4', '4 (corners)'], ['8', '8 (recommended)'], ['12', '12 (maximum tolerance)']], String(s.marker_count)))),
+      field('Size (mm)', bindNum('marker_size_mm', numberInput(8, { min: 4, step: 0.5 }))),
+      field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
     el('div', { class: 'row' },
       field('QR (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
-      field('Proyecto (va en los QR)', bindText('project_name', el('input', { type: 'text', placeholder: '= nombre de salida' }))),
+      field('Project (goes into the QRs)', bindText('project_name', el('input', { type: 'text', placeholder: '= output name' }))),
     ),
-    bindCheck('gray_patch_on', check('Tira de parches de grises (normalizar escáner)', s.gray_patch_on)),
+    bindCheck('gray_patch_on', check('Gray patch strip (scanner normalization)', s.gray_patch_on)),
 
     cyanBox,
 
-    el('h3', {}, 'Impresora'),
-    field('Perfil de impresora (fase ③)', printerSel, 'Compensa la escala real medida de tu impresora.'),
+    el('h3', {}, 'Printer'),
+    field('Printer profile (phase ③)', printerSel, 'Compensates the measured real scale of your printer.'),
 
-    el('h3', {}, 'Salida'),
+    el('h3', {}, 'Output'),
     el('div', { class: 'row' },
-      field('Nombre de salida', bindText('out_name', el('input', { type: 'text' }))),
-      field('Hojas a generar', (() => {
-        const i = el('input', { type: 'text', placeholder: 'ej. 3, 5-7 (vacío = todas)' });
+      field('Output name', bindText('out_name', el('input', { type: 'text' }))),
+      field('Sheets to generate', (() => {
+        const i = el('input', { type: 'text', placeholder: 'e.g. 3, 5-7 (empty = all)' });
         i.value = ph1.sheets_include;
         i.addEventListener('change', () => { ph1.sheets_include = i.value; });
         return i;
       })()),
     ),
-    (() => { const c = check('Guardar copia de los fotogramas originales (hojas de rescate)', ph1.keepOriginals); c.input.addEventListener('change', () => { ph1.keepOriginals = c.input.checked; }); return c.label; })(),
-    (() => { const c = check('Exportar también los fotogramas sueltos', ph1.exportFrames); c.input.addEventListener('change', () => { ph1.exportFrames = c.input.checked; }); return c.label; })(),
+    (() => { const c = check('Keep a copy of the original frames (rescue sheets)', ph1.keepOriginals); c.input.addEventListener('change', () => { ph1.keepOriginals = c.input.checked; }); return c.label; })(),
+    (() => { const c = check('Also export the individual frames', ph1.exportFrames); c.input.addEventListener('change', () => { ph1.exportFrames = c.input.checked; }); return c.label; })(),
     genBtn, genProg.root,
     warnBox,
 
@@ -614,7 +614,7 @@ export function mountPhase1(root) {
   );
 
   const bench = el('div', { class: 'bench' },
-    el('h2', {}, 'Vista previa'),
+    el('h2', {}, 'Preview'),
     el('div', { class: 'preview-holder' },
       el('span', { class: 'preview-corner c1' }), el('span', { class: 'preview-corner c2' }),
       el('span', { class: 'preview-corner c3' }), el('span', { class: 'preview-corner c4' }),
