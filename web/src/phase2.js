@@ -1,8 +1,8 @@
 // Fase ② — Procesar escaneos: de la hoja pintada/expuesta a fotogramas.
 
-import { run, recycleIdle } from './pool.js';
+import { run, recycleIdle, poolSize } from './pool.js';
 import { el, toast, download, progressBar, dropzone, field, numberInput, select, check,
-         sanitizeLabel, pngUrl } from './ui.js';
+         sanitizeLabel, pngUrl, lightbox } from './ui.js';
 import { project } from './project.js';
 import { generateSheets, resolveCyanCurve } from './gen.js';
 import { makeZip } from './zip.js';
@@ -48,7 +48,7 @@ export function mountPhase2(root) {
       try {
         ph2.layout = JSON.parse(await f.text());
         ph2.layoutName = f.name;
-        layoutInfo.textContent = `✔ ${f.name} — ${layoutSummary(ph2.layout)}`;
+        layoutInfo.textContent = `✔ ${f.name}: ${layoutSummary(ph2.layout)}`;
       } catch (e) {
         toast(`Could not read the layout: ${e.message}`, 'err');
       }
@@ -66,12 +66,13 @@ export function mountPhase2(root) {
   // procesamiento
   const prog = progressBar();
   prog.hide();
+  const specsInfo = el('div', { class: 'hint' });
   const resultsBox = el('div');
   const framesState = el('div');
 
   const scansDz = dropzone({
     label: 'Drop your scans here (any order, any orientation)',
-    sublabel: 'TIFF / PNG / JPG / WebP — 8 or 16 bit, any resolution. Several at once.',
+    sublabel: 'TIFF / PNG / JPG / WebP, 8 or 16 bit, any resolution. Several at once.',
     accept: '.tif,.tiff,.png,.jpg,.jpeg,.webp,.bmp,image/*',
     multiple: true,
     onFiles: (files) => processScans(files),
@@ -116,6 +117,24 @@ export function mountPhase2(root) {
     }, [warped.buffer]);
   }
 
+  /** Pico de memoria estimado de un escaneo, a partir del tamaño del archivo.
+   *  Con GPU la memoria WASM nunca ve entrada y salida a la vez. */
+  function estimatePeakBytes(f, gpu) {
+    const name = f.name.toLowerCase();
+    const ratio = /\.(jpe?g|webp)$/.test(name) ? 12 : /\.(tif|tiff)$/.test(name) ? 2.5 : 5;
+    return f.size * ratio * (gpu ? 2.2 : 3.5);
+  }
+
+  /** Cuántos escaneos procesar a la vez, según la RAM y la GPU del equipo.
+   *  navigator.deviceMemory informa la RAM (Chrome la limita a 8). */
+  function pickConcurrency(files, gpu, singleSheet) {
+    if (singleSheet) return 1; // una sola hoja: evitar carreras de identidad
+    const budget = (navigator.deviceMemory || 4) * 1e9 * 0.3;
+    const worst = Math.max(1, ...files.map((f) => estimatePeakBytes(f, gpu)));
+    const byRam = Math.max(1, Math.floor(budget / worst));
+    return Math.min(byRam, poolSize(), files.length, 3);
+  }
+
   async function processScans(files) {
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
     prog.show();
@@ -129,72 +148,83 @@ export function mountPhase2(root) {
     });
     const layoutStr = JSON.stringify(ph2.layout);
     const gpu = await getGpuDevice();
+    const singleSheet = (ph2.layout.hojas ?? []).length === 1;
+    const width = pickConcurrency(files, !!gpu, singleSheet);
+    const ram = navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM` : 'RAM unknown';
+    specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ram}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
     let done = 0;
-    // SECUENCIAL a propósito: un escaneo grande necesita cientos de MB
-    // mientras se procesa; en paralelo la RAM se disparaba. El enderezado va
-    // por WebGPU cuando se puede, así que el total sigue siendo rápido.
-    for (const f of files) {
-      try {
-        let r = null;
-        if (gpu) {
-          const bmp = await decodeForGpu(f);
-          if (bmp) {
-            try { r = await processViaGpu(f, bmp, layoutStr, opts); }
-            finally { bmp.close?.(); }
-          }
+
+    const processOne = async (f) => {
+      let r = null;
+      if (gpu) {
+        const bmp = await decodeForGpu(f);
+        if (bmp) {
+          try { r = await processViaGpu(f, bmp, layoutStr, opts); }
+          finally { bmp.close?.(); }
         }
-        if (!r) {
-          const bytes = new Uint8Array(await f.arrayBuffer());
-          r = await run('scan_process', {
-            bytes, name: f.name, layout: layoutStr, opts,
-            claims: JSON.stringify(ph2.claims),
-          }, [bytes.buffer]);
-        }
-        const result = JSON.parse(r.result);
-        const via = String(result.via ?? '');
-        if (result.hoja_numero != null && (via.startsWith('QR') || via.startsWith('marker'))) {
-          ph2.claims[result.hoja_numero] = f.name;
-        }
-        const asBlob = (u8, type) => new Blob([u8], { type });
-        const frames = (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
-        const sinIdentificar = (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
-        for (const fr of frames) project.processedFrames.set(fr.label, fr.png);
-        ph2.results.push({
-          result, frames, sinIdentificar,
-          overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
-        });
-      } catch (e) {
-        toast(`Error in one scan: ${e.message}`, 'err');
       }
-      done++;
-      prog.set(done / files.length, `${done}/${files.length} scans${gpu ? ' · GPU straightening' : ''}`);
-      renderResults();
-    }
+      if (!r) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        r = await run('scan_process', {
+          bytes, name: f.name, layout: layoutStr, opts,
+          claims: JSON.stringify(ph2.claims),
+        }, [bytes.buffer]);
+      }
+      const result = JSON.parse(r.result);
+      const via = String(result.via ?? '');
+      if (result.hoja_numero != null && (via.startsWith('QR') || via.startsWith('marker'))) {
+        ph2.claims[result.hoja_numero] = f.name;
+      }
+      const asBlob = (u8, type) => new Blob([u8], { type });
+      const frames = (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
+      const sinIdentificar = (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
+      for (const fr of frames) project.processedFrames.set(fr.label, fr.png);
+      ph2.results.push({
+        result, frames, sinIdentificar,
+        overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
+      });
+    };
+
+    const queue = [...files];
+    await Promise.all(Array.from({ length: width }, async () => {
+      while (queue.length) {
+        const f = queue.shift();
+        try { await processOne(f); } catch (e) { toast(`Error in one scan: ${e.message}`, 'err'); }
+        done++;
+        prog.set(done / files.length, `${done}/${files.length} scans`);
+        renderResults();
+      }
+    }));
     recycleIdle(); // liberar la memoria WASM que infló el lote
     prog.hide();
     renderResults();
-    toast(`Processing finished${gpu ? ' (WebGPU-accelerated straightening)' : ''}. Check the report.`, 'ok');
+    toast('Processing finished. Check the report.', 'ok');
   }
 
   function renderResults() {
     const rows = [];
     for (const { result: r, frames, sinIdentificar, overlay } of ph2.results) {
-      const thumbs = el('div', { class: 'thumbs' });
+      // miniaturas pequeñas; un clic abre la imagen a tamaño completo
+      const thumbs = el('div', { class: 'thumbs report-thumbs' });
       if (overlay) {
-        thumbs.append(el('div', { class: 'thumb', style: 'grid-column: span 3; aspect-ratio:auto' },
+        const t = el('div', { class: 'thumb clickable', title: 'View the alignment overlay' },
           el('img', { src: URL.createObjectURL(overlay), alt: 'alignment' }),
-          el('div', { class: 'tag' }, 'alignment: green=marker, red=missing, blue=frames, orange=QRs')));
+          el('div', { class: 'tag' }, 'alignment'));
+        t.addEventListener('click', () => lightbox(overlay, `${r.scan}: green = marker found, red = missing, blue = frames, orange = QRs`));
+        thumbs.append(t);
       }
-      for (const f of [...frames, ...sinIdentificar].slice(0, 24)) {
-        thumbs.append(el('div', { class: 'thumb' },
-          el('img', { src: pngUrl(f.png) }), el('div', { class: 'tag' }, f.label)));
+      for (const f of [...frames, ...sinIdentificar].slice(0, 60)) {
+        const t = el('div', { class: 'thumb clickable', title: 'View at full size' },
+          el('img', { src: pngUrl(f.png) }), el('div', { class: 'tag' }, f.label));
+        t.addEventListener('click', () => lightbox(f.png, f.label));
+        thumbs.append(t);
       }
       rows.push(el('tr', {},
         el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
         el('td', { class: 'mono' }, r.scan),
         el('td', {}, r.hoja_numero ?? '—'),
         el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
-        el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · 🪞' : ''}`),
+        el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
         el('td', {}, String(r.frames ? Object.keys(r.frames).length : (frames?.length ?? 0))),
         el('td', {}, [
           ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint', style: 'color:#D8B04C' }, a)),
@@ -217,7 +247,7 @@ export function mountPhase2(root) {
               el('strong', {}, `Missing frames (${missing.length}): `),
               missing.join(', '),
               el('div', { style: 'margin-top:6px' }, 'Use “Rescue sheets” below to reprint only these.'))
-          : el('div', { class: 'allok-box' }, el('strong', {}, '🎉 No frames missing.'));
+          : el('div', { class: 'allok-box' }, el('strong', {}, 'No frames missing.'));
         rescueSection.style.display = missing.length ? '' : 'none';
         rescueMissing = missing;
       }
@@ -249,7 +279,7 @@ export function mountPhase2(root) {
         const zip = await makeZip(files);
         download(zip, 'processed_frames.zip', 'application/zip');
       },
-    }, '⬇ Download frames + report (ZIP)'),
+    }, 'Download frames + report (ZIP)'),
     el('button', {
       class: 'btn ghost-light small', onclick: () => { ph2.results = []; ph2.claims = {}; project.processedFrames.clear(); renderResults(); },
     }, 'Clear results'),
@@ -379,7 +409,7 @@ export function mountPhase2(root) {
       rescueBtn.disabled = false;
       rescueProg.hide();
     }
-  } }, '🛟 Generate rescue sheets');
+  } }, 'Generate rescue sheets');
 
   const rescueSection = el('div', { style: 'display:none; margin-top:16px' },
     el('h2', {}, 'Rescue sheets'),
@@ -399,6 +429,7 @@ export function mountPhase2(root) {
     resizeCheck.label, patchesCheck.label, fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,
+    specsInfo,
     prog.root,
   );
 

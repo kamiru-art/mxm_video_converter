@@ -11,7 +11,12 @@ import {
   getFirstEncodableVideoCodec,
 } from 'mediabunny';
 
-export async function probeVideo(file) {
+/** Formatos que WebCodecs/mediabunny no abren y ffmpeg.wasm sí. */
+export function needsFallback(name) {
+  return /\.(avi|mpg|mpeg|wmv|flv|3gp)$/i.test(name);
+}
+
+async function probeMediabunny(file) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error('The file has no video track (or the format is not supported).');
@@ -24,13 +29,31 @@ export async function probeVideo(file) {
   return { input, track, duration, fps, width: track.displayWidth, height: track.displayHeight };
 }
 
+export async function probeVideo(file) {
+  try {
+    return await probeMediabunny(file);
+  } catch (e) {
+    if (!needsFallback(file.name)) throw e;
+    const { probeFallback } = await import('./avi.js');
+    return probeFallback(file);
+  }
+}
+
 /**
  * Extrae fotogramas como PNG lossless a resolución nativa.
  * opts: {start, end, fps (null = todos), onFrame(blob, thumbCanvas, t, i), onProgress(i, est)}
  * Devuelve el número de fotogramas extraídos.
  */
 export async function extractFrames(file, opts = {}) {
-  const { input, track, duration, fps: nativeFps } = await probeVideo(file);
+  let probe;
+  try {
+    probe = await probeMediabunny(file);
+  } catch (e) {
+    if (!needsFallback(file.name)) throw e;
+    const { extractFramesFallback } = await import('./avi.js');
+    return extractFramesFallback(file, opts);
+  }
+  const { track, duration, fps: nativeFps } = probe;
   const start = Math.max(0, opts.start ?? 0);
   const end = Math.min(duration, opts.end ?? duration);
   const sink = new CanvasSink(track, { poolSize: 2 });
@@ -85,15 +108,23 @@ function canvasToBlob(canvas, type) {
  * Reconstruye el video a partir de una secuencia de imágenes (Blob/bytes PNG).
  * frames: array de () => Promise<ImageBitmap> EN ORDEN (con repetidos).
  * opts: { format: 'auto'|'mp4'|'webm', quality: 'very_high'|'high'|'medium'|
- *         'low'|'custom', bitrateMbps: number (con quality='custom') }
+ *         'low'|'custom', bitrateMbps: number (con quality='custom'),
+ *         targetH: number (0 = resolución nativa de los frames) }
  * Devuelve {bytes, mime, ext}.
  */
 export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
   if (!frameGetters.length) throw new Error('There are no frames to build the video.');
-  // dimensiones del primero, normalizadas a pares (requisito H.264)
+  // dimensiones del primero, escaladas a la resolución pedida y normalizadas
+  // a pares (requisito H.264)
   const first = await frameGetters[0]();
-  const w = Math.max(2, Math.floor(first.width / 2) * 2);
-  const h = Math.max(2, Math.floor(first.height / 2) * 2);
+  let fw = first.width;
+  let fh = first.height;
+  if (opts.targetH > 0) {
+    fw = fw * (opts.targetH / fh);
+    fh = opts.targetH;
+  }
+  const w = Math.max(2, Math.round(fw / 2) * 2);
+  const h = Math.max(2, Math.round(fh / 2) * 2);
 
   const QUAL = {
     very_high: QUALITY_VERY_HIGH, high: QUALITY_HIGH,

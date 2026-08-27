@@ -29,3 +29,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Núcleo de ffmpeg.wasm (se genera en el build desde node_modules)
+web/public/ffmpeg/

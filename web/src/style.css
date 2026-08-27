@@ -24,6 +24,9 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* reserva el hueco de la barra de scroll: al cambiar de fase el contenido
+   no se desplaza a un lado aunque una vista necesite scroll y otra no */
+html { scrollbar-gutter: stable; }
 body {
   background: var(--prusia-900);
   background-image: radial-gradient(ellipse 90% 60% at 50% -10%, #1E4070 0%, transparent 60%);
@@ -99,8 +102,9 @@ body {
 /* En pantallas con altura: cada panel gestiona su propio scroll y la página
    entera cabe en una sola vista, sin scroll global. */
 @media (min-width: 901px) and (min-height: 560px) {
-  .workbench .paper { max-height: calc(100vh - 132px); overflow-y: auto; overscroll-behavior: contain; }
-  .workbench .bench { max-height: calc(100vh - 132px); overflow-y: auto; overscroll-behavior: contain; }
+  /* 190px = cabecera + márgenes + pie: así ninguna fase provoca scroll global */
+  .workbench .paper { max-height: calc(100vh - 198px); overflow-y: auto; overscroll-behavior: contain; }
+  .workbench .bench { max-height: calc(100vh - 198px); overflow-y: auto; overscroll-behavior: contain; }
 }
 
 /* panel de controles = ficha de papel */
@@ -219,9 +223,36 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .thumb.dup::after {
-  content: "↺ repetido"; position: absolute; top: 3px; right: 3px;
+  content: "reused"; position: absolute; top: 3px; right: 3px;
   font-family: var(--font-mono); font-size: 9px; padding: 1px 5px;
   background: var(--sol); color: var(--tinta); border-radius: 3px;
+}
+
+/* miniaturas del informe de procesado: pequeñas, sin scroll propio (scrollea
+   el panel), y ampliables con un clic */
+.thumbs.report-thumbs {
+  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+  max-height: none; overflow: visible;
+}
+.thumb.clickable { cursor: zoom-in; transition: outline-color .12s; outline: 2px solid transparent; }
+.thumb.clickable:hover { outline-color: var(--sol); }
+
+/* vista ampliada */
+.lightbox {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(12, 27, 49, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-out; animation: toast-in .15s ease-out;
+}
+.lightbox figure { margin: 0; text-align: center; max-width: 94vw; }
+.lightbox img {
+  max-width: 94vw; max-height: 88vh;
+  background: white; border-radius: 4px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+}
+.lightbox figcaption {
+  margin-top: 10px; font-family: var(--font-mono); font-size: 13px;
+  color: var(--cian-200);
 }
 
 /* tablas de informe */
@@ -258,23 +289,25 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
 .prose a { color: var(--sol); }
 .prose code, .prose .mono { font-family: var(--font-mono); font-size: 13px; background: var(--prusia-950); padding: 1px 5px; border-radius: 4px; }
 
-/* el flujo del tutorial: tarjetas de paso, no un bloque de código */
+/* el flujo del tutorial: pasos numerados unidos por una línea de registro */
 .prose .steps {
-  list-style: none; display: flex; flex-wrap: wrap; gap: 14px;
-  padding: 0; margin: 18px 0 8px;
+  list-style: none; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px; padding: 0; margin: 20px 0 10px;
+  counter-reset: paso;
 }
 .prose .steps li {
-  flex: 1 1 150px; min-width: 140px; max-width: 220px; position: relative;
+  position: relative;
   background: var(--prusia-950); border: 1px solid var(--prusia-700);
-  border-radius: 10px; padding: 12px 14px;
+  border-top: 2px solid var(--sol);
+  border-radius: 0 0 8px 8px; padding: 12px 14px 12px;
 }
-.prose .steps li strong { display: block; color: var(--papel); font-family: var(--font-display); font-size: 14.5px; margin-bottom: 2px; }
-.prose .steps li span:last-child { font-size: 12.5px; color: var(--cian-300); line-height: 1.4; display: block; }
-.prose .steps .step-ico { font-size: 20px; display: block; margin-bottom: 6px; }
-.prose .steps li:not(:last-child)::after {
-  content: "→"; position: absolute; right: -13px; top: 50%;
-  transform: translateY(-50%); color: var(--sol); font-weight: 700; z-index: 1;
+.prose .steps .step-num {
+  display: inline-block; font-family: var(--font-mono); font-size: 11px;
+  color: var(--sol); letter-spacing: .08em; margin-bottom: 6px;
 }
+.prose .steps li strong { display: block; color: var(--papel); font-family: var(--font-display); font-size: 14.5px; margin-bottom: 3px; }
+.prose .steps li span:last-child { font-size: 12.5px; color: var(--cian-300); line-height: 1.45; display: block; }
 
 .colophon { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--prusia-700); font-size: 11.5px; color: var(--cian-300); }
 .colophon p { margin: 2px 0; display: inline; }

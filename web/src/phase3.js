@@ -80,7 +80,7 @@ export function mountPhase3(root) {
         download(png, 'printer_test.png', 'image/png');
         toast('Print the page at 100 % (no “fit to page”), scan it whole and drop it here.', 'ok');
       },
-    }, '⬇ Download test page'),
+    }, 'Download test page'),
     el('div', { style: 'margin-top:10px' }, dropzone({
       label: 'Drop the SCAN of the printed page',
       accept: 'image/*,.tif,.tiff',
@@ -110,7 +110,7 @@ export function mountPhase3(root) {
   // ── B. Curva de cianotipia ────────────────────────────────
   const bPaper = select(PAPERS, 'A4');
   const bDpi = numberInput(300, { min: 150, max: 600 });
-  const bTarget = select([['kamiru21', '21-patch strip (quick)'], ['edn256', 'EDN 2.2 chart — 256 tones (fine)']], 'kamiru21');
+  const bTarget = select([['kamiru21', '21-patch strip (quick)'], ['edn256', 'EDN 2.2 chart, 256 tones (fine)']], 'kamiru21');
   const bInk = el('input', { type: 'color', value: '#000000' });
   const bMirror = check('Mirrored (like your real negatives)', true);
   let bResult = null;
@@ -119,7 +119,7 @@ export function mountPhase3(root) {
   bCanvas.style.display = 'none';
   const cardB = el('div', { class: 'paper' },
     el('h2', {}, 'Cyanotype curve'),
-    el('div', { class: 'hint' }, 'Measures the real response of YOUR process (printer + film + chemistry + sun) and builds the compensation curve — Easy Digital Negatives method built in.'),
+    el('div', { class: 'hint' }, 'Measures the real response of YOUR process (printer + film + chemistry + sun) and builds the compensation curve (Easy Digital Negatives method built in).'),
     el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
     field('Chart', bTarget),
     el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
@@ -132,7 +132,7 @@ export function mountPhase3(root) {
         download(png, 'cyanotype_chart.png', 'image/png');
         toast('Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).', 'ok');
       },
-    }, '⬇ Download chart (negative for film)'),
+    }, 'Download chart (negative for film)'),
     el('div', { style: 'margin-top:10px' }, dropzone({
       label: 'Drop the SCAN of the blue print',
       accept: 'image/*,.tif,.tiff',
@@ -178,7 +178,7 @@ export function mountPhase3(root) {
         download(png, 'colorblocker.png', 'image/png');
         toast('Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.', 'ok');
       },
-    }, '⬇ Download ColorBlocker chart'),
+    }, 'Download ColorBlocker chart'),
     el('div', { style: 'margin-top:10px' }, dropzone({
       label: 'Drop the SCAN of the blue print',
       accept: 'image/*,.tif,.tiff',
@@ -217,7 +217,7 @@ export function mountPhase3(root) {
         class: 'btn ghost small', onclick: () => {
           download(new TextEncoder().encode(store.exportAll()), 'mxm_profiles.json', 'application/json');
         },
-      }, '⬇ Export everything'),
+      }, 'Export everything'),
       dropzone({
         label: 'Import profiles (JSON)', accept: '.json',
         onFiles: async ([f]) => {

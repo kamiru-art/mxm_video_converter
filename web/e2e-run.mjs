@@ -24,6 +24,15 @@ if (!existsSync(sample)) {
     ? 'Generated e2e_sample.mp4 for the WebCodecs test.'
     : 'ffmpeg not available: the video section will be skipped.');
 }
+// AVI con códec MPEG-4 ASP: WebCodecs no lo decodifica, así que ejercita el
+// camino de respaldo con ffmpeg.wasm.
+const avi = join(DIST, 'e2e_sample.avi');
+if (!existsSync(avi)) {
+  spawnSync('ffmpeg', [
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2',
+    '-c:v', 'mpeg4', '-y', avi,
+  ], { stdio: 'ignore' });
+}
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml',

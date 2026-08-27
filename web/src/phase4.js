@@ -72,6 +72,39 @@ export function mountPhase4(root) {
   qualSel.addEventListener('change', () => {
     bitrateField.style.display = qualSel.value === 'custom' ? '' : 'none';
   });
+  const resSel = select([
+    ['original', 'Original (same as the frames)'],
+    ['2160', '4K (2160p)'],
+    ['1440', '1440p'],
+    ['1080', '1080p (Full HD)'],
+    ['720', '720p'],
+    ['480', '480p'],
+  ], 'original');
+  const resInfo = el('div', { class: 'hint' }, 'Load frames to see the output resolution.');
+  let nativeDims = null; // {w, h} del primer frame disponible
+
+  function evenPair(w, h) {
+    return [Math.max(2, Math.round(w / 2) * 2), Math.max(2, Math.round(h / 2) * 2)];
+  }
+  function outputDims() {
+    if (!nativeDims) return null;
+    let { w, h } = nativeDims;
+    const target = resSel.value === 'original' ? null : parseInt(resSel.value, 10);
+    if (target) {
+      w = w * (target / h);
+      h = target;
+    }
+    const [ew, eh] = evenPair(w, h);
+    return { w: ew, h: eh, upscaled: target ? target > nativeDims.h : false };
+  }
+  function refreshResInfo() {
+    const d = outputDims();
+    if (!d) { resInfo.textContent = 'Load frames to see the output resolution.'; return; }
+    resInfo.textContent = `Output resolution: ${d.w}×${d.h}`
+      + (resSel.value === 'original' ? ' (native frame size)' : ` (frames are ${nativeDims.w}×${nativeDims.h})`)
+      + (d.upscaled ? '. This upscales the frames; expect some softness.' : '');
+  }
+  resSel.addEventListener('change', refreshResInfo);
   const nameIn = el('input', { type: 'text', placeholder: '= project name' });
   const prog = progressBar();
   prog.hide();
@@ -107,11 +140,24 @@ export function mountPhase4(root) {
       const { files, missing } = framesFromTimeline(l, disponibles);
       missingBox.replaceChildren(missing.length
         ? el('div', { class: 'missing-box' }, el('strong', {}, `Missing ${missing.length}: `), missing.slice(0, 40).join(', ') + (missing.length > 40 ? '…' : ''))
-        : el('div', { class: 'allok-box' }, `🎬 All ${files.length} video positions have a frame.`));
+        : el('div', { class: 'allok-box' }, `All ${files.length} video positions have a frame.`));
+      // dimensiones nativas del primer frame disponible, para mostrar la salida
+      const first = files[0];
+      if (first) {
+        const blob = first.data instanceof Blob ? first.data : new Blob([first.data], { type: 'image/png' });
+        createImageBitmap(blob).then((bmp) => {
+          nativeDims = { w: bmp.width, h: bmp.height };
+          bmp.close();
+          refreshResInfo();
+        }).catch(() => {});
+      } else {
+        nativeDims = null;
+        refreshResInfo();
+      }
     }
   }
 
-  const buildBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:10px' }, '🎬 Rebuild video');
+  const buildBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:10px' }, 'Rebuild video');
   buildBtn.addEventListener('click', async () => {
     const l = currentLayout();
     if (!l) { toast('No layout.', 'err'); return; }
@@ -130,6 +176,7 @@ export function mountPhase4(root) {
         format: fmtSel.value,
         quality: qualSel.value,
         bitrateMbps: parseFloat(bitrateIn.value) || 0,
+        targetH: resSel.value === 'original' ? 0 : parseInt(resSel.value, 10),
       });
       const base = sanitizeLabel(nameIn.value.trim() || l.proyecto || 'video');
       const name = `${base}.${out.ext}`;
@@ -178,8 +225,10 @@ export function mountPhase4(root) {
     el('div', { class: 'row' },
       field('Quality', qualSel),
       bitrateField,
-      field('File name', nameIn),
+      field('Resolution', resSel),
     ),
+    resInfo,
+    field('File name', nameIn),
     buildBtn,
     prog.root,
   );

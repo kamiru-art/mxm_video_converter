@@ -184,6 +184,24 @@ async function main() {
       throw new Error(`flujo de video: ${e.message}`);
     }
 
+    // AVI: extracción por el decodificador de respaldo (ffmpeg.wasm)
+    try {
+      const aresp = await fetch('/e2e_sample.avi');
+      if (aresp.ok) {
+        const ablob = new Blob([await aresp.arrayBuffer()], { type: 'video/x-msvideo' });
+        ablob.name = 'e2e_sample.avi';
+        const { extractFrames } = await import('./video.js');
+        const got = [];
+        const meta = await extractFrames(ablob, { start: 0, end: 2, fps: 3, onFrame: async (b) => got.push(b) });
+        log(`AVI: ${meta.count} frames extraídos vía ffmpeg.wasm (${meta.fps} fps nativo detectado)`);
+        if (got.length < 5) throw new Error(`incomplete AVI extraction (${got.length})`);
+      } else {
+        log('· (sin muestra AVI: prueba del decodificador de respaldo omitida)');
+      }
+    } catch (e) {
+      throw new Error(`flujo AVI: ${e.message ?? e}`);
+    }
+
     document.title = 'E2E-OK';
     log('✅ E2E OK');
   } catch (e) {

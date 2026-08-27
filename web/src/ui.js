@@ -167,6 +167,26 @@ export function originalPageNumbers(positions, perPage, start = 1) {
   return out;
 }
 
+/** Vista ampliada centrada de una imagen (Blob o URL). Se cierra con un
+ *  clic en cualquier parte o con Escape. */
+export function lightbox(data, caption = '') {
+  const madeUrl = data instanceof Blob;
+  const url = madeUrl ? URL.createObjectURL(data) : data;
+  const fig = el('figure', {}, el('img', { src: url, alt: caption }));
+  if (caption) fig.append(el('figcaption', {}, caption));
+  const box = el('div', { class: 'lightbox', role: 'dialog', 'aria-label': caption || 'Image preview' }, fig);
+  const close = () => {
+    box.remove();
+    document.removeEventListener('keydown', onKey);
+    if (madeUrl) URL.revokeObjectURL(url);
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  box.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.append(box);
+  return close;
+}
+
 export function pngUrl(data) {
   const blob = data instanceof Blob ? data : new Blob([data], { type: 'image/png' });
   return URL.createObjectURL(blob);

@@ -36,10 +36,8 @@ export function defaultSettings() {
 }
 
 // estado de la fase (persistido en localStorage)
-// qr_on se fuerza a false: la identidad viaja ahora en los IDs de los
-// marcadores (ajustes/presets guardados con QR de versiones previas incluidos).
 export const ph1 = {
-  settings: { ...defaultSettings(), ...(store.loadSettings() ?? {}), qr_on: false },
+  settings: { ...defaultSettings(), ...(store.loadSettings() ?? {}) },
   include: '', exclude: '',
   naming: 'auto',           // auto | original (nombre de archivo)
   numbering: 'continua',    // continua | original
@@ -108,7 +106,7 @@ async function computeDedup(statusEl) {
   ph1.dedupGroups = groups;
   const dups = groups.rep_of.filter((r, i) => r !== i).length;
   statusEl.textContent = dups
-    ? `↺ ${dups} repeated frame(s): printed once and reused when the video is rebuilt.`
+    ? `${dups} repeated frame(s): printed once and reused when the video is rebuilt.`
     : 'no repeated drawings in the selection.';
 }
 
@@ -162,20 +160,23 @@ export function mountPhase1(root) {
 
   const dz = dropzone({
     label: 'Drop your video or a folder of images here',
-    sublabel: 'MP4 / MOV / WebM / MKV — or PNG, JPG, TIFF, WebP (16-bit too). Nothing gets uploaded anywhere.',
-    accept: 'video/*,image/*,.tif,.tiff',
+    sublabel: 'MP4 / MOV / WebM / MKV / AVI / MPG / WMV, or PNG, JPG, TIFF, WebP (16-bit too). Nothing gets uploaded anywhere.',
+    accept: 'video/*,image/*,.tif,.tiff,.avi,.mpg,.mpeg,.wmv,.flv,.3gp',
     multiple: true,
     onFiles: async (fileList) => {
-      const videos = fileList.filter((f) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name));
+      const videos = fileList.filter((f) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v|avi|mpg|mpeg|wmv|flv|3gp)$/i.test(f.name));
       const images = fileList.filter((f) => !videos.includes(f));
       if (videos.length) {
         pendingVideo = videos[0];
         try {
+          videoInfo.textContent = 'Reading the video…';
           const p = await probeVideo(pendingVideo);
-          videoInfo.textContent = `${pendingVideo.name} — ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}. Pick range/fps and press “Extract”.`;
+          const via = p.fallback ? ' (decoded with the built-in converter)' : '';
+          videoInfo.textContent = `${pendingVideo.name}: ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}${via}. Pick range/fps and press “Extract”.`;
           endIn.value = p.duration.toFixed(1);
           extractBtn.disabled = false;
         } catch (e) {
+          videoInfo.textContent = '';
           toast(e.message, 'err');
         }
       } else if (images.length) {
@@ -276,7 +277,7 @@ export function mountPhase1(root) {
 
   // ---------- cianotipia ----------
   const modeCheck = check('CYANOTYPE MODE: generate negatives for transparency film', String(s.mode).startsWith('cian'));
-  const cyanBox = el('fieldset', {}, el('legend', {}, '☀️ Cyanotype'));
+  const cyanBox = el('fieldset', {}, el('legend', {}, 'Cyanotype'));
   modeCheck.input.addEventListener('change', () => {
     s.mode = modeCheck.input.checked ? 'cianotipia' : 'normal';
     cyanBody.style.display = modeCheck.input.checked ? '' : 'none';
@@ -362,7 +363,6 @@ export function mountPhase1(root) {
           const p = store.loadProfile('presets', presetSel.value);
           if (p?.settings) {
             Object.assign(s, p.settings);
-            s.qr_on = false; // presets antiguos con QR: la identidad va en los marcadores
             Object.assign(ph1, p.fase ?? {});
             binds.forEach((b) => b());
             persist(); refreshPreview();
@@ -397,7 +397,7 @@ export function mountPhase1(root) {
   const genProg = progressBar();
   genProg.hide();
   const warnBox = el('ul', { class: 'warnlist' });
-  const genBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:8px' }, '🖨️ Generate sheets (ZIP)');
+  const genBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:8px' }, 'Generate sheets (ZIP)');
   genBtn.addEventListener('click', async () => {
     const plan = computePlan();
     if (!plan.printed.length) { toast('There are no frames to print.', 'err'); return; }
@@ -491,7 +491,7 @@ export function mountPhase1(root) {
       previewInfo.textContent = `${info.landscape ? 'landscape' : 'portrait'} · grid ${info.cols}×${info.rows}${info.grid_swapped ? ' (swapped by best fit)' : ''} · ${plan.printed.length} frames on ${plan.numPages} sheet(s)`;
       const avisos = [...(info.avisos ?? [])];
       if (info.marker_capacity && plan.numPages > info.marker_capacity) {
-        avisos.push(`${plan.numPages} sheets exceed the ${info.marker_capacity} the marker-identity scheme can distinguish: sheet identities would repeat. Use 4 markers (more capacity), or split the project.`);
+        avisos.push(`${plan.numPages} sheets exceed the ${info.marker_capacity} that marker identity can distinguish. Enable "Add a QR code per frame" in Registration: QRs identify any number of sheets.`);
       }
       warnBox.replaceChildren(...avisos.map((a) => el('li', {}, a)));
     } catch (e) {
@@ -588,13 +588,28 @@ export function mountPhase1(root) {
 
     el('h3', {}, 'Registration (to scan back)'),
     bindCheck('registration_on', check('ArUco markers with per-sheet identity (required for phase ②)', s.registration_on)),
-    el('div', { class: 'hint' }, 'Each sheet gets its own marker IDs: no QR codes needed — more room for your drawings.'),
+    el('div', { class: 'hint' }, 'Each sheet gets its own marker IDs, so no QR codes are needed and the drawings get more room.'),
     el('div', { class: 'row' },
       field('Markers', bindSel('marker_count', select([['4', '4 (corners)'], ['8', '8 (recommended)'], ['12', '12 (maximum tolerance)']], String(s.marker_count)))),
       field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
       field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
     field('Project name', bindText('project_name', el('input', { type: 'text', placeholder: '= output name' }))),
+    (() => {
+      const qrRow = el('div', { class: 'row' },
+        field('QR size (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
+      );
+      const c = check('Add a QR code per frame (for projects with MANY sheets)', !!s.qr_on);
+      const sync = () => { qrRow.style.display = s.qr_on ? '' : 'none'; };
+      c.input.addEventListener('change', () => { s.qr_on = c.input.checked; sync(); persist(); refreshPreview(); });
+      binds.push(() => { c.input.checked = !!s.qr_on; sync(); });
+      sync();
+      return el('div', {},
+        c.label,
+        el('div', { class: 'hint' }, 'Marker identity distinguishes a limited number of sheets (the preview warns you when a project exceeds it). QRs identify any number of sheets and keep compatibility with the desktop app, at the cost of cell space.'),
+        qrRow,
+      );
+    })(),
     bindCheck('gray_patch_on', check('Gray patch strip (scanner normalization)', s.gray_patch_on)),
 
     cyanBox,
