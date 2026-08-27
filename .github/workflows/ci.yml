@@ -121,3 +121,6 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: web
+          # la acción instala wrangler 3 por defecto, que no entiende la
+          # config de Worker con assets estáticos
+          wranglerVersion: "4"
