@@ -24,8 +24,8 @@ export function defaultSettings() {
     label_color: '#000000', page_num_on: true, page_num_corner: 'Inferior derecha',
     page_num_prefix: '', page_num_start: 1, page_num_zeros: 1, page_num_size_pt: 11,
     page_num_color: '#000000', registration_on: true, marker_count: 8,
-    marker_size_mm: 8, marker_margin_mm: 4, marker_dict: 'DICT_4X4_50',
-    qr_on: true, qr_size_mm: 10, gray_patch_on: false, project_name: '',
+    marker_size_mm: 10, marker_margin_mm: 4, marker_dict: 'DICT_5X5_100',
+    qr_on: false, qr_size_mm: 10, gray_patch_on: false, project_name: '',
     mode: 'normal', cyan_mirror: true, cyan_ink: '#000000', cyan_curve: null,
     cyan_curve_strength: 100, cyan_adaptive: 0, cyan_clarity: 0,
     cyan_bg: 'ahorro', cyan_halo_mm: 5, cyan_frame_border_mm: 0.8,
@@ -36,8 +36,10 @@ export function defaultSettings() {
 }
 
 // estado de la fase (persistido en localStorage)
+// qr_on se fuerza a false: la identidad viaja ahora en los IDs de los
+// marcadores (ajustes/presets guardados con QR de versiones previas incluidos).
 export const ph1 = {
-  settings: { ...defaultSettings(), ...(store.loadSettings() ?? {}) },
+  settings: { ...defaultSettings(), ...(store.loadSettings() ?? {}), qr_on: false },
   include: '', exclude: '',
   naming: 'auto',           // auto | original (nombre de archivo)
   numbering: 'continua',    // continua | original
@@ -141,9 +143,11 @@ export function mountPhase1(root) {
         end: endIn.value ? parseFloat(endIn.value) : undefined,
         fps: allFrames.input.checked ? null : (parseFloat(fpsIn.value) || null),
         onFrame: async (blob, thumb, t, i, w, h) => {
-          project.frames.push({ name: `frame_${String(i + 1).padStart(6, '0')}.png`, blob, thumb, w, h, hasAlpha: false });
+          // el nombre hereda el del video: "Original file name" tiene sentido
+          const videoStem = pendingVideo.name.replace(/\.[^.]+$/, '');
+          project.frames.push({ name: `${videoStem}_${String(i + 1).padStart(6, '0')}.png`, blob, thumb, w, h, hasAlpha: false });
         },
-        onProgress: (i, est) => extractProg.set(est ? i / est : 0.5, `fotograma ${i}${est ? ` de ~${est}` : ''}`),
+        onProgress: (i, est) => extractProg.set(est ? i / est : 0.5, `frame ${i}${est ? ` of ~${est}` : ''}`),
       });
       project.videoMeta = { fps_extraccion: meta.fps, origen: meta.origen };
       toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
@@ -209,8 +213,9 @@ export function mountPhase1(root) {
   const namingSel = select([['auto', 'Auto-increment (abc_001…)'], ['original', 'Original file name']], ph1.naming);
   const numberingSel = select([['continua', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
   const pageNumberingSel = select([['continua', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
-  namingSel.addEventListener('change', () => { ph1.naming = namingSel.value; refreshPreview(); });
-  numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value; refreshPreview(); });
+  // los tres cambian las etiquetas visibles: refrescar también las miniaturas
+  namingSel.addEventListener('change', async () => { ph1.naming = namingSel.value; await renderThumbs(); refreshPreview(); });
+  numberingSel.addEventListener('change', async () => { ph1.numbering = numberingSel.value; await renderThumbs(); refreshPreview(); });
   pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value; refreshPreview(); });
 
   const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
@@ -357,6 +362,7 @@ export function mountPhase1(root) {
           const p = store.loadProfile('presets', presetSel.value);
           if (p?.settings) {
             Object.assign(s, p.settings);
+            s.qr_on = false; // presets antiguos con QR: la identidad va en los marcadores
             Object.assign(ph1, p.fase ?? {});
             binds.forEach((b) => b());
             persist(); refreshPreview();
@@ -391,7 +397,7 @@ export function mountPhase1(root) {
   const genProg = progressBar();
   genProg.hide();
   const warnBox = el('ul', { class: 'warnlist' });
-  const genBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:8px' }, '🖨️ Generate sheets (ZIP: PNG + PDF + layout.json)');
+  const genBtn = el('button', { class: 'btn sun', style: 'width:100%; margin-top:8px' }, '🖨️ Generate sheets (ZIP)');
   genBtn.addEventListener('click', async () => {
     const plan = computePlan();
     if (!plan.printed.length) { toast('There are no frames to print.', 'err'); return; }
@@ -483,7 +489,11 @@ export function mountPhase1(root) {
       const info = JSON.parse(await run('compute_layout', { settings: settingsForCore(settingsPrev), firstW: first.w, firstH: first.h }));
       pageLabel.textContent = `sheet ${ph1.previewPage + 1} / ${plan.numPages}`;
       previewInfo.textContent = `${info.landscape ? 'landscape' : 'portrait'} · grid ${info.cols}×${info.rows}${info.grid_swapped ? ' (swapped by best fit)' : ''} · ${plan.printed.length} frames on ${plan.numPages} sheet(s)`;
-      warnBox.replaceChildren(...(info.avisos ?? []).map((a) => el('li', {}, a)));
+      const avisos = [...(info.avisos ?? [])];
+      if (info.marker_capacity && plan.numPages > info.marker_capacity) {
+        avisos.push(`${plan.numPages} sheets exceed the ${info.marker_capacity} the marker-identity scheme can distinguish: sheet identities would repeat. Use 4 markers (more capacity), or split the project.`);
+      }
+      warnBox.replaceChildren(...avisos.map((a) => el('li', {}, a)));
     } catch (e) {
       console.error('preview', e);
     } finally {
@@ -577,16 +587,14 @@ export function mountPhase1(root) {
     field('Sheet numbering', pageNumberingSel),
 
     el('h3', {}, 'Registration (to scan back)'),
-    bindCheck('registration_on', check('ArUco markers + one QR per frame (required for phase ②)', s.registration_on)),
+    bindCheck('registration_on', check('ArUco markers with per-sheet identity (required for phase ②)', s.registration_on)),
+    el('div', { class: 'hint' }, 'Each sheet gets its own marker IDs: no QR codes needed — more room for your drawings.'),
     el('div', { class: 'row' },
       field('Markers', bindSel('marker_count', select([['4', '4 (corners)'], ['8', '8 (recommended)'], ['12', '12 (maximum tolerance)']], String(s.marker_count)))),
-      field('Size (mm)', bindNum('marker_size_mm', numberInput(8, { min: 4, step: 0.5 }))),
+      field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
       field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
-    el('div', { class: 'row' },
-      field('QR (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
-      field('Project (goes into the QRs)', bindText('project_name', el('input', { type: 'text', placeholder: '= output name' }))),
-    ),
+    field('Project name', bindText('project_name', el('input', { type: 'text', placeholder: '= output name' }))),
     bindCheck('gray_patch_on', check('Gray patch strip (scanner normalization)', s.gray_patch_on)),
 
     cyanBox,
@@ -604,6 +612,13 @@ export function mountPhase1(root) {
         return i;
       })()),
     ),
+    el('div', { class: 'row', style: 'align-items:center; margin-top:4px' },
+      el('div', { style: 'flex:0 0 auto; font-size:13.5px; font-weight:600' }, 'Formats:'),
+      bindCheck('fmt_png', check('PNG (one per sheet)', s.fmt_png !== false)),
+      bindCheck('fmt_pdf', check('PDF (print-ready)', s.fmt_pdf !== false)),
+      bindCheck('fmt_tiff', check('TIFF', !!s.fmt_tiff)),
+    ),
+    el('div', { class: 'hint' }, 'The layout.json (the map for phase ②) is always included.'),
     (() => { const c = check('Keep a copy of the original frames (rescue sheets)', ph1.keepOriginals); c.input.addEventListener('change', () => { ph1.keepOriginals = c.input.checked; }); return c.label; })(),
     (() => { const c = check('Also export the individual frames', ph1.exportFrames); c.input.addEventListener('change', () => { ph1.exportFrames = c.input.checked; }); return c.label; })(),
     genBtn, genProg.root,

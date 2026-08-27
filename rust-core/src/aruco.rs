@@ -37,6 +37,9 @@ impl Dict {
             Dict::Dict5x5_100 => &dicts::_5X5_100,
         }
     }
+    pub fn size(&self) -> usize {
+        self.markers().len()
+    }
     pub fn max_correction(&self) -> u32 {
         match self {
             Dict::Dict4x4_50 => dicts::_4X4_50_MAXCORR,

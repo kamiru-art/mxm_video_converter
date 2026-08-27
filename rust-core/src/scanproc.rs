@@ -8,8 +8,9 @@ use crate::img::{DynImg, Gray, Rgb};
 use crate::imgproc::{clahe, flat_field, normalize_minmax};
 use crate::layoutfile;
 use crate::qr::{decode_qr_rgb, parse_qr_payload};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const PROXY_SIDES: [usize; 2] = [2400, 1200];
 pub const RESIDUAL_OUTLIER_MM: f64 = 2.5;
@@ -427,11 +428,13 @@ fn px_per_mm(layout: &Value, s: f64) -> f64 {
 }
 
 /// Corrector local de recortes (papel deformado): interpola el campo de
-/// residuos con ponderación por distancia inversa.
+/// residuos con ponderación por distancia inversa. Serializable para poder
+/// cruzar el puente WASM↔JS en el camino con warp por WebGPU.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct LocalShift {
-    pts: Vec<Pt>,
-    errs: Vec<Pt>,
-    eps2: f64,
+    pub pts: Vec<Pt>,
+    pub errs: Vec<Pt>,
+    pub eps2: f64,
 }
 
 impl LocalShift {
@@ -691,16 +694,82 @@ pub struct ScanOutput {
     pub overlay: Option<Rgb>,
 }
 
-/// Procesa UN escaneo contra un layout normalizado v2.
-/// `claimed_sheets`: hojas ya identificadas por QR en el lote (nº → escaneo).
-pub fn process_scan(
-    mut img: DynImg,
-    scan_name: &str,
-    layout: &Value,
-    opts: &ScanOptions,
-    claimed_sheets: &HashMap<i64, String>,
-) -> ScanOutput {
-    let mut res = json!({
+/// Marcadores del layout resueltos: mapa id→bbox (uniendo `ids_por_hoja` +
+/// `bboxes_pos` cuando existen — hojas sin QR) y el mapa hoja→IDs.
+pub struct LayoutMarkers {
+    pub bboxes: Value,
+    pub ids_por_hoja: Option<HashMap<i64, Vec<u32>>>,
+    pub dict: Dict,
+}
+
+pub fn resolve_markers(layout: &Value) -> LayoutMarkers {
+    let minfo = &layout["marcadores"];
+    let dict = Dict::from_name(minfo["dict"].as_str().unwrap_or("DICT_4X4_50"));
+    let iph: Option<HashMap<i64, Vec<u32>>> = minfo
+        .get("ids_por_hoja")
+        .and_then(|v| v.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| {
+                    let num = k.parse::<i64>().ok()?;
+                    let ids: Vec<u32> = v
+                        .as_array()?
+                        .iter()
+                        .filter_map(|x| x.as_u64().map(|u| u as u32))
+                        .collect();
+                    Some((num, ids))
+                })
+                .collect()
+        })
+        .filter(|m: &HashMap<i64, Vec<u32>>| !m.is_empty());
+    let bboxes = match (&iph, minfo.get("bboxes_pos").and_then(|v| v.as_array())) {
+        (Some(iph), Some(pos)) => {
+            let mut map = serde_json::Map::new();
+            for ids in iph.values() {
+                for (j, id) in ids.iter().enumerate() {
+                    if let Some(b) = pos.get(j) {
+                        map.insert(id.to_string(), b.clone());
+                    }
+                }
+            }
+            Value::Object(map)
+        }
+        _ => minfo["bboxes"].clone(),
+    };
+    LayoutMarkers { bboxes, ids_por_hoja: iph, dict }
+}
+
+/// Identifica la hoja por los IDs de marcador detectados (hojas sin QR).
+/// Gana la hoja con más IDs propios detectados; un empate = no identificada.
+fn identify_by_markers<'a>(
+    layout: &'a Value,
+    ids_por_hoja: &HashMap<i64, Vec<u32>>,
+    detected: &HashSet<u32>,
+) -> Option<(&'a Value, String)> {
+    let mut best: Option<(i64, usize)> = None;
+    let mut tied = false;
+    for (&num, ids) in ids_por_hoja {
+        let score = ids.iter().filter(|id| detected.contains(id)).count();
+        match best {
+            Some((_, b)) if score > b => {
+                best = Some((num, score));
+                tied = false;
+            }
+            Some((_, b)) if score == b => tied = true,
+            None => best = Some((num, score)),
+            _ => {}
+        }
+    }
+    let (num, score) = best?;
+    if tied || score == 0 {
+        return None;
+    }
+    layoutfile::sheet_by_number(layout, num)
+        .map(|h| (h, format!("marker IDs ({score} matching)")))
+}
+
+pub fn base_report(scan_name: &str) -> Value {
+    json!({
         "scan": scan_name,
         "ok": false,
         "hoja_numero": Value::Null,
@@ -713,20 +782,44 @@ pub fn process_scan(
         "error": "",
         "espejado": false,
         "residual_mm": 0.0,
-    });
-    let mut frames_out: Vec<(String, DynImg)> = Vec::new();
-    let mut unidentified: Vec<(String, DynImg)> = Vec::new();
-    let mut overlay: Option<Rgb> = None;
+    })
+}
 
+/// Resultado de la fase de detección/alineación (pasos 1–4c).
+pub struct DetectData {
+    /// Homografía escaneo (ya des-espejado) → lienzo del layout × s.
+    pub m: H3,
+    pub s: f64,
+    pub flipped: bool,
+    pub out_w: usize,
+    pub out_h: usize,
+    pub refined: HashMap<u32, [Pt; 4]>,
+    pub local: Option<LocalShift>,
+}
+
+macro_rules! warn_res {
+    ($res:expr, $($arg:tt)*) => {
+        $res["advertencias"].as_array_mut().unwrap().push(json!(format!($($arg)*)));
+    };
+}
+
+/// Fase de detección: marcadores, escala, homografía y corrector local.
+/// Muta `res` (informe) y voltea `img` en el sitio si llegó espejado.
+/// Err(()) = fallo; el error ya quedó escrito en `res`.
+pub fn detect_scan(
+    img: &mut DynImg,
+    layout: &Value,
+    opts: &ScanOptions,
+    markers: &LayoutMarkers,
+    res: &mut Value,
+) -> Result<DetectData, ()> {
     macro_rules! warn {
-        ($($arg:tt)*) => {
-            res["advertencias"].as_array_mut().unwrap().push(json!(format!($($arg)*)));
-        };
+        ($($arg:tt)*) => { warn_res!(res, $($arg)*) };
     }
     macro_rules! fail {
         ($($arg:tt)*) => {{
             res["error"] = json!(format!($($arg)*));
-            return ScanOutput { result: res, frames: frames_out, unidentified, overlay };
+            return Err(());
         }};
     }
 
@@ -742,9 +835,8 @@ pub fn process_scan(
     if page_w <= 0.0 || page_h <= 0.0 || (page_w * page_h) as usize > MAX_IMAGE_PIXELS {
         fail!("The layout declares an impossible canvas ({page_w}×{page_h} px).");
     }
-    let minfo = &layout["marcadores"];
-    let dict = Dict::from_name(minfo["dict"].as_str().unwrap_or("DICT_4X4_50"));
-    let layout_bboxes = &minfo["bboxes"];
+    let dict = markers.dict;
+    let layout_bboxes = &markers.bboxes;
     let expected: Vec<u32> = layout_bboxes
         .as_object()
         .map(|o| o.keys().filter_map(|k| k.parse().ok()).collect())
@@ -755,7 +847,7 @@ pub fn process_scan(
     res["marcadores_total"] = json!(expected.len());
 
     // 1. Detección en proxy con espejo automático.
-    let det = detect_oriented(&mut img, dict, &expected, &mode);
+    let det = detect_oriented(img, dict, &expected, &mode);
     res["estrategia"] = json!(det.strategy);
     res["marcadores"] = json!(det.found.len());
     res["espejado"] = json!(det.flipped);
@@ -781,7 +873,7 @@ pub fn process_scan(
     }
 
     // 2. Afinado a resolución completa.
-    let mut refined = refine_corners_fullres(&img, &det.found, dict, &det_mode, polaridad);
+    let mut refined = refine_corners_fullres(img, &det.found, dict, &det_mode, polaridad);
 
     // 3. Escala medida.
     let mut s = match estimate_scale(&refined, layout_bboxes) {
@@ -792,7 +884,7 @@ pub fn process_scan(
     let thresh = (0.001 * diag).max(8.0);
 
     // 3b. Recuperación guiada.
-    let extra = recover_missing_markers(&img, &refined, layout_bboxes, s, dict, &det_mode, thresh, polaridad);
+    let extra = recover_missing_markers(img, &refined, layout_bboxes, s, dict, &det_mode, thresh, polaridad);
     if !extra.is_empty() {
         let mut ids: Vec<u32> = extra.keys().cloned().collect();
         ids.sort();
@@ -872,14 +964,43 @@ pub fn process_scan(
         None
     };
 
-    // 5. Enderezado.
+    // 5. Dimensiones del enderezado.
     let out_w = (page_w * s).round() as usize;
     let out_h = (page_h * s).round() as usize;
     if out_w == 0 || out_h == 0 || out_w * out_h > MAX_IMAGE_PIXELS {
         fail!("The requested rectification is disproportionate ({out_w}×{out_h} px); check the layout.");
     }
-    let mut warp = crate::geometry::warp_perspective(&img, &m, out_w, out_h);
-    drop(img);
+    Ok(DetectData { m, s, flipped: det.flipped, out_w, out_h, refined, local })
+}
+
+/// Entrada mínima de la fase final (serializable a través del puente JS).
+#[derive(Serialize, Deserialize)]
+pub struct FinishInput {
+    pub s: f64,
+    pub refined_ids: HashSet<u32>,
+    pub local: Option<LocalShift>,
+}
+
+/// Fase final sobre la hoja YA enderezada: normalización opcional,
+/// identificación (IDs de marcador → QR → eliminación) y recortes.
+pub fn finish_scan(
+    mut warp: DynImg,
+    scan_name: &str,
+    layout: &Value,
+    opts: &ScanOptions,
+    claimed_sheets: &HashMap<i64, String>,
+    markers: &LayoutMarkers,
+    fin: FinishInput,
+    mut res: Value,
+) -> ScanOutput {
+    let mut frames_out: Vec<(String, DynImg)> = Vec::new();
+    let mut unidentified: Vec<(String, DynImg)> = Vec::new();
+    let s = fin.s;
+    let local = fin.local;
+
+    macro_rules! warn {
+        ($($arg:tt)*) => { warn_res!(res, $($arg)*) };
+    }
 
     // 5b. Normalización con la tira de grises (opcional).
     if opts.normalize_patches {
@@ -890,8 +1011,15 @@ pub fn process_scan(
         }
     }
 
-    // 6. Identificación por QR.
-    let mut hoja = identify_sheet(&warp, layout, s, local.as_ref());
+    // 6. Identificación: primero por IDs de marcador (hojas sin QR), luego
+    // por QR (proyectos con QR / legados), luego por eliminación.
+    let mut hoja: Option<(&Value, String)> = None;
+    if let Some(iph) = &markers.ids_por_hoja {
+        hoja = identify_by_markers(layout, iph, &fin.refined_ids);
+    }
+    if hoja.is_none() {
+        hoja = identify_sheet(&warp, layout, s, local.as_ref());
+    }
     if hoja.is_none() {
         if let Some(hojas) = layout.get("hojas").and_then(|v| v.as_array()) {
             if hojas.len() == 1 {
@@ -899,11 +1027,11 @@ pub fn process_scan(
                 let reclamada = numero.and_then(|n| claimed_sheets.get(&n));
                 match reclamada {
                     Some(otro) if otro != scan_name => {
-                        warn!("No readable QR and sheet {} was already identified by QR in '{}': this scan goes to 'unidentified' to avoid overwriting it.", numero.unwrap(), otro);
+                        warn!("No identity found and sheet {} was already claimed by '{}': this scan goes to 'unidentified' to avoid overwriting it.", numero.unwrap(), otro);
                     }
                     _ => {
                         hoja = Some((&hojas[0], "only sheet in the layout".into()));
-                        warn!("No readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.");
+                        warn!("No marker identity or readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.");
                     }
                 }
             }
@@ -915,12 +1043,12 @@ pub fn process_scan(
     });
 
     // Miniatura de diagnóstico (antes de decidir el error, como la original).
-    overlay = build_overlay(&warp, s, layout_bboxes, &refined, plantilla, local.as_ref(), &res);
+    let overlay = build_overlay(&warp, s, &markers.bboxes, &fin.refined_ids, plantilla, local.as_ref());
 
     let (hoja, via) = match hoja {
         Some(hv) => hv,
         None => {
-            warn!("No readable QR: crops saved as 'unidentified'.");
+            warn!("Sheet not identified: crops saved as 'unidentified'.");
             if let Some(pl) = plantilla {
                 if let Some(fs) = pl.get("frames").and_then(|v| v.as_object()) {
                     let mut items: Vec<(&String, &Value)> = fs.iter().collect();
@@ -935,7 +1063,7 @@ pub fn process_scan(
                     }
                 }
             }
-            res["error"] = json!("Unreadable QRs: the sheet could not be identified.");
+            res["error"] = json!("The sheet could not be identified (no marker identity or readable QR).");
             return ScanOutput { result: res, frames: frames_out, unidentified, overlay };
         }
     };
@@ -974,6 +1102,33 @@ pub fn process_scan(
     }
     res["ok"] = json!(!frames_out.is_empty());
     ScanOutput { result: res, frames: frames_out, unidentified, overlay }
+}
+
+/// Procesa UN escaneo contra un layout normalizado v2 (camino todo-en-WASM).
+/// `claimed_sheets`: hojas ya identificadas en el lote (nº → escaneo).
+pub fn process_scan(
+    mut img: DynImg,
+    scan_name: &str,
+    layout: &Value,
+    opts: &ScanOptions,
+    claimed_sheets: &HashMap<i64, String>,
+) -> ScanOutput {
+    let markers = resolve_markers(layout);
+    let mut res = base_report(scan_name);
+    let det = match detect_scan(&mut img, layout, opts, &markers, &mut res) {
+        Ok(d) => d,
+        Err(()) => {
+            return ScanOutput { result: res, frames: Vec::new(), unidentified: Vec::new(), overlay: None }
+        }
+    };
+    let warp = crate::geometry::warp_perspective(&img, &det.m, det.out_w, det.out_h);
+    drop(img);
+    let fin = FinishInput {
+        s: det.s,
+        refined_ids: det.refined.keys().cloned().collect(),
+        local: det.local,
+    };
+    finish_scan(warp, scan_name, layout, opts, claimed_sheets, &markers, fin, res)
 }
 
 fn normalize_with_patches(
@@ -1069,10 +1224,9 @@ fn build_overlay(
     warp: &DynImg,
     s: f64,
     layout_bboxes: &Value,
-    refined: &HashMap<u32, [Pt; 4]>,
+    refined_ids: &HashSet<u32>,
     plantilla: Option<&Value>,
     local: Option<&LocalShift>,
-    _res: &Value,
 ) -> Option<Rgb> {
     let (w, h) = warp.size();
     let k = (1600.0 / w.max(h) as f64).min(1.0);
@@ -1103,7 +1257,7 @@ fn build_overlay(
     if let Some(obj) = layout_bboxes.as_object() {
         for (mid, bb) in obj {
             if let Some(b) = layoutfile::bbox_of(bb) {
-                let ok = mid.parse::<u32>().ok().map_or(false, |id| refined.contains_key(&id));
+                let ok = mid.parse::<u32>().ok().map_or(false, |id| refined_ids.contains(&id));
                 rect(b, if ok { [0, 200, 0] } else { [230, 0, 0] }, if ok { t } else { t * 2 }, false);
             }
         }

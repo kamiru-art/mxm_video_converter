@@ -7,7 +7,8 @@
 import {
   Input, Output, BlobSource, BufferTarget, ALL_FORMATS,
   CanvasSink, CanvasSource, Mp4OutputFormat, WebMOutputFormat,
-  QUALITY_HIGH, getFirstEncodableVideoCodec,
+  QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH, QUALITY_VERY_HIGH,
+  getFirstEncodableVideoCodec,
 } from 'mediabunny';
 
 export async function probeVideo(file) {
@@ -83,32 +84,49 @@ function canvasToBlob(canvas, type) {
 /**
  * Reconstruye el video a partir de una secuencia de imágenes (Blob/bytes PNG).
  * frames: array de () => Promise<ImageBitmap> EN ORDEN (con repetidos).
+ * opts: { format: 'auto'|'mp4'|'webm', quality: 'very_high'|'high'|'medium'|
+ *         'low'|'custom', bitrateMbps: number (con quality='custom') }
  * Devuelve {bytes, mime, ext}.
  */
-export async function buildVideo(frameGetters, fps, onProgress) {
+export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
   if (!frameGetters.length) throw new Error('There are no frames to build the video.');
   // dimensiones del primero, normalizadas a pares (requisito H.264)
   const first = await frameGetters[0]();
   const w = Math.max(2, Math.floor(first.width / 2) * 2);
   const h = Math.max(2, Math.floor(first.height / 2) * 2);
 
-  const candidates = [
+  const QUAL = {
+    very_high: QUALITY_VERY_HIGH, high: QUALITY_HIGH,
+    medium: QUALITY_MEDIUM, low: QUALITY_LOW,
+  };
+  let bitrate = QUAL[opts.quality] ?? QUALITY_HIGH;
+  if (opts.quality === 'custom' && opts.bitrateMbps > 0) {
+    bitrate = Math.round(opts.bitrateMbps * 1e6);
+  }
+
+  let candidates = [
     { codec: 'avc', format: () => new Mp4OutputFormat(), mime: 'video/mp4', ext: 'mp4' },
     { codec: 'vp9', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
     { codec: 'vp8', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
   ];
+  if (opts.format === 'mp4') candidates = candidates.slice(0, 1);
+  else if (opts.format === 'webm') candidates = candidates.slice(1);
   let chosen = null;
   for (const c of candidates) {
     const ok = await getFirstEncodableVideoCodec([c.codec], { width: w, height: h });
     if (ok) { chosen = c; break; }
   }
-  if (!chosen) throw new Error('This browser cannot encode video (WebCodecs unavailable). Try Chrome/Edge, or download the frames and assemble the video with another tool.');
+  if (!chosen) {
+    throw new Error(opts.format && opts.format !== 'auto'
+      ? `This browser cannot encode ${opts.format.toUpperCase()} at ${w}×${h}. Try "Automatic" format.`
+      : 'This browser cannot encode video (WebCodecs unavailable). Try Chrome/Edge, or download the frames and assemble the video with another tool.');
+  }
 
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext('2d');
   const target = new BufferTarget();
   const output = new Output({ format: chosen.format(), target });
-  const source = new CanvasSource(canvas, { codec: chosen.codec, bitrate: QUALITY_HIGH });
+  const source = new CanvasSource(canvas, { codec: chosen.codec, bitrate });
   output.addVideoTrack(source, { frameRate: fps });
   await output.start();
 

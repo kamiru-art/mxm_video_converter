@@ -6,9 +6,24 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
 
 const DIST = new URL('./dist', import.meta.url).pathname;
+
+// Sample video for the WebCodecs extract/encode test. Generated with ffmpeg
+// when available (local dev and the ubuntu CI runner both have it); the page
+// skips the video section gracefully if the file is absent.
+const sample = join(DIST, 'e2e_sample.mp4');
+if (!existsSync(sample)) {
+  const gen = spawnSync('ffmpeg', [
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=3',
+    '-pix_fmt', 'yuv420p', '-y', sample,
+  ], { stdio: 'ignore' });
+  console.log(gen.status === 0
+    ? 'Generated e2e_sample.mp4 for the WebCodecs test.'
+    : 'ffmpeg not available: the video section will be skipped.');
+}
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml',

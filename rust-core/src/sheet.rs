@@ -191,6 +191,54 @@ impl Settings {
 // Posiciones de los marcadores (port de markers.py)
 // ────────────────────────────────────────────────────────────────
 
+pub fn normalized_marker_count(count: u32) -> u32 {
+    if [4u32, 8, 12].contains(&count) {
+        count
+    } else {
+        *[4u32, 8, 12].iter().min_by_key(|&&c| (c as i64 - count as i64).abs()).unwrap()
+    }
+}
+
+/// Esquema de identidad por marcadores (hojas SIN QR): cada posición j lleva
+/// un dígito del número de hoja — pares→d0, impares→d1 — con un pool de
+/// m = |dict|/count IDs por posición. Capacidad: m² hojas distinguibles.
+/// Un solo marcador "par" superviviente basta para identificar la hoja.
+pub fn marker_id_scheme(dict: Dict, count: u32) -> (u32, u32) {
+    let d = dict.size() as u32;
+    let count = normalized_marker_count(count);
+    let m = (d / count).max(1);
+    (m, m.saturating_mul(m))
+}
+
+/// IDs de marcador de la hoja `sheet_num` en orden de posición 0..count-1.
+pub fn sheet_marker_ids(dict: Dict, count: u32, sheet_num: i64) -> Vec<u32> {
+    let count = normalized_marker_count(count);
+    let (m, cap) = marker_id_scheme(dict, count);
+    let idx = (sheet_num - 1).rem_euclid(cap.max(1) as i64) as u32;
+    let (d0, d1) = (idx % m, (idx / m) % m);
+    (0..count).map(|j| j * m + if j % 2 == 0 { d0 } else { d1 }).collect()
+}
+
+/// Capacidad de hojas distinguibles del esquema (None si la identidad va por QR).
+pub fn marker_capacity(s: &Settings) -> Option<u32> {
+    if !s.registration_on || s.qr_on {
+        return None;
+    }
+    Some(marker_id_scheme(Dict::from_name(&s.marker_dict), s.marker_count).1)
+}
+
+/// IDs de marcador que usa esta hoja según los ajustes: con QR (legado) los
+/// IDs son la posición 0..count-1 (idéntico en todas las hojas); sin QR, el
+/// esquema de identidad por hoja.
+pub fn marker_ids_for_sheet(s: &Settings, sheet_num: i64) -> Vec<u32> {
+    let count = normalized_marker_count(s.marker_count);
+    if s.qr_on {
+        (0..count).collect()
+    } else {
+        sheet_marker_ids(Dict::from_name(&s.marker_dict), count, sheet_num)
+    }
+}
+
 pub fn marker_layout(
     page_w: i64,
     page_h: i64,
@@ -199,11 +247,7 @@ pub fn marker_layout(
     margin: i64,
     quiet: i64,
 ) -> BTreeMap<u32, (i64, i64)> {
-    let count = if [4u32, 8, 12].contains(&count) {
-        count
-    } else {
-        *[4u32, 8, 12].iter().min_by_key(|&&c| (c as i64 - count as i64).abs()).unwrap()
-    };
+    let count = normalized_marker_count(count);
     let patch = side + 2 * quiet;
     let m = margin;
     let (x_left, x_right) = (m, page_w - m - patch);
@@ -570,12 +614,14 @@ fn gray_to_rgb(g: &Gray) -> Rgb {
     Rgb { w: g.w, h: g.h, data }
 }
 
-fn draw_registration_frame(s: &Settings, l: &Layout, canvas: &mut Rgb) {
+fn draw_registration_frame(s: &Settings, l: &Layout, canvas: &mut Rgb, sheet_num: i64) {
     let saving = cyan_saving(s);
     let dict = Dict::from_name(&s.marker_dict);
     let stops = s.ink_stops();
+    let ids = marker_ids_for_sheet(s, sheet_num);
     if let Some(positions) = &l.marker_positions {
-        for (&mid, &(px, py)) in positions {
+        for (&pos_idx, &(px, py)) in positions {
+            let mid = ids.get(pos_idx as usize).copied().unwrap_or(pos_idx);
             let patch = marker_patch_gray(dict, mid, l.marker_side, l.marker_quiet);
             let rgb = if s.is_cyanotype() {
                 if saving {
@@ -764,7 +810,7 @@ pub fn render_page(
     let mut canvas = if render {
         let mut c = Rgb::new(l.page_w as usize, l.page_h as usize, page_bg_color(s));
         if s.registration_on {
-            draw_registration_frame(s, l, &mut c);
+            draw_registration_frame(s, l, &mut c, sheet_num);
         }
         Some(c)
     } else {
@@ -993,13 +1039,33 @@ pub fn build_layout_json(
     video_meta: Value,
     originales_dir: Option<&str>,
 ) -> Value {
+    // Números de hoja reales (para los IDs de identidad por marcadores).
+    let sheet_numbers: Vec<i64> = sheet_records
+        .iter()
+        .filter_map(|r| r.get("numero").and_then(|n| n.as_i64()))
+        .collect();
+    let first_sheet = sheet_numbers.first().copied().unwrap_or(1);
+    let first_ids = marker_ids_for_sheet(s, first_sheet);
     let mut marker_bb = serde_json::Map::new();
+    let mut bboxes_pos: Vec<Value> = Vec::new();
     if let Some(bb) = &l.marker_bboxes {
-        for (id, bbox) in bb {
+        for (pos_idx, bbox) in bb {
             let sb = scale_bbox(*bbox, s, l.page_w, l.page_h);
+            let id = first_ids.get(*pos_idx as usize).copied().unwrap_or(*pos_idx);
             marker_bb.insert(id.to_string(), json!(sb));
+            bboxes_pos.push(json!(sb));
         }
     }
+    // Mapa hoja → IDs (solo en el modo sin QR: es lo que identifica la hoja).
+    let ids_por_hoja: Value = if !s.qr_on && l.marker_bboxes.is_some() {
+        let mut map = serde_json::Map::new();
+        for n in &sheet_numbers {
+            map.insert(n.to_string(), json!(marker_ids_for_sheet(s, *n)));
+        }
+        Value::Object(map)
+    } else {
+        Value::Null
+    };
     let patch_info = l.patch_strip.as_ref().map(|strip| {
         json!({
             "bboxes": strip.iter().map(|(b, _)| json!(scale_bbox(*b, s, l.page_w, l.page_h))).collect::<Vec<_>>(),
@@ -1025,6 +1091,8 @@ pub fn build_layout_json(
             "cantidad": s.marker_count,
             "lado_px": l.marker_side,
             "bboxes": marker_bb,
+            "bboxes_pos": bboxes_pos,
+            "ids_por_hoja": ids_por_hoja,
         },
         "parche_grises": patch_info,
         "hojas": sheet_records,
@@ -1184,6 +1252,31 @@ mod tests {
         assert_eq!(img.px((l.page_w / 2) as usize, (l.page_h * 3 / 4) as usize), [255, 255, 255]);
         let fin = finish_page(&s, img);
         assert_eq!(fin.w as i64, l.page_w); // espejada, mismo tamaño
+    }
+
+    #[test]
+    fn marker_id_scheme_distinguishes_sheets() {
+        let dict = Dict::from_name("DICT_5X5_100");
+        let (m, cap) = marker_id_scheme(dict, 8);
+        assert_eq!(m, 12);
+        assert_eq!(cap, 144);
+        // dentro de la capacidad, cada hoja tiene un juego de IDs distinto
+        let mut sets = std::collections::HashSet::new();
+        for n in 1..=cap as i64 {
+            let ids = sheet_marker_ids(dict, 8, n);
+            assert_eq!(ids.len(), 8);
+            assert!(ids.iter().all(|&id| (id as usize) < dict.size()));
+            // el ID determina la posición: id / m == posición
+            for (j, &id) in ids.iter().enumerate() {
+                assert_eq!(id / m, j as u32);
+            }
+            assert!(sets.insert(ids), "hoja {n} repite IDs");
+        }
+        // con QR (legado) los IDs son la posición
+        let mut s = Settings::default();
+        s.qr_on = true;
+        s.marker_count = 8;
+        assert_eq!(marker_ids_for_sheet(&s, 5), (0..8).collect::<Vec<u32>>());
     }
 
     #[test]

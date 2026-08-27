@@ -161,6 +161,51 @@ fn scan_mirrored_is_auto_corrected() {
 }
 
 #[test]
+fn markers_identify_sheet_without_qr() {
+    // Modo sin QR: la identidad de cada hoja viaja en los IDs de los
+    // marcadores ArUco. Un layout de 2 hojas debe identificar la hoja 2.
+    let mut s = base_settings();
+    s.qr_on = false;
+    s.marker_dict = "DICT_5X5_100".into();
+    let l = build_layout(&s, (16.0, 9.0)).unwrap();
+
+    let mut records = Vec::new();
+    let mut page2_img = None;
+    for sheet_num in 1..=2i64 {
+        let mut frames = Vec::new();
+        for base in [[200u8, 60, 60], [60, 60, 200]] {
+            let (f, _) = synth_frame(320, 180, base);
+            frames.push(f);
+        }
+        let labels: Vec<String> = (1..=2)
+            .map(|i| format!("demo_{:03}", (sheet_num - 1) * 2 + i))
+            .collect();
+        let page = render_page(&s, &l, &frames, &labels, sheet_num, true);
+        let mut record = page.record.unwrap();
+        record["archivo_hoja"] = json!(format!("demo_p{sheet_num}.png"));
+        records.push(record);
+        if sheet_num == 2 {
+            page2_img = page.image;
+        }
+    }
+    let layout = build_layout_json(&s, &l, &records, json!([]), json!({}), None);
+    let iph = &layout["marcadores"]["ids_por_hoja"];
+    assert!(iph.is_object(), "el layout sin QR debe llevar ids_por_hoja: {iph}");
+    assert_ne!(iph["1"], iph["2"], "cada hoja debe tener IDs distintos");
+
+    let scan = simulate_scan(&page2_img.unwrap(), 1.3, 21);
+    let out = process_scan(DynImg::U8(scan), "s2.png", &layout, &ScanOptions::default(), &HashMap::new());
+    assert_eq!(out.result["ok"], json!(true), "resultado: {}", out.result);
+    assert_eq!(out.result["hoja_numero"], json!(2), "{}", out.result);
+    let via = out.result["via"].as_str().unwrap();
+    assert!(via.starts_with("marker IDs"), "via = {via}");
+    assert_eq!(out.frames.len(), 2, "{}", out.result);
+    let mut labs: Vec<&str> = out.frames.iter().map(|(l2, _)| l2.as_str()).collect();
+    labs.sort();
+    assert_eq!(labs, vec!["demo_003", "demo_004"]);
+}
+
+#[test]
 fn cyanotype_full_roundtrip() {
     // Hoja en modo cianotipia (negativo espejado) → copia azul simulada →
     // escaneo → procesado en modo cianotipia.

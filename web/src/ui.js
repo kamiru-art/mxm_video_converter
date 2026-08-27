@@ -167,8 +167,9 @@ export function originalPageNumbers(positions, perPage, start = 1) {
   return out;
 }
 
-export function pngUrl(bytes) {
-  return URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+export function pngUrl(data) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: 'image/png' });
+  return URL.createObjectURL(blob);
 }
 
 export function fmtBytes(n) {

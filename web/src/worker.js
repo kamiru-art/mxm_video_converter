@@ -1,8 +1,11 @@
 // Worker de procesamiento: aloja el núcleo Rust/WASM y atiende comandos.
 // Cada worker tiene su propia memoria WASM: varios workers = escaneos en paralelo.
+// Cada respuesta incluye `mem` (bytes de memoria WASM) y `pinned` (estado PDF
+// vivo) para que el pool pueda reciclar workers hinchados sin perder nada.
 import init, * as core from './wasm/mxm_core.js';
 
-let ready = init().then(() => core.version());
+let wasm = null;
+let ready = init().then((exports) => { wasm = exports; return core.version(); });
 
 const handlers = {
   version: () => core.version(),
@@ -31,6 +34,19 @@ const handlers = {
     for (const f of r.sin_identificar) transfer.push(f.png.buffer);
     if (r.overlay) transfer.push(r.overlay.buffer);
     return { value: r, transfer };
+  },
+  scan_detect: (a) => core.scan_detect(a.rgba, a.w, a.h, a.name, a.layout, a.opts ?? '{}'),
+  scan_finish: (a) => {
+    const r = core.scan_finish(a.rgba, a.w, a.h, a.name, a.layout, a.opts ?? '{}', a.claims ?? '{}', a.state);
+    const transfer = [];
+    for (const f of r.frames) transfer.push(f.png.buffer);
+    for (const f of r.sin_identificar) transfer.push(f.png.buffer);
+    if (r.overlay) transfer.push(r.overlay.buffer);
+    return { value: r, transfer };
+  },
+  encode_tiff: (a) => {
+    const tif = core.encode_tiff(a.png);
+    return { value: tif, transfer: [tif.buffer] };
   },
   printer_test_png: (a) => {
     const png = core.printer_test_png(a.paper, a.dpi);
@@ -67,12 +83,15 @@ self.onmessage = async (ev) => {
     const h = handlers[cmd];
     if (!h) throw new Error(`Unknown command: ${cmd}`);
     const out = h(args ?? {});
+    const mem = wasm?.memory?.buffer?.byteLength ?? 0;
+    const pinned = pdfInstance !== null;
     if (out && typeof out === 'object' && 'value' in out && 'transfer' in out) {
-      self.postMessage({ id, ok: true, value: out.value }, out.transfer);
+      self.postMessage({ id, ok: true, value: out.value, mem, pinned }, out.transfer);
     } else {
-      self.postMessage({ id, ok: true, value: out });
+      self.postMessage({ id, ok: true, value: out, mem, pinned });
     }
   } catch (e) {
-    self.postMessage({ id, ok: false, error: String(e?.message ?? e) });
+    const mem = wasm?.memory?.buffer?.byteLength ?? 0;
+    self.postMessage({ id, ok: false, error: String(e?.message ?? e), mem, pinned: pdfInstance !== null });
   }
 };

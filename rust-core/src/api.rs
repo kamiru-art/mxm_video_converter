@@ -11,7 +11,10 @@ use crate::dedup;
 use crate::img::{DynImg, Rgb};
 use crate::layoutfile;
 use crate::pdf::PdfBuilder;
-use crate::scanproc::{process_scan, ScanOptions};
+use crate::scanproc::{
+    base_report, detect_scan, finish_scan, process_scan, resolve_markers, FinishInput,
+    LocalShift, ScanOptions, MAX_IMAGE_PIXELS,
+};
 use crate::sheet::{self, FrameInput, Settings};
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use serde_json::{json, Value};
@@ -91,6 +94,7 @@ pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result
         "img_area_h": l.img_area_h,
         "grid_swapped": (l.cols, l.rows) != (s.cols, s.rows),
         "avisos": sheet::cyanotype_size_warnings(&s),
+        "marker_capacity": sheet::marker_capacity(&s),
     })
     .to_string())
 }
@@ -260,18 +264,7 @@ pub fn decode_image(bytes: &[u8]) -> Result<JsValue, JsValue> {
     Ok(out.into())
 }
 
-/// Procesa UN escaneo. Devuelve {result, frames: [{label, png}], sin_identificar,
-/// overlay (JPEG)}.
-#[wasm_bindgen]
-pub fn scan_process(
-    scan_bytes: &[u8],
-    scan_name: &str,
-    layout_json: &str,
-    opts_json: &str,
-    claims_json: &str,
-) -> Result<JsValue, JsValue> {
-    let layout_raw: Value = serde_json::from_str(layout_json).map_err(err)?;
-    let layout = layoutfile::normalize(layout_raw);
+fn parse_scan_options(opts_json: &str) -> ScanOptions {
     let opts_v: Value = serde_json::from_str(opts_json).unwrap_or(json!({}));
     let mut opts = ScanOptions::default();
     if let Some(b) = opts_v.get("bleed").and_then(|v| v.as_f64()) {
@@ -292,12 +285,10 @@ pub fn scan_process(
     if let Some(b) = opts_v.get("fine_align").and_then(|v| v.as_bool()) {
         opts.fine_align = b;
     }
-    let claims_map: std::collections::HashMap<i64, String> =
-        serde_json::from_str(claims_json).unwrap_or_default();
+    opts
+}
 
-    let (img, _alpha) = codecs::decode(scan_bytes).map_err(err)?;
-    let out = process_scan(img, scan_name, &layout, &opts, &claims_map);
-
+fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
     let obj = Object::new();
     Reflect::set(&obj, &"result".into(), &JsValue::from_str(&out.result.to_string())).ok();
     let frames = Array::new();
@@ -322,7 +313,126 @@ pub fn scan_process(
         let jpg = codecs::encode_jpeg_rgb(ov, 82);
         Reflect::set(&obj, &"overlay".into(), &Uint8Array::from(jpg.as_slice())).ok();
     }
-    Ok(obj.into())
+    obj.into()
+}
+
+/// RGBA (del canvas del navegador) → Rgb de 8 bits.
+fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> Result<Rgb, JsValue> {
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return Err(err("RGBA buffer does not match the given dimensions"));
+    }
+    if w * h > MAX_IMAGE_PIXELS {
+        return Err(err(format!("Image too large ({w}×{h}).")));
+    }
+    let mut data = Vec::with_capacity(w * h * 3);
+    for p in rgba.chunks_exact(4).take(w * h) {
+        data.extend_from_slice(&p[..3]);
+    }
+    Ok(Rgb { w, h, data })
+}
+
+/// Procesa UN escaneo (decodificación + detección + warp + recortes, todo en
+/// WASM). Devuelve {result, frames: [{label, png}], sin_identificar, overlay}.
+#[wasm_bindgen]
+pub fn scan_process(
+    scan_bytes: &[u8],
+    scan_name: &str,
+    layout_json: &str,
+    opts_json: &str,
+    claims_json: &str,
+) -> Result<JsValue, JsValue> {
+    let layout_raw: Value = serde_json::from_str(layout_json).map_err(err)?;
+    let layout = layoutfile::normalize(layout_raw);
+    let opts = parse_scan_options(opts_json);
+    let claims_map: std::collections::HashMap<i64, String> =
+        serde_json::from_str(claims_json).unwrap_or_default();
+
+    let (img, _alpha) = codecs::decode(scan_bytes).map_err(err)?;
+    let out = process_scan(img, scan_name, &layout, &opts, &claims_map);
+    Ok(scan_output_to_js(out))
+}
+
+/// Fase de detección para el camino con warp por WebGPU: recibe el RGBA de
+/// 8 bits ya decodificado por el navegador y devuelve un JSON con la
+/// homografía, escala, espejado y el estado necesario para `scan_finish`.
+#[wasm_bindgen]
+pub fn scan_detect(
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+    scan_name: &str,
+    layout_json: &str,
+    opts_json: &str,
+) -> Result<String, JsValue> {
+    let layout_raw: Value = serde_json::from_str(layout_json).map_err(err)?;
+    let layout = layoutfile::normalize(layout_raw);
+    let opts = parse_scan_options(opts_json);
+    let markers = resolve_markers(&layout);
+    let mut img = DynImg::U8(rgba_to_rgb(rgba, w, h)?);
+    let mut res = base_report(scan_name);
+    match detect_scan(&mut img, &layout, &opts, &markers, &mut res) {
+        Ok(d) => {
+            let ids: Vec<u32> = d.refined.keys().cloned().collect();
+            Ok(json!({
+                "ok": true,
+                "res": res,
+                "m": d.m.to_vec(),
+                "s": d.s,
+                "flipped": d.flipped,
+                "out_w": d.out_w,
+                "out_h": d.out_h,
+                "refined_ids": ids,
+                "local": d.local,
+            })
+            .to_string())
+        }
+        Err(()) => Ok(json!({ "ok": false, "res": res }).to_string()),
+    }
+}
+
+/// Fase final para el camino WebGPU: recibe la hoja YA enderezada (RGBA) y el
+/// estado que devolvió `scan_detect`. Mismo formato de salida que scan_process.
+#[wasm_bindgen]
+pub fn scan_finish(
+    warped_rgba: &[u8],
+    w: usize,
+    h: usize,
+    scan_name: &str,
+    layout_json: &str,
+    opts_json: &str,
+    claims_json: &str,
+    state_json: &str,
+) -> Result<JsValue, JsValue> {
+    let layout_raw: Value = serde_json::from_str(layout_json).map_err(err)?;
+    let layout = layoutfile::normalize(layout_raw);
+    let opts = parse_scan_options(opts_json);
+    let claims_map: std::collections::HashMap<i64, String> =
+        serde_json::from_str(claims_json).unwrap_or_default();
+    let markers = resolve_markers(&layout);
+    let state: Value = serde_json::from_str(state_json).map_err(err)?;
+    let res = state.get("res").cloned().unwrap_or_else(|| base_report(scan_name));
+    let s = state.get("s").and_then(|v| v.as_f64()).ok_or_else(|| err("state without scale"))?;
+    let refined_ids: std::collections::HashSet<u32> = state
+        .get("refined_ids")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|u| u as u32)).collect())
+        .unwrap_or_default();
+    let local: Option<LocalShift> = state
+        .get("local")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let warp = DynImg::U8(rgba_to_rgb(warped_rgba, w, h)?);
+    let fin = FinishInput { s, refined_ids, local };
+    let out = finish_scan(warp, scan_name, &layout, &opts, &claims_map, &markers, fin, res);
+    Ok(scan_output_to_js(out))
+}
+
+/// Re-codifica un PNG (el que devuelve render_sheet) como TIFF, conservando
+/// la profundidad de bits.
+#[wasm_bindgen]
+pub fn encode_tiff(png_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let (img, _) = codecs::decode(png_bytes).map_err(err)?;
+    Ok(codecs::encode_tiff_dyn(&img))
 }
 
 // ── Calibración ─────────────────────────────────────────────────

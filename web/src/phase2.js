@@ -1,11 +1,12 @@
 // Fase ② — Procesar escaneos: de la hoja pintada/expuesta a fotogramas.
 
-import { run, poolSize } from './pool.js';
+import { run, recycleIdle } from './pool.js';
 import { el, toast, download, progressBar, dropzone, field, numberInput, select, check,
          sanitizeLabel, pngUrl } from './ui.js';
 import { project } from './project.js';
 import { generateSheets, resolveCyanCurve } from './gen.js';
 import { makeZip } from './zip.js';
+import { getGpuDevice, gpuWarpPerspective } from './webgpu.js';
 
 export const ph2 = {
   layout: null,        // objeto layout.json (v1 o v2; el núcleo normaliza)
@@ -76,6 +77,45 @@ export function mountPhase2(root) {
     onFiles: (files) => processScans(files),
   });
 
+  /** Profundidad de bits de un PNG (byte 24 del IHDR). */
+  async function pngBitDepth(file) {
+    try {
+      const head = new Uint8Array(await file.slice(0, 26).arrayBuffer());
+      return head[24] ?? 8;
+    } catch { return 8; }
+  }
+
+  /** ImageBitmap si el navegador puede decodificar SIN perder profundidad. */
+  async function decodeForGpu(f) {
+    const name = f.name.toLowerCase();
+    if (/\.(tif|tiff)$/.test(name)) return null;              // decodifica WASM
+    if (/\.png$/.test(name) && (await pngBitDepth(f)) > 8) return null; // 16 bits
+    try { return await createImageBitmap(f); } catch { return null; }
+  }
+
+  /** Camino acelerado: detectar en WASM → enderezar en la GPU → recortar en
+   *  WASM. La memoria WASM nunca ve entrada y salida a la vez. */
+  async function processViaGpu(f, bmp, layoutStr, opts) {
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    const d = ctx.getImageData(0, 0, bmp.width, bmp.height);
+    const rgba = new Uint8Array(d.data.buffer);
+    const det = JSON.parse(await run('scan_detect', {
+      rgba, w: bmp.width, h: bmp.height, name: f.name, layout: layoutStr, opts,
+    }, [rgba.buffer]));
+    if (!det.ok) {
+      return { result: JSON.stringify(det.res), frames: [], sin_identificar: [], overlay: null };
+    }
+    const warped = await gpuWarpPerspective(bmp, det.m, det.flipped, det.out_w, det.out_h);
+    if (!warped) return null; // la GPU no pudo con este tamaño: camino WASM
+    const state = JSON.stringify({ res: det.res, s: det.s, refined_ids: det.refined_ids, local: det.local });
+    return run('scan_finish', {
+      rgba: warped, w: det.out_w, h: det.out_h, name: f.name,
+      layout: layoutStr, opts, claims: JSON.stringify(ph2.claims), state,
+    }, [warped.buffer]);
+  }
+
   async function processScans(files) {
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
     prog.show();
@@ -88,36 +128,52 @@ export function mountPhase2(root) {
       fine_align: fineCheck.input.checked,
     });
     const layoutStr = JSON.stringify(ph2.layout);
-    const singleSheet = (ph2.layout.hojas ?? []).length === 1;
+    const gpu = await getGpuDevice();
     let done = 0;
-    const jobs = files.map((f) => async () => {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const r = await run('scan_process', {
-        bytes, name: f.name, layout: layoutStr, opts,
-        claims: JSON.stringify(ph2.claims),
-      }, [bytes.buffer]);
-      const result = JSON.parse(r.result);
-      if (result.hoja_numero != null && String(result.via ?? '').startsWith('QR')) {
-        ph2.claims[result.hoja_numero] = f.name;
+    // SECUENCIAL a propósito: un escaneo grande necesita cientos de MB
+    // mientras se procesa; en paralelo la RAM se disparaba. El enderezado va
+    // por WebGPU cuando se puede, así que el total sigue siendo rápido.
+    for (const f of files) {
+      try {
+        let r = null;
+        if (gpu) {
+          const bmp = await decodeForGpu(f);
+          if (bmp) {
+            try { r = await processViaGpu(f, bmp, layoutStr, opts); }
+            finally { bmp.close?.(); }
+          }
+        }
+        if (!r) {
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          r = await run('scan_process', {
+            bytes, name: f.name, layout: layoutStr, opts,
+            claims: JSON.stringify(ph2.claims),
+          }, [bytes.buffer]);
+        }
+        const result = JSON.parse(r.result);
+        const via = String(result.via ?? '');
+        if (result.hoja_numero != null && (via.startsWith('QR') || via.startsWith('marker'))) {
+          ph2.claims[result.hoja_numero] = f.name;
+        }
+        const asBlob = (u8, type) => new Blob([u8], { type });
+        const frames = (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
+        const sinIdentificar = (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
+        for (const fr of frames) project.processedFrames.set(fr.label, fr.png);
+        ph2.results.push({
+          result, frames, sinIdentificar,
+          overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
+        });
+      } catch (e) {
+        toast(`Error in one scan: ${e.message}`, 'err');
       }
-      for (const fr of r.frames) project.processedFrames.set(fr.label, fr.png);
-      ph2.results.push({ result, frames: r.frames, sinIdentificar: r.sin_identificar, overlay: r.overlay });
       done++;
-      prog.set(done / files.length, `${done}/${files.length} scans`);
+      prog.set(done / files.length, `${done}/${files.length} scans${gpu ? ' · GPU straightening' : ''}`);
       renderResults();
-    });
-    // en paralelo (varios workers WASM), salvo layouts de una sola hoja
-    const width = singleSheet ? 1 : Math.min(poolSize(), 3);
-    const queue = [...jobs];
-    await Promise.all(Array.from({ length: width }, async () => {
-      while (queue.length) {
-        const job = queue.shift();
-        try { await job(); } catch (e) { toast(`Error in one scan: ${e.message}`, 'err'); done++; }
-      }
-    }));
+    }
+    recycleIdle(); // liberar la memoria WASM que infló el lote
     prog.hide();
     renderResults();
-    toast('Processing finished. Check the report.', 'ok');
+    toast(`Processing finished${gpu ? ' (WebGPU-accelerated straightening)' : ''}. Check the report.`, 'ok');
   }
 
   function renderResults() {
@@ -126,7 +182,7 @@ export function mountPhase2(root) {
       const thumbs = el('div', { class: 'thumbs' });
       if (overlay) {
         thumbs.append(el('div', { class: 'thumb', style: 'grid-column: span 3; aspect-ratio:auto' },
-          el('img', { src: URL.createObjectURL(new Blob([overlay], { type: 'image/jpeg' })), alt: 'alignment' }),
+          el('img', { src: URL.createObjectURL(overlay), alt: 'alignment' }),
           el('div', { class: 'tag' }, 'alignment: green=marker, red=missing, blue=frames, orange=QRs')));
       }
       for (const f of [...frames, ...sinIdentificar].slice(0, 24)) {
@@ -332,7 +388,7 @@ export function mountPhase2(root) {
 
   const paper = el('div', { class: 'paper' },
     el('h2', {}, '② Process scans'),
-    el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its QRs and crops every frame. No Photoshop.'),
+    el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its marker IDs (or its QRs, on older projects) and crops every frame. No Photoshop.'),
     layoutDz, useCurrentBtn, layoutInfo,
     el('h3', {}, 'Options'),
     el('div', { class: 'row' },

@@ -35,8 +35,9 @@ async function main() {
     const v = await run('version', {});
     log(`wasm ${v} cargado`);
 
-    // fase ①: generar una hoja con 4 frames sintéticos
-    const s = { ...defaultSettings(), dpi: 150, cols: 2, rows: 2, project_name: 'e2e', out_name: 'e2e', marker_size_mm: 10, qr_size_mm: 14 };
+    // fase ①: generar una hoja con 4 frames sintéticos (SIN QR: la identidad
+    // va en los IDs de los marcadores — el camino por defecto actual)
+    const s = { ...defaultSettings(), dpi: 150, cols: 2, rows: 2, project_name: 'e2e', out_name: 'e2e', marker_size_mm: 10, fmt_tiff: true };
     const colors = [[200, 60, 60], [60, 180, 60], [60, 60, 200], [180, 160, 40]];
     const frames = colors.map((c, i) => {
       const fd = synthFrame(320, 180, c);
@@ -51,12 +52,16 @@ async function main() {
       timeline: labels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
       videoMeta: { fps_extraccion: 4 }, keepOriginals: false,
     });
-    const sheetPng = out.files.get('e2e_p1.png');
-    if (!sheetPng) throw new Error('sheet was not generated');
-    log(`hoja generada (${sheetPng.length} bytes), PDF: ${out.files.has('e2e.pdf')}, layout: ${!!out.layoutJson}`);
+    const sheetBlob = out.files.get('e2e_p1.png');
+    if (!sheetBlob) throw new Error('sheet was not generated');
+    if (!out.files.get('e2e_p1.tif')?.size) throw new Error('TIFF export missing');
+    const sheetPng = new Uint8Array(await sheetBlob.arrayBuffer());
+    const layoutObj = JSON.parse(out.layoutJson);
+    if (!layoutObj.marcadores?.ids_por_hoja) throw new Error('layout without ids_por_hoja (no-QR identity)');
+    log(`hoja generada (${sheetPng.length} bytes), PDF: ${out.files.has('e2e.pdf')}, TIFF ok, layout: ids_por_hoja ✓`);
 
     // "escanear": dibujar la hoja rotada 2° sobre un lienzo mayor
-    const bmp = await createImageBitmap(new Blob([sheetPng], { type: 'image/png' }));
+    const bmp = await createImageBitmap(sheetBlob);
     const sc = new OffscreenCanvas(Math.round(bmp.width * 1.3), Math.round(bmp.height * 1.25));
     const sctx = sc.getContext('2d');
     sctx.fillStyle = '#b4b4af';
@@ -69,14 +74,47 @@ async function main() {
     const scanBytes = new Uint8Array(await scanBlob.arrayBuffer());
     log(`escaneo simulado ${sc.width}×${sc.height}`);
 
-    // fase ②: procesar
+    // fase ②: procesar (camino todo-en-WASM)
     const res = await run('scan_process', {
       bytes: scanBytes, name: 'scan1.png', layout: out.layoutJson,
       opts: '{}', claims: '{}',
     }, [scanBytes.buffer]);
     const result = JSON.parse(res.result);
-    log(`scan ok=${result.ok} hoja=${result.hoja_numero} marcadores=${result.marcadores}/${result.marcadores_total} escala=${result.escala} frames=${res.frames.length}`);
+    log(`scan ok=${result.ok} hoja=${result.hoja_numero} via=${result.via} marcadores=${result.marcadores}/${result.marcadores_total} escala=${result.escala} frames=${res.frames.length}`);
     if (!result.ok || res.frames.length !== 4) throw new Error(`fase ② falló: ${res.result}`);
+    if (!String(result.via ?? '').startsWith('marker')) throw new Error(`expected marker-ID identification, got via=${result.via}`);
+
+    // fase ② por WebGPU (si el navegador tiene GPU): detect → warp GPU → finish
+    try {
+      const { getGpuDevice, gpuWarpPerspective } = await import('./webgpu.js');
+      const gpu = await getGpuDevice();
+      if (gpu) {
+        const sbmp = await createImageBitmap(scanBlob);
+        const cnv = new OffscreenCanvas(sbmp.width, sbmp.height);
+        const cctx0 = cnv.getContext('2d', { willReadFrequently: true });
+        cctx0.drawImage(sbmp, 0, 0);
+        const rgba = new Uint8Array(cctx0.getImageData(0, 0, sbmp.width, sbmp.height).data.buffer);
+        const det = JSON.parse(await run('scan_detect', {
+          rgba, w: sbmp.width, h: sbmp.height, name: 'scan1gpu.png', layout: out.layoutJson, opts: '{}',
+        }, [rgba.buffer]));
+        if (!det.ok) throw new Error(`scan_detect failed: ${JSON.stringify(det.res)}`);
+        const warped = await gpuWarpPerspective(sbmp, det.m, det.flipped, det.out_w, det.out_h);
+        sbmp.close();
+        if (!warped) throw new Error('gpuWarpPerspective returned null');
+        const state = JSON.stringify({ res: det.res, s: det.s, refined_ids: det.refined_ids, local: det.local });
+        const gres = await run('scan_finish', {
+          rgba: warped, w: det.out_w, h: det.out_h, name: 'scan1gpu.png',
+          layout: out.layoutJson, opts: '{}', claims: '{}', state,
+        }, [warped.buffer]);
+        const gresult = JSON.parse(gres.result);
+        log(`scan GPU ok=${gresult.ok} hoja=${gresult.hoja_numero} frames=${gres.frames.length}`);
+        if (!gresult.ok || gres.frames.length !== 4) throw new Error(`GPU path failed: ${gres.result}`);
+      } else {
+        log('· (no WebGPU in this browser: GPU path skipped, WASM fallback already tested)');
+      }
+    } catch (e) {
+      throw new Error(`WebGPU path: ${e.message ?? e}`);
+    }
 
     // fase ③: página de prueba de impresora + autoanálisis
     const test = await run('printer_test_png', { paper: 'A4', dpi: 150 });
@@ -86,7 +124,8 @@ async function main() {
     if (Math.abs(prof.scale_x - 1) > 0.01) throw new Error('escala de impresora incorrecta');
 
     // ☀️ cianotipia: negativo → copia azul simulada → escaneo → procesado
-    const sc2 = { ...s, mode: 'cianotipia', cyan_mirror: true, cyan_bg: 'ahorro', out_name: 'cy', project_name: 'cy', marker_size_mm: 12, qr_size_mm: 16 };
+    // (con QR activado: ejercita el camino LEGADO de identificación por QR)
+    const sc2 = { ...s, mode: 'cianotipia', cyan_mirror: true, cyan_bg: 'ahorro', out_name: 'cy', project_name: 'cy', marker_size_mm: 12, qr_on: true, qr_size_mm: 16, fmt_tiff: false };
     const cyFrames = [synthFrame(320, 180, [200, 60, 60]), synthFrame(320, 180, [40, 40, 40])];
     const cyLabels = ['cy_001', 'cy_002'];
     const cyGen = await generateSheets({

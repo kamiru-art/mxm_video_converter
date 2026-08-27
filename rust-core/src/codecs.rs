@@ -80,6 +80,31 @@ pub fn encode_png_dyn(img: &DynImg) -> Vec<u8> {
     }
 }
 
+/// TIFF conservando la profundidad (para imprentas que piden TIFF).
+pub fn encode_tiff_dyn(img: &DynImg) -> Vec<u8> {
+    let mut out = Vec::new();
+    match img {
+        DynImg::U8(i) => {
+            let buf = image::RgbImage::from_raw(i.w as u32, i.h as u32, i.data.clone()).unwrap();
+            DynamicImage::ImageRgb8(buf)
+                .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Tiff)
+                .expect("TIFF en memoria");
+        }
+        DynImg::U16(i) => {
+            let buf = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_raw(
+                i.w as u32,
+                i.h as u32,
+                i.data.clone(),
+            )
+            .unwrap();
+            DynamicImage::ImageRgb16(buf)
+                .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Tiff)
+                .expect("TIFF16 en memoria");
+        }
+    }
+    out
+}
+
 /// JPEG para miniaturas e informes (calidad 82 como la app original).
 pub fn encode_jpeg_rgb(img: &Rgb, quality: u8) -> Vec<u8> {
     let buf = image::RgbImage::from_raw(img.w as u32, img.h as u32, img.data.clone()).unwrap();
@@ -110,6 +135,17 @@ mod tests {
         assert!(!alpha);
         match dec {
             DynImg::U8(i) => assert_eq!(i.px(5, 5), [10, 200, 30]),
+            _ => panic!("debería ser de 8 bits"),
+        }
+    }
+
+    #[test]
+    fn tiff_roundtrip_8bit() {
+        let img = Rgb::new(24, 12, [90, 40, 210]);
+        let tif = encode_tiff_dyn(&DynImg::U8(img));
+        let (dec, _) = decode(&tif).unwrap();
+        match dec {
+            DynImg::U8(i) => assert_eq!(i.px(3, 3), [90, 40, 210]),
             _ => panic!("debería ser de 8 bits"),
         }
     }

@@ -33,16 +33,16 @@ body {
   line-height: 1.5;
   min-height: 100vh;
 }
-#app { max-width: 1240px; margin: 0 auto; padding: 0 20px 40px; }
+#app { max-width: 1800px; margin: 0 auto; padding: 0 24px 24px; }
 
-/* ── Cabecera ─────────────────────────────────────────────── */
-.masthead { padding-top: 34px; }
-.wordmark { position: relative; display: inline-block; padding: 6px 18px 8px 14px; }
+/* ── Cabecera compacta: marca y navegación en una sola fila ── */
+.masthead { display: flex; align-items: center; gap: 24px; padding-top: 14px; flex-wrap: wrap; }
+.wordmark { position: relative; display: inline-block; padding: 6px 18px 8px 14px; flex: 0 0 auto; }
 .wordmark h1 {
   font-family: var(--font-display);
   font-variation-settings: "wdth" 118;
   font-weight: 850;
-  font-size: clamp(34px, 6vw, 52px);
+  font-size: clamp(26px, 3vw, 38px);
   letter-spacing: 0.01em;
   margin: 0;
   color: var(--papel);
@@ -57,7 +57,8 @@ body {
 
 /* ── Tira de fases (navegación = tira de contactos) ───────── */
 .strip {
-  display: flex; gap: 10px; margin: 26px 0 30px; padding: 12px 14px;
+  display: flex; gap: 8px; margin: 0; padding: 10px 12px;
+  flex: 1 1 520px;
   background: var(--prusia-950);
   border-radius: var(--radius);
   border: 1px solid var(--prusia-700);
@@ -65,7 +66,7 @@ body {
 }
 .strip::-webkit-scrollbar { display: none; }
 .frame {
-  flex: 1 1 0; min-width: 128px;
+  flex: 1 1 0; min-width: 110px;
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
   padding: 10px 14px;
   background: var(--prusia-800);
@@ -90,9 +91,17 @@ body {
 /* ── Vistas ───────────────────────────────────────────────── */
 .view { display: none; }
 .view.active { display: block; }
+#views { margin-top: 14px; }
 
-.workbench { display: grid; grid-template-columns: minmax(340px, 430px) 1fr; gap: 20px; align-items: start; }
+.workbench { display: grid; grid-template-columns: minmax(360px, 520px) 1fr; gap: 20px; align-items: start; }
 @media (max-width: 900px) { .workbench { grid-template-columns: 1fr; } }
+
+/* En pantallas con altura: cada panel gestiona su propio scroll y la página
+   entera cabe en una sola vista, sin scroll global. */
+@media (min-width: 901px) and (min-height: 560px) {
+  .workbench .paper { max-height: calc(100vh - 132px); overflow-y: auto; overscroll-behavior: contain; }
+  .workbench .bench { max-height: calc(100vh - 132px); overflow-y: auto; overscroll-behavior: contain; }
+}
 
 /* panel de controles = ficha de papel */
 .paper {
@@ -150,7 +159,11 @@ input[type="color"] { padding: 1px; height: 32px; width: 52px; border: 1.5px sol
 input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--prusia-500); outline-offset: 1px; }
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
-.row.tight { align-items: end; }
+.row.tight { align-items: flex-end; }
+/* botones dentro de una fila de campos: alineados con el borde inferior del
+   input, sin estirarse a todo el ancho */
+.row.tight > .btn { flex: 0 0 auto; margin: 8px 0; height: 38px; white-space: nowrap; }
+.row.tight > .btn.small { height: 38px; }
 label.check { display: flex; align-items: center; gap: 8px; margin: 7px 0; font-size: 13.5px; cursor: pointer; }
 label.check input { width: 16px; height: 16px; accent-color: var(--prusia-500); }
 fieldset { border: 1px solid var(--papel-sombra); border-radius: 8px; margin: 12px 0; padding: 8px 12px 12px; }
@@ -239,18 +252,33 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
 }
 
 /* páginas de ayuda */
-.prose { max-width: 760px; }
+.prose { max-width: 940px; }
 .prose h2 { font-family: var(--font-display); font-variation-settings: "wdth" 112; font-weight: 800; color: var(--papel); }
 .prose h3 { font-family: var(--font-display); color: var(--sol); margin-top: 26px; }
 .prose a { color: var(--sol); }
 .prose code, .prose .mono { font-family: var(--font-mono); font-size: 13px; background: var(--prusia-950); padding: 1px 5px; border-radius: 4px; }
-.prose .flow {
-  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.8;
+
+/* el flujo del tutorial: tarjetas de paso, no un bloque de código */
+.prose .steps {
+  list-style: none; display: flex; flex-wrap: wrap; gap: 14px;
+  padding: 0; margin: 18px 0 8px;
+}
+.prose .steps li {
+  flex: 1 1 150px; min-width: 140px; max-width: 220px; position: relative;
   background: var(--prusia-950); border: 1px solid var(--prusia-700);
-  border-radius: var(--radius); padding: 14px 18px; overflow-x: auto;
+  border-radius: 10px; padding: 12px 14px;
+}
+.prose .steps li strong { display: block; color: var(--papel); font-family: var(--font-display); font-size: 14.5px; margin-bottom: 2px; }
+.prose .steps li span:last-child { font-size: 12.5px; color: var(--cian-300); line-height: 1.4; display: block; }
+.prose .steps .step-ico { font-size: 20px; display: block; margin-bottom: 6px; }
+.prose .steps li:not(:last-child)::after {
+  content: "→"; position: absolute; right: -13px; top: 50%;
+  transform: translateY(-50%); color: var(--sol); font-weight: 700; z-index: 1;
 }
 
-.colophon { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--prusia-700); font-size: 12.5px; color: var(--cian-300); }
+.colophon { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--prusia-700); font-size: 11.5px; color: var(--cian-300); }
+.colophon p { margin: 2px 0; display: inline; }
+.colophon p + p::before { content: " · "; color: var(--prusia-500); }
 .colophon a { color: var(--sol); }
 
 .pill { display: inline-block; font-family: var(--font-mono); font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--prusia-800); border: 1px solid var(--prusia-700); color: var(--cian-300); }

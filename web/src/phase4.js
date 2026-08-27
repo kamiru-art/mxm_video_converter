@@ -1,6 +1,6 @@
 // Fase ④ — Reconstruir el video final desde los fotogramas procesados.
 
-import { el, toast, download, progressBar, dropzone, field, numberInput } from './ui.js';
+import { el, toast, download, progressBar, dropzone, field, numberInput, select } from './ui.js';
 import { project } from './project.js';
 import { ph2 } from './phase2.js';
 import { buildVideo } from './video.js';
@@ -54,6 +54,25 @@ export function mountPhase4(root) {
   const stateInfo = el('div', { class: 'hint' });
   const missingBox = el('div');
   const fpsIn = numberInput(12, { min: 0.1, step: 0.1 });
+  const fmtSel = select([
+    ['auto', 'Automatic (best supported)'],
+    ['mp4', 'MP4 (H.264)'],
+    ['webm', 'WebM (VP9/VP8)'],
+  ], 'auto');
+  const qualSel = select([
+    ['very_high', 'Very high'],
+    ['high', 'High (recommended)'],
+    ['medium', 'Medium'],
+    ['low', 'Low (small file)'],
+    ['custom', 'Custom bitrate…'],
+  ], 'high');
+  const bitrateIn = numberInput(8, { min: 0.5, step: 0.5 });
+  const bitrateField = field('Bitrate (Mbps)', bitrateIn);
+  bitrateField.style.display = 'none';
+  qualSel.addEventListener('change', () => {
+    bitrateField.style.display = qualSel.value === 'custom' ? '' : 'none';
+  });
+  const nameIn = el('input', { type: 'text', placeholder: '= project name' });
   const prog = progressBar();
   prog.hide();
   const preview = el('video', { controls: '', style: 'max-width:100%; border-radius:6px; margin-top:10px; display:none' });
@@ -103,14 +122,17 @@ export function mountPhase4(root) {
     prog.show();
     try {
       const getters = files.map((f) => async () => {
-        if (f.kind === 'bytes') {
-          return createImageBitmap(new Blob([f.data], { type: 'image/png' }));
-        }
-        return createImageBitmap(f.data);
+        const blob = f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' });
+        return createImageBitmap(blob);
       });
       const fps = parseFloat(fpsIn.value) || 12;
-      const out = await buildVideo(getters, fps, (i, n) => prog.set(i / n, `encoding ${i}/${n}`));
-      const name = `${sanitizeLabel(l.proyecto || 'video')}.${out.ext}`;
+      const out = await buildVideo(getters, fps, (i, n) => prog.set(i / n, `encoding ${i}/${n}`), {
+        format: fmtSel.value,
+        quality: qualSel.value,
+        bitrateMbps: parseFloat(bitrateIn.value) || 0,
+      });
+      const base = sanitizeLabel(nameIn.value.trim() || l.proyecto || 'video');
+      const name = `${base}.${out.ext}`;
       download(out.bytes, name, out.mime);
       preview.src = URL.createObjectURL(new Blob([out.bytes], { type: out.mime }));
       preview.style.display = '';
@@ -148,7 +170,16 @@ export function mountPhase4(root) {
     }),
     stateInfo,
     missingBox,
-    field('Frames per second', fpsIn, 'Read from the project; you can change it.'),
+    el('h3', {}, 'Output'),
+    el('div', { class: 'row' },
+      field('Frames per second', fpsIn, 'Read from the project; you can change it.'),
+      field('Format', fmtSel),
+    ),
+    el('div', { class: 'row' },
+      field('Quality', qualSel),
+      bitrateField,
+      field('File name', nameIn),
+    ),
     buildBtn,
     prog.root,
   );

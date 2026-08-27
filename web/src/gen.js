@@ -2,7 +2,7 @@
 // Orquesta al núcleo WASM página a página para no cargar todos los
 // fotogramas a resolución completa a la vez.
 
-import { run, run0 } from './pool.js';
+import { run, run0, recycleIdle } from './pool.js';
 import { sanitizeLabel, selectIndices } from './ui.js';
 
 const NUM_FIELDS = [
@@ -119,6 +119,7 @@ export async function generateSheets({
   keepOriginals = true, exportFrames = false, onProgress = () => {},
 }) {
   const s = { ...settings };
+  if (!s.fmt_png && !s.fmt_pdf && !s.fmt_tiff) s.fmt_png = true; // algo hay que exportar
   const safeName = sanitizeLabel(s.out_name || 'hojas');
   const perPage = Math.max(1, s.cols * s.rows);
   const numPages = Math.max(1, Math.ceil(frames.length / perPage));
@@ -199,16 +200,23 @@ export async function generateSheets({
       records.push(record);
     }
     if (selected && res.png) {
-      files.set(`${pageBase}.png`, res.png);
       if (s.fmt_pdf) await run0('pdf_add', { png: res.png });
+      if (s.fmt_tiff) {
+        const tif = await run('encode_tiff', { png: res.png });
+        files.set(`${pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
+      }
+      if (s.fmt_png) {
+        // como Blob: el navegador puede sacarlo del heap de JS hasta el ZIP
+        files.set(`${pageBase}.png`, new Blob([res.png], { type: 'image/png' }));
+      }
       done++;
-      onProgress(done, totalSel, `hoja ${pnum} lista`);
+      onProgress(done, totalSel, `sheet ${pnum} ready`);
     }
   }
 
   if (s.fmt_pdf) {
     const pdf = await run0('pdf_finish', {});
-    files.set(`${safeName}.pdf`, pdf);
+    files.set(`${safeName}.pdf`, new Blob([pdf], { type: 'application/pdf' }));
   }
 
   let layoutJson = null;
@@ -224,5 +232,6 @@ export async function generateSheets({
   }
 
   const layoutInfo = JSON.parse(await run('compute_layout', { settings: coreSettings, firstW, firstH }));
+  recycleIdle(); // devolver al sistema la memoria WASM que infló la generación
   return { files, layoutJson, avisos: layoutInfo.avisos ?? [], numPages, layoutInfo };
 }

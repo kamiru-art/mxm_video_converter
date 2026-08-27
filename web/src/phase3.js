@@ -70,7 +70,10 @@ export function mountPhase3(root) {
   const cardA = el('div', { class: 'paper' },
     el('h2', {}, 'Printer profile'),
     el('div', { class: 'hint' }, 'Measures your printer’s real scale, its tonal response and the minimum reliable marker/QR sizes.'),
-    el('div', { class: 'row' }, field('Paper', aPaper), field('DPI', aDpi)),
+    el('div', { class: 'row' },
+      field('Paper', aPaper), field('DPI', aDpi),
+      field('Scan DPI', aScanDpi, 'The DPI you scanned at.'),
+    ),
     el('button', {
       class: 'btn ghost small', onclick: async () => {
         const png = await run('printer_test_png', { paper: aPaper.value, dpi: parseInt(aDpi.value, 10) });
@@ -100,7 +103,6 @@ export function mountPhase3(root) {
         } catch (e) { toast(String(e.message ?? e), 'err'); }
       },
     })),
-    field('Scan DPI (to measure the scale)', aScanDpi, 'The DPI you scanned the printed page at.'),
     aOut,
     profileSaver('impresora', () => aResult),
   );

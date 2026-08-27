@@ -1,16 +1,33 @@
 // Empaquetado ZIP en streaming (fflate): los PNG ya vienen comprimidos,
-// así que se guardan sin recomprimir (nivel 0).
+// así que se guardan sin recomprimir (nivel 0). Los trozos se consolidan en
+// Blobs por bloques: el navegador puede paginarlos a disco y la pestaña no
+// retiene cientos de MB en ArrayBuffers mientras se arma el ZIP.
 
 import { Zip, ZipPassThrough } from 'fflate';
 
+const PART_BYTES = 32e6;
+
 /** files: Map<nombre, Uint8Array|Blob>. Devuelve un Blob ZIP. */
 export async function makeZip(files, onProgress = () => {}) {
-  const chunks = [];
+  const parts = [];
+  let chunks = [];
+  let chunkBytes = 0;
+  const flush = () => {
+    if (chunks.length) {
+      parts.push(new Blob(chunks));
+      chunks = [];
+      chunkBytes = 0;
+    }
+  };
   let resolveDone, rejectDone;
   const done = new Promise((res, rej) => { resolveDone = res; rejectDone = rej; });
   const zip = new Zip((err, chunk, final) => {
     if (err) return rejectDone(err);
-    if (chunk) chunks.push(chunk);
+    if (chunk) {
+      chunks.push(chunk);
+      chunkBytes += chunk.byteLength;
+      if (chunkBytes >= PART_BYTES) flush();
+    }
     if (final) resolveDone();
   });
   let i = 0;
@@ -26,5 +43,6 @@ export async function makeZip(files, onProgress = () => {}) {
   }
   zip.end();
   await done;
-  return new Blob(chunks, { type: 'application/zip' });
+  flush();
+  return new Blob(parts, { type: 'application/zip' });
 }
