@@ -18,16 +18,27 @@ class WasmWorker {
     this.nextId = 1;
     this.mem = 0;
     this.pinned = false; // PDF a medio construir: no reciclar
+    this.poisoned = false; // el WASM hizo panic: reciclar al quedar ocioso
     this.worker.onmessage = (ev) => {
-      const { id, ok, value, error, mem, pinned } = ev.data;
+      const { id, ok, value, error, mem, pinned, poisoned } = ev.data;
       const p = this.pending.get(id);
       if (!p) return;
       this.pending.delete(id);
       this.busy--;
       this.mem = mem ?? this.mem;
       this.pinned = !!pinned;
+      if (poisoned) this.poisoned = true;
       ok ? p.resolve(value) : p.reject(new Error(error));
       maybeRecycle(this);
+    };
+    // si el script del worker no carga (red, CSP), las promesas pendientes
+    // no deben colgar para siempre
+    this.worker.onerror = (e) => {
+      const pend = [...this.pending.values()];
+      this.pending.clear();
+      this.busy = 0;
+      this.recycle();
+      for (const p of pend) p.reject(new Error(`Processing worker failed: ${e?.message ?? 'could not load'}`));
     };
   }
   run(cmd, args, transfer = []) {
@@ -46,9 +57,9 @@ class WasmWorker {
 
 const workers = [new WasmWorker()];
 
-/** Recicla un worker ocioso e hinchado (transparente para los llamadores). */
+/** Recicla un worker ocioso e hinchado o envenenado (transparente). */
 function maybeRecycle(w) {
-  if (w.busy === 0 && !w.pinned && w.mem > RECYCLE_BYTES) {
+  if (w.busy === 0 && !w.pinned && (w.poisoned || w.mem > RECYCLE_BYTES)) {
     w.recycle();
   }
 }

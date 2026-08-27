@@ -57,11 +57,18 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
     for m in metas {
         let rgba = if m.offset >= 0 {
             let start = m.offset as usize;
-            let len = m.w * m.h * 4;
-            if start + len > pixels.len() {
+            // aritmética comprobada: en wasm32 (usize de 32 bits) un meta
+            // hostil puede enrollar w*h*4 y saltarse el bounds check
+            let len = m
+                .w
+                .checked_mul(m.h)
+                .and_then(|p| p.checked_mul(4))
+                .ok_or_else(|| err("Frame dimensions overflow"))?;
+            let end = start.checked_add(len).ok_or_else(|| err("Frame offset overflows"))?;
+            if end > pixels.len() {
                 return Err(err("Pixel buffer shorter than the metadata"));
             }
-            Some(pixels[start..start + len].to_vec())
+            Some(pixels[start..end].to_vec())
         } else {
             None
         };
@@ -318,11 +325,13 @@ fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
 
 /// RGBA (del canvas del navegador) → Rgb de 8 bits.
 fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> Result<Rgb, JsValue> {
-    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
-        return Err(err("RGBA buffer does not match the given dimensions"));
-    }
-    if w * h > MAX_IMAGE_PIXELS {
+    // el tope va primero: descarta dimensiones que enrollarían w*h*4 en wasm32
+    let area = w.checked_mul(h).ok_or_else(|| err("Image dimensions overflow"))?;
+    if area > MAX_IMAGE_PIXELS {
         return Err(err(format!("Image too large ({w}×{h}).")));
+    }
+    if w == 0 || h == 0 || rgba.len() < area * 4 {
+        return Err(err("RGBA buffer does not match the given dimensions"));
     }
     let mut data = Vec::with_capacity(w * h * 3);
     for p in rgba.chunks_exact(4).take(w * h) {
@@ -410,7 +419,12 @@ pub fn scan_finish(
         serde_json::from_str(claims_json).unwrap_or_default();
     let markers = resolve_markers(&layout);
     let state: Value = serde_json::from_str(state_json).map_err(err)?;
-    let res = state.get("res").cloned().unwrap_or_else(|| base_report(scan_name));
+    // el informe debe ser un objeto con "advertencias" (array): un estado
+    // malformado no debe poder hacer panic aguas abajo
+    let res = match state.get("res") {
+        Some(r) if r.is_object() && r.get("advertencias").map_or(false, |a| a.is_array()) => r.clone(),
+        _ => base_report(scan_name),
+    };
     let s = state.get("s").and_then(|v| v.as_f64()).ok_or_else(|| err("state without scale"))?;
     let refined_ids: std::collections::HashSet<u32> = state
         .get("refined_ids")

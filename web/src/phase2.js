@@ -138,9 +138,12 @@ export function mountPhase2(root) {
   async function processScans(files) {
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
     prog.show();
+    // Number.isFinite y no ||: el 0 es un valor válido de bleed
+    const bleedVal = parseFloat(bleedIn.value);
+    const minMarkersVal = parseInt(minMarkersIn.value, 10);
     const opts = JSON.stringify({
-      bleed: (parseFloat(bleedIn.value) || 1.5) / 100,
-      min_markers: parseInt(minMarkersIn.value, 10) || 3,
+      bleed: (Number.isFinite(bleedVal) ? bleedVal : 1.5) / 100,
+      min_markers: Number.isFinite(minMarkersVal) ? minMarkersVal : 3,
       mode: modeSel.value,
       resize_to_original: resizeCheck.input.checked,
       normalize_patches: patchesCheck.input.checked,
@@ -157,10 +160,17 @@ export function mountPhase2(root) {
     const processOne = async (f) => {
       let r = null;
       if (gpu) {
-        const bmp = await decodeForGpu(f);
-        if (bmp) {
-          try { r = await processViaGpu(f, bmp, layoutStr, opts); }
-          finally { bmp.close?.(); }
+        let bmp = null;
+        try {
+          bmp = await decodeForGpu(f);
+          // cualquier fallo del camino GPU (canvas demasiado grande, memoria
+          // de GPU, etc.) cae al camino todo-en-WASM en vez de perder el escaneo
+          if (bmp) r = await processViaGpu(f, bmp, layoutStr, opts);
+        } catch (e) {
+          console.warn('[scan] GPU path failed, falling back to WASM:', e);
+          r = null;
+        } finally {
+          bmp?.close?.();
         }
       }
       if (!r) {
@@ -207,20 +217,26 @@ export function mountPhase2(root) {
   const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
   const reportTable = el('table', { class: 'report' }, reportHeader);
   const missingSlot = el('div');
+  const reportUrls = []; // object URLs de las miniaturas, para revocarlas al limpiar
+
+  function trackUrl(u) {
+    reportUrls.push(u);
+    return u;
+  }
 
   function buildResultRows({ result: r, frames, sinIdentificar, overlay }) {
     // miniaturas pequeñas; un clic abre la imagen a tamaño completo
     const thumbs = el('div', { class: 'thumbs report-thumbs' });
     if (overlay) {
       const t = el('div', { class: 'thumb clickable', title: 'View the alignment overlay' },
-        el('img', { src: URL.createObjectURL(overlay), alt: 'alignment' }),
+        el('img', { src: trackUrl(URL.createObjectURL(overlay)), alt: 'alignment' }),
         el('div', { class: 'tag' }, 'alignment'));
       t.addEventListener('click', () => lightbox(overlay, `${r.scan}: green = marker found, red = missing, blue = frames, orange = QRs`));
       thumbs.append(t);
     }
     for (const f of [...frames, ...sinIdentificar].slice(0, 60)) {
       const t = el('div', { class: 'thumb clickable', title: 'View at full size' },
-        el('img', { src: pngUrl(f.png) }), el('div', { class: 'tag' }, f.label));
+        el('img', { src: trackUrl(pngUrl(f.png)) }), el('div', { class: 'tag' }, f.label));
       t.addEventListener('click', () => lightbox(f.png, f.label));
       thumbs.append(t);
     }
@@ -249,6 +265,8 @@ export function mountPhase2(root) {
     ph2.claims = {};
     project.processedFrames.clear();
     reportTable.replaceChildren(reportHeader);
+    for (const u of reportUrls) URL.revokeObjectURL(u); // soltar los Blobs
+    reportUrls.length = 0;
     renderSummary();
   }
 

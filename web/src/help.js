@@ -88,9 +88,12 @@ generates <strong>rescue sheets</strong> containing only the failed frames.</p>
 <p>With the processed frames, the app rebuilds the video in its original
 order, reusing the deduplicated drawings, and encodes it in your browser.
 Pick the <strong>format</strong> (MP4/H.264 or WebM), the
-<strong>quality</strong> (or an exact bitrate), the <strong>resolution</strong>
-(the panel shows the exact output size) and the file name. If you prefer
-editing in another program, download the individual frames.</p>
+<strong>quality</strong> (up to Maximum, visually lossless; or an exact
+bitrate), the <strong>resolution</strong> (the panel shows the exact output
+size) and the file name.</p>
+<p>Browser encoders are always lossy. Every digital step in this app stores
+lossless PNG, so for a fully lossless master download the processed frames
+from the Scans report and assemble them in your editor.</p>
 
 <h3>Calibration (when you need precision)</h3>
 <p><strong>Printer</strong>: print the test page, scan it, and the app

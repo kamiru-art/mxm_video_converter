@@ -286,8 +286,8 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
   * { animation: none !important; transition: none !important; }
 }
 
-/* páginas de ayuda */
-.prose { max-width: 1500px; }
+/* páginas de ayuda: ocupa todo el ancho, como las demás secciones */
+.prose { max-width: none; }
 /* el contenido del tutorial en dos columnas; el flujo de pasos va a lo ancho */
 .prose .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 56px; align-items: start; }
 @media (max-width: 1000px) { .prose .cols { grid-template-columns: 1fr; } }

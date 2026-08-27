@@ -133,6 +133,11 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
   let bitrate = QUAL[opts.quality] ?? QUALITY_HIGH;
   if (opts.quality === 'custom' && opts.bitrateMbps > 0) {
     bitrate = Math.round(opts.bitrateMbps * 1e6);
+  } else if (opts.quality === 'max') {
+    // "visualmente sin pérdida": ~0.5 bits por píxel y frame, con tope.
+    // Los codificadores del navegador (WebCodecs) no ofrecen modo lossless
+    // real; el máster verdaderamente sin pérdida son los PNG de los frames.
+    bitrate = Math.min(150e6, Math.max(20e6, Math.round(w * h * fps * 0.5)));
   }
 
   let candidates = [

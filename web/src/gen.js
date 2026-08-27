@@ -114,7 +114,17 @@ export function packImageData(items) {
  * onProgress(done, total, note)
  * Devuelve { files: Map<nombre, Uint8Array|Blob>, layoutJson, avisos, numPages }
  */
-export async function generateSheets({
+// Las generaciones se serializan: el PDF vive como estado en el worker 0 y
+// dos generaciones a la vez (fase ① y hojas de rescate) entrelazarían páginas.
+let genLock = Promise.resolve();
+
+export function generateSheets(args) {
+  const run_ = genLock.then(() => generateSheetsInner(args));
+  genLock = run_.catch(() => {});
+  return run_;
+}
+
+async function generateSheetsInner({
   settings, frames, labels, pageNumbers = null, timeline = [], videoMeta = {},
   keepOriginals = true, exportFrames = false, onProgress = () => {},
 }) {
@@ -170,6 +180,7 @@ export async function generateSheets({
   const totalSel = Math.max(1, pagesSelected.size);
   const coreSettings = settingsForCore(s);
 
+  try {
   for (let pageIdx = 0; pageIdx < numPages; pageIdx++) {
     const chunk = frames.slice(pageIdx * perPage, (pageIdx + 1) * perPage);
     const chunkLabels = labels.slice(pageIdx * perPage, (pageIdx + 1) * perPage);
@@ -217,6 +228,12 @@ export async function generateSheets({
   if (s.fmt_pdf) {
     const pdf = await run0('pdf_finish', {});
     files.set(`${safeName}.pdf`, new Blob([pdf], { type: 'application/pdf' }));
+  }
+  } catch (e) {
+    // sin esto, un fallo a mitad de generación dejaría el PDF a medias vivo
+    // en el worker 0 (pinned para siempre, memoria retenida)
+    if (s.fmt_pdf) await run0('pdf_abort', {}).catch(() => {});
+    throw e;
   }
 
   let layoutJson = null;

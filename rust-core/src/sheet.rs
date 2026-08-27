@@ -165,8 +165,9 @@ impl Settings {
     }
     pub fn format_page_label(&self, num: i64) -> String {
         let mut s = num.to_string();
-        if self.page_num_zeros > 1 {
-            while (s.len() as i64) < self.page_num_zeros {
+        let zeros = self.page_num_zeros.clamp(0, 16); // valores hostiles no cuelgan
+        if zeros > 1 {
+            while (s.len() as i64) < zeros {
                 s.insert(0, '0');
             }
         }
@@ -174,8 +175,9 @@ impl Settings {
     }
     pub fn format_label(&self, num: i64) -> String {
         let mut s = num.to_string();
-        if self.leading_zeros > 1 {
-            while (s.len() as i64) < self.leading_zeros {
+        let zeros = self.leading_zeros.clamp(0, 16);
+        if zeros > 1 {
+            while (s.len() as i64) < zeros {
                 s.insert(0, '0');
             }
         }
@@ -464,6 +466,14 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
 
     let (landscape, cols, rows) = resolve_page_layout(s, first_frame, meta_h + meta_halo, label_gap);
     let (page_w, page_h) = page_size_px(&s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm);
+    // tope contra lienzos absurdos (DPI/tamaño tecleados u hostiles): sin él,
+    // w*h*3 puede desbordar usize en wasm32 o abortar por falta de memoria
+    let area = (page_w as i128) * (page_h as i128);
+    if area <= 0 || area > crate::scanproc::MAX_IMAGE_PIXELS as i128 {
+        return Err(format!(
+            "The requested sheet is unreasonably large ({page_w}×{page_h} px). Lower the DPI or the paper size."
+        ));
+    }
     let content_w = (page_w - 2 * margin) as f64;
     let content_h = (page_h - 2 * margin) as f64;
     if content_w <= 0.0 || content_h <= 0.0 {

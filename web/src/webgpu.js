@@ -66,6 +66,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let x = f32(gid.x);
   let y = f32(gid.y);
   let w = P.minv2.x * x + P.minv2.y * y + P.minv2.z;
+  if (abs(w) < 1e-12) { return; } // homografía degenerada: como el Rust, sin NaN
   var sx = (P.minv0.x * x + P.minv0.y * y + P.minv0.z) / w;
   let sy = (P.minv1.x * x + P.minv1.y * y + P.minv1.z) / w;
   if (P.flipped == 1u) { sx = f32(P.srcW - 1u) - sx; }

@@ -1097,7 +1097,27 @@ pub fn finish_scan(
     });
 
     // Miniatura de diagnóstico (antes de decidir el error, como la original).
-    let overlay = build_overlay(&warp, s, &markers.bboxes, &fin.refined_ids, plantilla, local.as_ref());
+    // En layouts sin QR, los bboxes del overlay se restringen a los IDs de la
+    // hoja identificada; con la unión de todas las hojas, cada posición se
+    // pintaría también en rojo por los IDs ajenos "no detectados".
+    let overlay_bboxes: Value = match &markers.ids_por_hoja {
+        Some(iph) => {
+            let ids: Vec<u32> = hoja
+                .as_ref()
+                .and_then(|(h, _)| h.get("numero").and_then(|n| n.as_i64()))
+                .and_then(|n| iph.get(&n).cloned())
+                .unwrap_or_else(|| fin.refined_ids.iter().cloned().collect());
+            let mut map = serde_json::Map::new();
+            for id in ids {
+                if let Some(b) = markers.bboxes.get(id.to_string()) {
+                    map.insert(id.to_string(), b.clone());
+                }
+            }
+            Value::Object(map)
+        }
+        None => markers.bboxes.clone(),
+    };
+    let overlay = build_overlay(&warp, s, &overlay_bboxes, &fin.refined_ids, plantilla, local.as_ref());
 
     let (hoja, via) = match hoja {
         Some(hv) => hv,

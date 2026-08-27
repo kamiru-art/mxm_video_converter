@@ -60,6 +60,7 @@ export function mountPhase4(root) {
     ['webm', 'WebM (VP9/VP8)'],
   ], 'auto');
   const qualSel = select([
+    ['max', 'Maximum (visually lossless, huge file)'],
     ['very_high', 'Very high'],
     ['high', 'High (recommended)'],
     ['medium', 'Medium'],
@@ -181,6 +182,7 @@ export function mountPhase4(root) {
       const base = sanitizeLabel(nameIn.value.trim() || l.proyecto || 'video');
       const name = `${base}.${out.ext}`;
       download(out.bytes, name, out.mime);
+      if (preview.src) URL.revokeObjectURL(preview.src); // soltar el video anterior
       preview.src = URL.createObjectURL(new Blob([out.bytes], { type: out.mime }));
       preview.style.display = '';
       toast(`Video rebuilt (${out.ext.toUpperCase()}, ${fps} fps).`, 'ok');
@@ -228,6 +230,8 @@ export function mountPhase4(root) {
       field('Resolution', resSel),
     ),
     resInfo,
+    el('div', { class: 'hint' },
+      'Browser encoders are always lossy, even at Maximum. For a truly lossless master, download the processed frames as PNG in the Scans report and assemble them in your editor: every digital step in this app (extraction, sheets, crops) already stores lossless PNG.'),
     field('File name', nameIn),
     buildBtn,
     prog.root,

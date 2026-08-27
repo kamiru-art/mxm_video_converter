@@ -65,12 +65,23 @@ const handlers = {
   },
   analyze_colorblocker: (a) => core.analyze_colorblocker(a.bytes, a.paper, a.dpi),
   // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
-  pdf_new: (a) => { pdfInstance = new core.Pdf(a.dpi); return null; },
+  pdf_new: (a) => {
+    pdfInstance?.free?.(); // no filtrar una instancia anterior abandonada
+    pdfInstance = new core.Pdf(a.dpi);
+    return null;
+  },
   pdf_add: (a) => { pdfInstance.add_page_png(a.png); return null; },
   pdf_finish: () => {
     const bytes = pdfInstance.finish();
     pdfInstance = null;
     return { value: bytes, transfer: [bytes.buffer] };
+  },
+  // descarta un PDF a medias (generación fallida): sin esto, pinned=true
+  // dejaría al worker 0 sin reciclar para siempre
+  pdf_abort: () => {
+    pdfInstance?.free?.();
+    pdfInstance = null;
+    return null;
   },
 };
 
@@ -92,6 +103,10 @@ self.onmessage = async (ev) => {
     }
   } catch (e) {
     const mem = wasm?.memory?.buffer?.byteLength ?? 0;
-    self.postMessage({ id, ok: false, error: String(e?.message ?? e), mem, pinned: pdfInstance !== null });
+    // un panic de Rust (RuntimeError/unreachable) deja el módulo en estado
+    // dudoso: se marca para que el pool recicle este worker al quedar ocioso
+    const poisoned = e instanceof WebAssembly.RuntimeError
+      || /unreachable|RuntimeError/.test(String(e?.message ?? e));
+    self.postMessage({ id, ok: false, error: String(e?.message ?? e), mem, pinned: pdfInstance !== null, poisoned });
   }
 };

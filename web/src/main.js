@@ -11,12 +11,15 @@ import { toast } from './ui.js';
 
 const mounted = new Set();
 const mounters = {
-  hojas: mountPhase1,
-  escaneos: mountPhase2,
-  calibracion: mountPhase3,
+  sheets: mountPhase1,
+  scans: mountPhase2,
+  calibration: mountPhase3,
   video: mountPhase4,
-  ayuda: mountHelp,
+  help: mountHelp,
 };
+// rutas antiguas en español: los enlaces guardados siguen funcionando
+const LEGACY_ROUTES = { hojas: 'sheets', escaneos: 'scans', calibracion: 'calibration', ayuda: 'help' };
+const resolveRoute = (v) => LEGACY_ROUTES[v] ?? v;
 
 function show(view) {
   for (const b of document.querySelectorAll('#phase-nav .frame')) {
@@ -40,12 +43,12 @@ document.getElementById('phase-nav').addEventListener('click', (e) => {
 });
 
 window.addEventListener('hashchange', () => {
-  const v = location.hash.replace('#', '');
+  const v = resolveRoute(location.hash.replace('#', ''));
   if (mounters[v]) show(v);
 });
 
-const initial = location.hash.replace('#', '');
-show(mounters[initial] ? initial : 'hojas');
+const initial = resolveRoute(location.hash.replace('#', ''));
+show(mounters[initial] ? initial : 'sheets');
 
 // warm up the WASM core
 run('version', {}).then(
