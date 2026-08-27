@@ -200,6 +200,15 @@ fn markers_identify_sheet_without_qr() {
     let via = out.result["via"].as_str().unwrap();
     assert!(via.starts_with("marker IDs"), "via = {via}");
     assert_eq!(out.frames.len(), 2, "{}", out.result);
+    // el total debe ser los marcadores DE LA HOJA, no la unión de todas
+    assert_eq!(out.result["marcadores_total"], json!(8), "{}", out.result);
+    // un escaneo limpio no debe descartar marcadores por residuo (los
+    // descartes venían de releer marcadores propios como IDs de otras hojas)
+    let adv = out.result["advertencias"].as_array().unwrap();
+    assert!(
+        adv.iter().all(|a| !a.as_str().unwrap_or("").contains("discarded")),
+        "descartes inesperados: {adv:?}"
+    );
     let mut labs: Vec<&str> = out.frames.iter().map(|(l2, _)| l2.as_str()).collect();
     labs.sort();
     assert_eq!(labs, vec!["demo_003", "demo_004"]);

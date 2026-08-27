@@ -3,7 +3,7 @@ name = "mxm-core"
 version = "1.0.0"
 edition = "2021"
 description = "Núcleo de MXM Studio: hojas de contacto, marcadores, cianotipia y procesado de escaneos, compilable a WebAssembly."
-license = "MIT"
+license = "CC-BY-NC-SA-4.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -194,7 +194,7 @@ export function mountPhase4(root) {
   });
 
   const paper = el('div', { class: 'paper' },
-    el('h2', {}, '④ Final video'),
+    el('h2', {}, '③ Final video'),
     el('div', { class: 'hint' }, 'Rebuilds the film with the processed frames in their original order, reusing deduplicated drawings in all their positions.'),
     dropzone({
       label: 'Project layout.json (optional if you come from phase ②)',

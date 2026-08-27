@@ -21,8 +21,9 @@
       <nav class="strip" id="phase-nav" aria-label="Phases">
         <button class="frame active" data-view="hojas"><span class="fnum">①</span><span class="fname">Sheets</span><span class="fdesc">video → paper</span></button>
         <button class="frame" data-view="escaneos"><span class="fnum">②</span><span class="fname">Scans</span><span class="fdesc">paper → frames</span></button>
-        <button class="frame" data-view="calibracion"><span class="fnum">③</span><span class="fname">Calibration</span><span class="fdesc">your printer &amp; your sun</span></button>
-        <button class="frame" data-view="video"><span class="fnum">④</span><span class="fname">Video</span><span class="fdesc">frames → film</span></button>
+        <button class="frame" data-view="video"><span class="fnum">③</span><span class="fname">Video</span><span class="fdesc">frames → film</span></button>
+        <span class="strip-sep" aria-hidden="true"></span>
+        <button class="frame extra" data-view="calibracion"><span class="fnum">+</span><span class="fname">Calibration</span><span class="fdesc">your printer &amp; your sun</span></button>
         <button class="frame help" data-view="ayuda"><span class="fnum">?</span><span class="fname">Help</span><span class="fdesc">how it works</span></button>
       </nav>
     </header>
@@ -36,10 +37,11 @@
     </main>
 
     <footer class="colophon">
-      <p>Free and open source, for everyone, forever. Nothing leaves your machine:
-      all processing happens entirely in your browser (Rust → WebAssembly).</p>
-      <p><a href="https://github.com/kamiru-art/mxm_video_converter" rel="noopener">Source code</a>
-      · Projects from the original desktop app (layout.json v1 and v2) work unchanged.</p>
+      <p>Free forever. Nothing leaves your machine: everything runs in your browser (Rust → WebAssembly).</p>
+      <p><a href="https://github.com/kamiru-art/mxm_video_converter" rel="noopener">Source code</a></p>
+      <p>License <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener">CC BY-NC-SA 4.0</a>: use it and build on it, but never sell it, and whatever you make with it must stay free too.</p>
+      <p>Created by <a href="https://sebastianlopez.me" rel="noopener">Sebastián López</a></p>
+      <p class="dedication">con mucho cariño, para <a href="https://kamiru.art" rel="noopener">Kamila</a> (<a href="https://instagram.com/kamiruuuu" rel="noopener">Instagram</a>)</p>
     </footer>
   </div>
   <div id="toasts"></div>

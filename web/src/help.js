@@ -14,12 +14,15 @@ export function mountHelp(root) {
   <li><span class="step-num">06</span><strong>Film out</strong><span>your animation, rebuilt</span></li>
 </ol>
 
+<div class="cols">
+<div>
+
 <h3>① Sheets</h3>
 <p>Drop a video (MP4, MOV, WebM, MKV, and also AVI, MPG, WMV or FLV through the
 built-in converter) or a folder of images. Choose how many frames per second
-you want, or all of them for frame-by-frame animation. The app detects
-<strong>repeated drawings</strong> and prints them only once: when the final
-video is rebuilt, that painted drawing is reused in all of its positions.</p>
+you want, or all of them for frame-by-frame animation. If you enable
+<strong>repeated-drawing detection</strong>, identical frames are printed only
+once and reused in all of their positions when the video is rebuilt.</p>
 <p>Keep the <strong>registration markers</strong> enabled. They are the little
 squares that let each scan align itself. Every sheet carries its own
 <strong>marker IDs</strong>, so the app knows which sheet a scan is even if
@@ -49,6 +52,24 @@ before you print anything.</p>
 correct blue print it points <strong>right</strong>. If it points left, you
 exposed the film flipped. The app still corrects it when scanning.</p>
 
+<h3>Privacy &amp; philosophy</h3>
+<p>All processing happens <strong>in your browser</strong> (Rust compiled to
+WebAssembly, plus WebGPU where it helps): your videos and scans never leave
+your machine, there are no accounts or limits, and once loaded the page works
+offline. Frames are extracted <strong>losslessly</strong> (PNG) with no color
+filtering. Projects from the original desktop app (<code>layout.json</code>
+v1 and v2, QRs included) are processed unchanged.</p>
+<p>This tool was born from a real artist's workflow and is released free,
+forever, for everyone. The
+<a href="https://github.com/kamiru-art/mxm_video_converter" rel="noopener">source code</a>
+is available under the
+<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener">CC BY-NC-SA 4.0</a>
+license: use it and build on it, but never sell it, and whatever you make
+with it must stay free under the same license.</p>
+
+</div>
+<div>
+
 <h3>② Scans</h3>
 <p>Scan your painted sheets (or your dried cyanotypes) however you like: any
 resolution, rotated, upside down, even mirrored. Drop the files along with
@@ -63,7 +84,15 @@ supports it. In the report, click any thumbnail to see it at full size.</p>
 <p>The report tells you what was recovered and what is missing. One click
 generates <strong>rescue sheets</strong> containing only the failed frames.</p>
 
-<h3>③ Calibration</h3>
+<h3>③ Video</h3>
+<p>With the processed frames, the app rebuilds the video in its original
+order, reusing the deduplicated drawings, and encodes it in your browser.
+Pick the <strong>format</strong> (MP4/H.264 or WebM), the
+<strong>quality</strong> (or an exact bitrate), the <strong>resolution</strong>
+(the panel shows the exact output size) and the file name. If you prefer
+editing in another program, download the individual frames.</p>
+
+<h3>Calibration (when you need precision)</h3>
 <p><strong>Printer</strong>: print the test page, scan it, and the app
 measures whether your printer shrinks the page (and compensates for it), plus
 the minimum reliable marker and QR sizes.</p>
@@ -78,26 +107,6 @@ instead of saving a curve that would ruin the project.</p>
 your printer (it is not always black) and build a 3-stop gradient you can
 apply with one click.</p>
 
-<h3>④ Video</h3>
-<p>With the processed frames, the app rebuilds the video in its original
-order, reusing the deduplicated drawings, and encodes it in your browser.
-Pick the <strong>format</strong> (MP4/H.264 or WebM), the
-<strong>quality</strong> (or an exact bitrate), the <strong>resolution</strong>
-(the panel shows the exact output size) and the file name. If you prefer
-editing in another program, download the individual frames.</p>
-
-<h3>Privacy &amp; philosophy</h3>
-<p>All processing happens <strong>in your browser</strong> (Rust compiled to
-WebAssembly, plus WebGPU where it helps): your videos and scans never leave
-your machine, there are no accounts or limits, and once loaded the page works
-offline. Frames are extracted <strong>losslessly</strong> (PNG) with no color
-filtering. Projects from the original desktop app (<code>layout.json</code>
-v1 and v2, QRs included) are processed unchanged.</p>
-<p>This tool was born from a real artist's workflow and is released free,
-forever, for everyone. If someone tries to charge you for this workflow: here
-it is, with more features and
-<a href="https://github.com/kamiru-art/mxm_video_converter" rel="noopener">open source</a>.</p>
-
 <h3>Cyanotype tips (from real-world testing)</h3>
 <ul>
 <li>Markers of 10 mm or more: the chemistry degrades small things.</li>
@@ -105,5 +114,8 @@ it is, with more features and
 <li>Ink-saving halos of 4 mm or more, so markers stay on guaranteed white.</li>
 <li>Scan the blue print DRY and flat; never the film itself.</li>
 </ul>
+
+</div>
+</div>
 ` }));
 }

@@ -79,4 +79,7 @@ npx wrangler deploy                     # publicar (Cloudflare Workers + assets)
 
 ## Licencia
 
-Libre para todo el mundo, para siempre. Ver [LICENSE](LICENSE).
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/): libre
+para todo el mundo, para siempre. Puedes usarlo, adaptarlo y redistribuirlo,
+pero no venderlo ni monetizarlo, y todo lo que construyas con esto tiene que
+seguir siendo gratis y llevar la misma licencia. Ver [LICENSE](LICENSE).

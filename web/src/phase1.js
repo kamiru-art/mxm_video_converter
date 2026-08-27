@@ -42,7 +42,7 @@ export const ph1 = {
   naming: 'auto',           // auto | original (nombre de archivo)
   numbering: 'continua',    // continua | original
   pageNumbering: 'continua',
-  dedupOn: true, dedupThreshold: 4,
+  dedupOn: false, dedupThreshold: 4,
   dedupGroups: null,        // {reps, rep_of} sobre la selección actual
   keepOriginals: true, exportFrames: false,
   sheets_include: '', sheets_exclude: '',
@@ -66,7 +66,17 @@ export function computePlan() {
   const N = project.frames.length;
   const positions = selectIndices(N, ph1.include, ph1.exclude);
   let rawLabels = positions.map((pos, k) => {
-    if (ph1.naming === 'original') return stem(project.frames[pos - 1].name);
+    if (ph1.naming === 'original') {
+      const f = project.frames[pos - 1];
+      // frames extraídos de un video no tienen archivo original: se nombran
+      // con el video + el número, respetando el control de dígitos
+      if (f.videoStem != null) {
+        let n = String(f.seq + 1);
+        while (n.length < (s.leading_zeros ?? 1)) n = '0' + n;
+        return `${f.videoStem}${s.separator}${n}`;
+      }
+      return stem(f.name);
+    }
     const num = ph1.numbering === 'original' ? s.start_index + pos - 1 : s.start_index + k;
     return formatLabel(s, num);
   });
@@ -125,6 +135,10 @@ export function mountPhase1(root) {
   const endIn = el('input', { type: 'number', min: 0, step: 0.1, placeholder: 'end' });
   const fpsIn = el('input', { type: 'number', min: 0, step: 0.1, value: 4, placeholder: 'fps' });
   const allFrames = check('ALL frames (frame by frame)', false);
+  // con TODOS los frames el fps no aplica: se apaga para que se entienda
+  allFrames.input.addEventListener('change', () => {
+    fpsIn.disabled = allFrames.input.checked;
+  });
 
   let pendingVideo = null;
   const videoInfo = el('div', { class: 'hint' });
@@ -141,9 +155,14 @@ export function mountPhase1(root) {
         end: endIn.value ? parseFloat(endIn.value) : undefined,
         fps: allFrames.input.checked ? null : (parseFloat(fpsIn.value) || null),
         onFrame: async (blob, thumb, t, i, w, h) => {
-          // el nombre hereda el del video: "Original file name" tiene sentido
+          // se guarda el origen (video + posición): la etiqueta "Original
+          // file name" se construye después con el control de dígitos
           const videoStem = pendingVideo.name.replace(/\.[^.]+$/, '');
-          project.frames.push({ name: `${videoStem}_${String(i + 1).padStart(6, '0')}.png`, blob, thumb, w, h, hasAlpha: false });
+          project.frames.push({
+            name: `${videoStem}_${String(i + 1).padStart(6, '0')}.png`,
+            videoStem, seq: i,
+            blob, thumb, w, h, hasAlpha: false,
+          });
         },
         onProgress: (i, est) => extractProg.set(est ? i / est : 0.5, `frame ${i}${est ? ` of ~${est}` : ''}`),
       });
@@ -318,7 +337,7 @@ export function mountPhase1(root) {
       field('Ink color profile (ColorBlocker)', inkProfSel),
     ),
     field('Compensation curve (cyanotype profile)', curveSel,
-      'Calibrated in phase ③. Without a curve, density = original brightness.'),
+      'Calibrated in the Calibration tab. Without a curve, density = original brightness.'),
     el('div', { class: 'row' },
       field('Curve strength (%)', bindNum('cyan_curve_strength', numberInput(100, { min: 0, max: 100 }))),
       field('Content adaptation (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 }))),
@@ -455,8 +474,18 @@ export function mountPhase1(root) {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(refreshPreview, 300);
   }
+  /** Actualiza solo el texto de las etiquetas de las miniaturas (barato):
+   *  cambiar dígitos, nombre base o separador se refleja al instante. */
+  function updateThumbLabels() {
+    const plan = computePlan();
+    thumbsGrid.querySelectorAll('.tag').forEach((tag, k) => {
+      if (plan.rawLabels[k] != null) tag.textContent = plan.rawLabels[k];
+    });
+  }
+
   async function refreshPreview() {
     if (!project.frames.length) return;
+    updateThumbLabels();
     if (previewBusy) { previewQueued = true; return; }
     previewBusy = true;
     try {
@@ -615,7 +644,7 @@ export function mountPhase1(root) {
     cyanBox,
 
     el('h3', {}, 'Printer'),
-    field('Printer profile (phase ③)', printerSel, 'Compensates the measured real scale of your printer.'),
+    field('Printer profile (Calibration tab)', printerSel, 'Compensates the measured real scale of your printer.'),
 
     el('h3', {}, 'Output'),
     el('div', { class: 'row' },

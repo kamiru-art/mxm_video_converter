@@ -79,6 +79,9 @@ pub struct MultiDetect {
 
 /// Prueba variantes de preprocesado (ambas polaridades) y perfiles del
 /// detector; devuelve la mejor detección. Port de _detect_markers_multi.
+/// `target`: cuántos marcadores hay REALMENTE en una hoja. En layouts sin QR
+/// `expected` es la unión de los IDs de todas las hojas, así que sin este tope
+/// el detector agotaría todas las variantes buscando marcadores inexistentes.
 pub fn detect_markers_multi(
     rgb: &Rgb,
     dict: Dict,
@@ -86,9 +89,11 @@ pub fn detect_markers_multi(
     mode: &str,
     polaridad: &str,
     escalar: bool,
+    target: usize,
 ) -> MultiDetect {
     let expected_set: std::collections::HashSet<u32> = expected.iter().cloned().collect();
-    let solido = 3usize.max(expected_set.len() / 2);
+    let target = target.min(expected_set.len()).max(1);
+    let solido = 3usize.max(target / 2);
     let mut profiles: Vec<(&str, bool)> = vec![(mode, false)];
     if escalar && mode != "cianotipia" {
         profiles.push(("cianotipia", true));
@@ -121,7 +126,7 @@ pub fn detect_markers_multi(
                 best.inverted = inverted;
                 best.escalated = escalated;
             }
-            best.found.len() >= expected_set.len()
+            best.found.len() >= target
         };
 
         let inv_first = polaridad == "invertida_primero";
@@ -159,10 +164,16 @@ pub struct OrientedDetect {
     pub escalated: bool,
 }
 
-pub fn detect_oriented(img: &mut DynImg, dict: Dict, expected: &[u32], mode: &str) -> OrientedDetect {
+pub fn detect_oriented(
+    img: &mut DynImg,
+    dict: Dict,
+    expected: &[u32],
+    mode: &str,
+    target: usize,
+) -> OrientedDetect {
     let (w, _h) = img.size();
-    let expected_n = expected.len();
-    let objetivo = 3usize.max(expected_n / 2);
+    let target = target.min(expected.len()).max(1);
+    let objetivo = 3usize.max(target / 2);
 
     let mut out = OrientedDetect {
         strategy: String::new(),
@@ -185,7 +196,7 @@ pub fn detect_oriented(img: &mut DynImg, dict: Dict, expected: &[u32], mode: &st
         let sufijo = if idx > 0 { "_bin" } else { "" };
         for flip in [false, true] {
             let cara = if flip { proxy.flip_horizontal() } else { proxy.clone() };
-            let det = detect_markers_multi(&cara, dict, expected, mode, "ambas", true);
+            let det = detect_markers_multi(&cara, dict, expected, mode, "ambas", true, target);
             if det.found.len() > out.found.len() {
                 out.strategy = format!(
                     "{}{}{}",
@@ -739,13 +750,12 @@ pub fn resolve_markers(layout: &Value) -> LayoutMarkers {
     LayoutMarkers { bboxes, ids_por_hoja: iph, dict }
 }
 
-/// Identifica la hoja por los IDs de marcador detectados (hojas sin QR).
-/// Gana la hoja con más IDs propios detectados; un empate = no identificada.
-fn identify_by_markers<'a>(
-    layout: &'a Value,
+/// Vota la hoja por los IDs de marcador detectados. Gana la hoja con más IDs
+/// propios; un empate estricto = None (no identificable solo por marcadores).
+pub fn vote_sheet(
     ids_por_hoja: &HashMap<i64, Vec<u32>>,
     detected: &HashSet<u32>,
-) -> Option<(&'a Value, String)> {
+) -> Option<(i64, usize)> {
     let mut best: Option<(i64, usize)> = None;
     let mut tied = false;
     for (&num, ids) in ids_por_hoja {
@@ -764,6 +774,16 @@ fn identify_by_markers<'a>(
     if tied || score == 0 {
         return None;
     }
+    Some((num, score))
+}
+
+/// Identifica la hoja por los IDs de marcador detectados (hojas sin QR).
+fn identify_by_markers<'a>(
+    layout: &'a Value,
+    ids_por_hoja: &HashMap<i64, Vec<u32>>,
+    detected: &HashSet<u32>,
+) -> Option<(&'a Value, String)> {
+    let (num, score) = vote_sheet(ids_por_hoja, detected)?;
     layoutfile::sheet_by_number(layout, num)
         .map(|h| (h, format!("marker IDs ({score} matching)")))
 }
@@ -836,18 +856,52 @@ pub fn detect_scan(
         fail!("The layout declares an impossible canvas ({page_w}×{page_h} px).");
     }
     let dict = markers.dict;
-    let layout_bboxes = &markers.bboxes;
-    let expected: Vec<u32> = layout_bboxes
+    let expected: Vec<u32> = markers
+        .bboxes
         .as_object()
         .map(|o| o.keys().filter_map(|k| k.parse().ok()).collect())
         .unwrap_or_default();
     if expected.is_empty() {
         fail!("The layout is invalid or incomplete (no markers).");
     }
-    res["marcadores_total"] = json!(expected.len());
+    // Cuántos marcadores hay físicamente en UNA hoja (en layouts sin QR,
+    // `expected` es la unión de los IDs de todas las hojas).
+    let per_sheet = markers
+        .ids_por_hoja
+        .as_ref()
+        .and_then(|iph| iph.values().map(|v| v.len()).max())
+        .unwrap_or(expected.len());
+    res["marcadores_total"] = json!(per_sheet);
 
     // 1. Detección en proxy con espejo automático.
-    let det = detect_oriented(img, dict, &expected, &mode);
+    let mut det = detect_oriented(img, dict, &expected, &mode, per_sheet);
+
+    // 1b. Con identidad por marcadores: votar la hoja candidata YA y
+    // restringir el resto del proceso a sus IDs. Sin esto, el afinado y la
+    // recuperación guiada buscan los IDs de las demás hojas, releen los
+    // marcadores reales como IDs ajenos (con la rotación equivocada) y el
+    // control de residuos los tiene que descartar uno a uno.
+    let restricted: Option<Vec<u32>> = markers.ids_por_hoja.as_ref().and_then(|iph| {
+        let detected: HashSet<u32> = det.found.keys().cloned().collect();
+        vote_sheet(iph, &detected).and_then(|(num, _)| iph.get(&num).cloned())
+    });
+    let layout_bboxes_owned: Value = match &restricted {
+        Some(ids) => {
+            let idset: HashSet<u32> = ids.iter().cloned().collect();
+            det.found.retain(|id, _| idset.contains(id));
+            let mut map = serde_json::Map::new();
+            for id in ids {
+                if let Some(b) = markers.bboxes.get(id.to_string()) {
+                    map.insert(id.to_string(), b.clone());
+                }
+            }
+            res["marcadores_total"] = json!(ids.len());
+            Value::Object(map)
+        }
+        None => markers.bboxes.clone(),
+    };
+    let layout_bboxes = &layout_bboxes_owned;
+
     res["estrategia"] = json!(det.strategy);
     res["marcadores"] = json!(det.found.len());
     res["espejado"] = json!(det.flipped);

@@ -90,6 +90,9 @@ body {
 .fname { font-family: var(--font-display); font-weight: 700; font-size: 16px; letter-spacing: .02em; }
 .fdesc { font-size: 11.5px; color: var(--cian-300); }
 .frame.help { flex: 0 0 auto; min-width: 90px; }
+/* separador entre el flujo de 3 pasos y las pestañas auxiliares */
+.strip-sep { flex: 0 0 1px; align-self: stretch; background: var(--prusia-700); margin: 2px 6px; }
+.frame.extra { flex: 0 0 auto; min-width: 130px; }
 
 /* ── Vistas ───────────────────────────────────────────────── */
 .view { display: none; }
@@ -161,6 +164,7 @@ input[type="text"], input[type="number"], select {
 }
 input[type="color"] { padding: 1px; height: 32px; width: 52px; border: 1.5px solid var(--papel-sombra); border-radius: 6px; background: #FDFBF4; }
 input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--prusia-500); outline-offset: 1px; }
+input:disabled, select:disabled { opacity: .45; background: #ECE8DC; cursor: not-allowed; }
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
 .row.tight { align-items: flex-end; }
@@ -283,7 +287,10 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
 }
 
 /* páginas de ayuda */
-.prose { max-width: 940px; }
+.prose { max-width: 1500px; }
+/* el contenido del tutorial en dos columnas; el flujo de pasos va a lo ancho */
+.prose .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 56px; align-items: start; }
+@media (max-width: 1000px) { .prose .cols { grid-template-columns: 1fr; } }
 .prose h2 { font-family: var(--font-display); font-variation-settings: "wdth" 112; font-weight: 800; color: var(--papel); }
 .prose h3 { font-family: var(--font-display); color: var(--sol); margin-top: 26px; }
 .prose a { color: var(--sol); }
@@ -299,8 +306,7 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
 .prose .steps li {
   position: relative;
   background: var(--prusia-950); border: 1px solid var(--prusia-700);
-  border-top: 2px solid var(--sol);
-  border-radius: 0 0 8px 8px; padding: 12px 14px 12px;
+  border-radius: 8px; padding: 12px 14px;
 }
 .prose .steps .step-num {
   display: inline-block; font-family: var(--font-mono); font-size: 11px;
@@ -313,6 +319,7 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
 .colophon p { margin: 2px 0; display: inline; }
 .colophon p + p::before { content: " · "; color: var(--prusia-500); }
 .colophon a { color: var(--sol); }
+.colophon .dedication { font-style: italic; }
 
 .pill { display: inline-block; font-family: var(--font-mono); font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--prusia-800); border: 1px solid var(--prusia-700); color: var(--cian-300); }
 .paper .pill { background: var(--papel-sombra); border-color: var(--papel-sombra); color: var(--tinta-suave); }

@@ -154,7 +154,7 @@ fn align_to_canonical(
     mode: &str,
 ) -> Result<(Rgb, f64, HashMap<u32, [Pt; 4]>), String> {
     let expected: Vec<u32> = cal.marker_bboxes.keys().cloned().collect();
-    let det = detect_oriented(&mut img, Dict::Dict4x4_50, &expected, mode);
+    let det = detect_oriented(&mut img, Dict::Dict4x4_50, &expected, mode, expected.len());
     if det.found.len() < 3 {
         return Err(format!(
             "Only {} reference markers were detected; at least 3 are needed. Scan the whole page, right side up.",
@@ -294,7 +294,7 @@ pub fn analyze_printer_test(
     }
 
     // Tamaño mínimo de marcador: detector ESTRICTO sobre el warp
-    let det = crate::scanproc::detect_markers_multi(&warp, Dict::Dict4x4_50, &SIZE_TEST_IDS, "normal", "normal", false);
+    let det = crate::scanproc::detect_markers_multi(&warp, Dict::Dict4x4_50, &SIZE_TEST_IDS, "normal", "normal", false, SIZE_TEST_IDS.len());
     let mut detectados_mm: Vec<f64> = g
         .size_test
         .iter()

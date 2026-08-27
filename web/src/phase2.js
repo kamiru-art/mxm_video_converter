@@ -179,7 +179,7 @@ export function mountPhase2(root) {
       const frames = (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
       const sinIdentificar = (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
       for (const fr of frames) project.processedFrames.set(fr.label, fr.png);
-      ph2.results.push({
+      addResult({
         result, frames, sinIdentificar,
         overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
       });
@@ -192,73 +192,85 @@ export function mountPhase2(root) {
         try { await processOne(f); } catch (e) { toast(`Error in one scan: ${e.message}`, 'err'); }
         done++;
         prog.set(done / files.length, `${done}/${files.length} scans`);
-        renderResults();
       }
     }));
     recycleIdle(); // liberar la memoria WASM que infló el lote
     prog.hide();
-    renderResults();
+    renderSummary();
     toast('Processing finished. Check the report.', 'ok');
   }
 
-  function renderResults() {
-    const rows = [];
-    for (const { result: r, frames, sinIdentificar, overlay } of ph2.results) {
-      // miniaturas pequeñas; un clic abre la imagen a tamaño completo
-      const thumbs = el('div', { class: 'thumbs report-thumbs' });
-      if (overlay) {
-        const t = el('div', { class: 'thumb clickable', title: 'View the alignment overlay' },
-          el('img', { src: URL.createObjectURL(overlay), alt: 'alignment' }),
-          el('div', { class: 'tag' }, 'alignment'));
-        t.addEventListener('click', () => lightbox(overlay, `${r.scan}: green = marker found, red = missing, blue = frames, orange = QRs`));
-        thumbs.append(t);
-      }
-      for (const f of [...frames, ...sinIdentificar].slice(0, 60)) {
-        const t = el('div', { class: 'thumb clickable', title: 'View at full size' },
-          el('img', { src: pngUrl(f.png) }), el('div', { class: 'tag' }, f.label));
-        t.addEventListener('click', () => lightbox(f.png, f.label));
-        thumbs.append(t);
-      }
-      rows.push(el('tr', {},
-        el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
-        el('td', { class: 'mono' }, r.scan),
-        el('td', {}, r.hoja_numero ?? '—'),
-        el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
-        el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
-        el('td', {}, String(r.frames ? Object.keys(r.frames).length : (frames?.length ?? 0))),
-        el('td', {}, [
-          ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint', style: 'color:#D8B04C' }, a)),
-          r.error ? el('div', { style: 'color:#E98C77' }, r.error) : null,
-        ]),
-      ), el('tr', {}, el('td', {}), el('td', { colspan: '6' }, thumbs)));
-    }
-    const table = el('table', { class: 'report' },
-      el('tr', {}, ...['', 'Scan', 'Sheet', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h))),
-      rows);
+  // La tabla del informe se construye INCREMENTALMENTE: cada resultado crea
+  // sus filas (y sus URLs de miniaturas) UNA sola vez. Reconstruir todo el
+  // informe tras cada escaneo redecodificaba todas las miniaturas anteriores
+  // y filtraba URLs sin liberar: por eso el final del lote se arrastraba.
+  const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
+  const reportTable = el('table', { class: 'report' }, reportHeader);
+  const missingSlot = el('div');
 
-    // faltantes
-    let missingBox = null;
-    if (ph2.layout) {
+  function buildResultRows({ result: r, frames, sinIdentificar, overlay }) {
+    // miniaturas pequeñas; un clic abre la imagen a tamaño completo
+    const thumbs = el('div', { class: 'thumbs report-thumbs' });
+    if (overlay) {
+      const t = el('div', { class: 'thumb clickable', title: 'View the alignment overlay' },
+        el('img', { src: URL.createObjectURL(overlay), alt: 'alignment' }),
+        el('div', { class: 'tag' }, 'alignment'));
+      t.addEventListener('click', () => lightbox(overlay, `${r.scan}: green = marker found, red = missing, blue = frames, orange = QRs`));
+      thumbs.append(t);
+    }
+    for (const f of [...frames, ...sinIdentificar].slice(0, 60)) {
+      const t = el('div', { class: 'thumb clickable', title: 'View at full size' },
+        el('img', { src: pngUrl(f.png) }), el('div', { class: 'tag' }, f.label));
+      t.addEventListener('click', () => lightbox(f.png, f.label));
+      thumbs.append(t);
+    }
+    return [el('tr', {},
+      el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
+      el('td', { class: 'mono' }, r.scan),
+      el('td', {}, r.hoja_numero ?? '—'),
+      el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
+      el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
+      el('td', {}, String(frames?.length ?? 0)),
+      el('td', {}, [
+        ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint', style: 'color:#D8B04C' }, a)),
+        r.error ? el('div', { style: 'color:#E98C77' }, r.error) : null,
+      ]),
+    ), el('tr', {}, el('td', {}), el('td', { colspan: '6' }, thumbs))];
+  }
+
+  function addResult(entry) {
+    ph2.results.push(entry);
+    reportTable.append(...buildResultRows(entry));
+    renderSummary();
+  }
+
+  function clearReport() {
+    ph2.results = [];
+    ph2.claims = {};
+    project.processedFrames.clear();
+    reportTable.replaceChildren(reportHeader);
+    renderSummary();
+  }
+
+  function renderSummary() {
+    const any = ph2.results.length > 0;
+    reportTable.style.display = any ? '' : 'none';
+    downloadRow.style.display = any ? '' : 'none';
+    missingSlot.replaceChildren();
+    if (ph2.layout && any) {
       const expected = expectedLabels(ph2.layout);
       const missing = [...expected.keys()].filter((et) => !project.processedFrames.has(et)).sort();
-      if (ph2.results.length) {
-        missingBox = missing.length
-          ? el('div', { class: 'missing-box' },
-              el('strong', {}, `Missing frames (${missing.length}): `),
-              missing.join(', '),
-              el('div', { style: 'margin-top:6px' }, 'Use “Rescue sheets” below to reprint only these.'))
-          : el('div', { class: 'allok-box' }, el('strong', {}, 'No frames missing.'));
-        rescueSection.style.display = missing.length ? '' : 'none';
-        rescueMissing = missing;
-      }
+      missingSlot.append(missing.length
+        ? el('div', { class: 'missing-box' },
+            el('strong', {}, `Missing frames (${missing.length}): `),
+            missing.join(', '),
+            el('div', { style: 'margin-top:6px' }, 'Use “Rescue sheets” below to reprint only these.'))
+        : el('div', { class: 'allok-box' }, el('strong', {}, 'No frames missing.')));
+      rescueSection.style.display = missing.length ? '' : 'none';
+      rescueMissing = missing;
     }
-    resultsBox.replaceChildren(
-      missingBox ?? '',
-      table,
-      ph2.results.length ? downloadRow : '',
-    );
     framesState.textContent = project.processedFrames.size
-      ? `${project.processedFrames.size} recovered frames in memory (ready for phase ④).`
+      ? `${project.processedFrames.size} recovered frames in memory (ready for the Video phase).`
       : '';
   }
 
@@ -281,9 +293,11 @@ export function mountPhase2(root) {
       },
     }, 'Download frames + report (ZIP)'),
     el('button', {
-      class: 'btn ghost-light small', onclick: () => { ph2.results = []; ph2.claims = {}; project.processedFrames.clear(); renderResults(); },
+      class: 'btn ghost-light small', onclick: clearReport,
     }, 'Clear results'),
   );
+  resultsBox.append(missingSlot, reportTable, downloadRow);
+  renderSummary();
 
   function buildInforme() {
     const expected = ph2.layout ? expectedLabels(ph2.layout) : new Map();
