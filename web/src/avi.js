@@ -24,17 +24,38 @@ async function loadCore() {
   return ff;
 }
 
-// La exportación lossless (video.js) reutiliza esta instancia como muxer.
-export function getFF() {
+function getFF() {
   if (!ffPromise) ffPromise = loadCore();
   return ffPromise;
 }
 
 /** Cierra la instancia y libera su memoria WASM. */
-export async function release() {
+async function release() {
   const p = ffPromise;
   ffPromise = null;
   try { (await p)?.terminate(); } catch { /* ya cerrada */ }
+}
+
+// La instancia es ÚNICA y se comparte entre la extracción y la exportación
+// MOV (video.js). Dos sesiones a la vez se pisarían: terminate() de una
+// rechaza los exec de la otra, los callbacks de progreso son globales por
+// instancia y el FS es un solo espacio de nombres. withFF serializa cada
+// sesión (montar → exec → leer) y libera la instancia cuando no queda
+// ninguna en cola.
+let ffQueue = Promise.resolve();
+let ffPending = 0;
+
+export function withFF(fn) {
+  ffPending++;
+  const run = ffQueue.then(async () => {
+    try {
+      return await fn(await getFF());
+    } finally {
+      if (--ffPending === 0) await release();
+    }
+  });
+  ffQueue = run.catch(() => {});
+  return run;
 }
 
 // El archivo de entrada se monta como WORKERFS: ffmpeg lee del Blob bajo
@@ -82,22 +103,23 @@ async function probeLoaded(ff, path) {
 }
 
 /** Sondeo: duración, dimensiones y fps. Mismo formato que probeVideo. */
-export async function probeFallback(file) {
-  const ff = await getFF();
-  const path = await mountInput(ff, file);
-  try {
-    return { ...(await probeLoaded(ff, path)), fallback: true };
-  } finally {
-    await unmountInput(ff);
-  }
+export function probeFallback(file) {
+  return withFF(async (ff) => {
+    const path = await mountInput(ff, file);
+    try {
+      return { ...(await probeLoaded(ff, path)), fallback: true };
+    } finally {
+      await unmountInput(ff);
+    }
+  });
 }
 
 /**
  * Extrae fotogramas como PNG por tandas (la memoria WASM solo retiene una
  * tanda a la vez). Misma interfaz que extractFrames de video.js.
  */
-export async function extractFramesFallback(file, opts = {}) {
-  const ff = await getFF();
+export function extractFramesFallback(file, opts = {}) {
+  return withFF(async (ff) => {
   const path = await mountInput(ff, file);
   try {
     const probe = await probeLoaded(ff, path);
@@ -147,8 +169,8 @@ export async function extractFramesFallback(file, opts = {}) {
     }
     return { count, fps, duration: probe.duration, origen: file.name };
   } finally {
+    // withFF libera la instancia (~350 MB) al no quedar sesiones en cola
     await unmountInput(ff);
-    // liberar los ~350 MB que retiene la instancia del módulo
-    await release();
   }
+  });
 }

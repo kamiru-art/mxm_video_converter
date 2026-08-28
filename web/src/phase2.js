@@ -106,6 +106,11 @@ export function mountPhase2(root) {
     onFiles: (files) => {
       for (const f of files) loadedScans.set(f.name, f);
       refreshReprocess();
+      if (processing) {
+        // sin esto quedarían retenidos en silencio, sin procesar
+        toast('A batch is already running. The new files were added to the loaded list; press Reprocess when it finishes.', 'err');
+        return;
+      }
       processScans(files);
     },
   });

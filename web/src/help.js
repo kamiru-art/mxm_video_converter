@@ -92,10 +92,13 @@ Pick the <strong>format</strong> (MP4/H.264 or WebM), the
 500 Mbps), the <strong>resolution</strong> (up to 8K; the panel shows the
 exact output size) and the file name.</p>
 <p>The <strong>Lossless</strong> quality writes every frame as PNG inside a
-MOV file: pixel-identical to the processed frames, at any resolution. Editors
-and QuickTime open it; web browsers cannot play it back. The other qualities
-use the browser encoder, which is always lossy. Every digital step in this
-app stores lossless PNG, so scan → frames → Lossless MOV loses nothing.</p>
+MOV file: pixel-identical to the processed frames, at any resolution. It
+opens in editors (DaVinci Resolve, Premiere) and in VLC or IINA; QuickTime
+Player and browsers no longer decode PNG video. For a master that QuickTime
+plays, pick <strong>ProRes 4444</strong>: visually lossless, 10-bit,
+edit-ready. The other qualities use the browser encoder, which is always
+lossy. Every digital step in this app stores lossless PNG, so scan → frames
+→ Lossless MOV loses nothing.</p>
 
 <h3>Calibration (when you need precision)</h3>
 <p><strong>Printer</strong>: print the test page, scan it, and the app

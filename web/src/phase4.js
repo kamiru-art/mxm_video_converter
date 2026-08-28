@@ -3,7 +3,7 @@
 import { el, toast, download, progressBar, dropzone, field, numberInput, select } from './ui.js';
 import { project } from './project.js';
 import { ph2 } from './phase2.js';
-import { buildVideo, buildVideoLossless } from './video.js';
+import { buildVideo, buildVideoLossless, buildVideoProres, decodeFrameBitmap } from './video.js';
 import { sanitizeLabel } from './ui.js';
 
 /** Resuelve la secuencia de imágenes según la línea de tiempo del layout
@@ -61,6 +61,7 @@ export function mountPhase4(root) {
   ], 'auto');
   const qualSel = select([
     ['lossless', 'Lossless (PNG frames in a MOV, for editors)'],
+    ['prores', 'ProRes 4444 (edit-ready, plays in QuickTime)'],
     ['max', 'Maximum (visually lossless, huge file)'],
     ['very_high', 'Very high'],
     ['high', 'High (recommended)'],
@@ -68,12 +69,13 @@ export function mountPhase4(root) {
     ['low', 'Low (small file)'],
     ['custom', 'Custom bitrate…'],
   ], 'high');
+  const isMovQuality = () => qualSel.value === 'lossless' || qualSel.value === 'prores';
   const bitrateIn = numberInput(8, { min: 0.5, max: 500, step: 0.5 });
   const bitrateField = field('Bitrate (Mbps)', bitrateIn);
   bitrateField.style.display = 'none';
   qualSel.addEventListener('change', () => {
     bitrateField.style.display = qualSel.value === 'custom' ? '' : 'none';
-    fmtSel.disabled = qualSel.value === 'lossless'; // el contenedor es MOV
+    fmtSel.disabled = isMovQuality(); // el contenedor es MOV
     refreshResInfo();
   });
   const resSel = select([
@@ -100,8 +102,8 @@ export function mountPhase4(root) {
       w = w * (target / h);
       h = target;
     }
-    // el modo lossless (PNG en MOV) no exige dimensiones pares; H.264 sí
-    const [ew, eh] = qualSel.value === 'lossless'
+    // los MOV (PNG lossless / ProRes) no exigen dimensiones pares; H.264 sí
+    const [ew, eh] = isMovQuality()
       ? [Math.max(1, Math.round(w)), Math.max(1, Math.round(h))]
       : evenPair(w, h);
     return { w: ew, h: eh, upscaled: target ? target > nativeDims.h : false };
@@ -154,7 +156,7 @@ export function mountPhase4(root) {
       const first = files[0];
       if (first) {
         const blob = first.data instanceof Blob ? first.data : new Blob([first.data], { type: 'image/png' });
-        createImageBitmap(blob).then((bmp) => {
+        decodeFrameBitmap(blob).then((bmp) => {
           nativeDims = { w: bmp.width, h: bmp.height };
           bmp.close();
           refreshResInfo();
@@ -176,9 +178,19 @@ export function mountPhase4(root) {
     buildBtn.disabled = true;
     prog.show();
     try {
-      const getters = files.map((f) => async () => {
-        const blob = f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' });
-        return createImageBitmap(blob);
+      // un getter por dibujo ÚNICO (files repite objetos para los dedup):
+      // buildVideo cachea los reescalados por identidad del getter
+      const getterOf = new Map();
+      const getters = files.map((f) => {
+        let g = getterOf.get(f);
+        if (!g) {
+          g = async () => {
+            const blob = f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' });
+            return decodeFrameBitmap(blob); // TIFF sueltos incluidos
+          };
+          getterOf.set(f, g);
+        }
+        return g;
       });
       const fps = parseFloat(fpsIn.value) || 12;
       const targetH = resSel.value === 'original' ? 0 : parseInt(resSel.value, 10);
@@ -187,6 +199,11 @@ export function mountPhase4(root) {
         const blobs = files.map((f) => (f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' })));
         out = await buildVideoLossless(blobs, fps,
           (i, n) => prog.set(i / (n + 1), `preparing frame ${i}/${n}`), { targetH });
+      } else if (qualSel.value === 'prores') {
+        const blobs = files.map((f) => (f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' })));
+        prog.set(0.02, 'encoding ProRes…');
+        out = await buildVideoProres(blobs, fps,
+          (p) => prog.set(p, `encoding ProRes ${Math.round(p * 100)}%`), { targetH });
       } else {
         out = await buildVideo(getters, fps, (i, n) => prog.set(i / n, `encoding ${i}/${n}`), {
           format: fmtSel.value,
@@ -200,10 +217,12 @@ export function mountPhase4(root) {
       download(out.bytes, name, out.mime);
       if (preview.src) URL.revokeObjectURL(preview.src); // soltar el video anterior
       if (out.ext === 'mov') {
-        // los navegadores no reproducen PNG dentro de MOV: sin vista previa
+        // los navegadores no decodifican PNG-en-MOV ni ProRes: sin vista previa
         preview.removeAttribute('src');
         preview.style.display = 'none';
-        toast(`Lossless MOV saved (${fps} fps). Browsers cannot preview it; open it in your video editor or QuickTime.`, 'ok');
+        toast(qualSel.value === 'prores'
+          ? `ProRes MOV saved (${fps} fps). Open it in QuickTime or your editor; browsers cannot preview it.`
+          : `Lossless MOV saved (${fps} fps). Open it in DaVinci Resolve, Premiere, VLC or IINA; QuickTime and browsers cannot play PNG video. For a QuickTime-playable master use the ProRes 4444 quality.`, 'ok');
       } else {
         preview.src = URL.createObjectURL(new Blob([out.bytes], { type: out.mime }));
         preview.style.display = '';
@@ -254,7 +273,7 @@ export function mountPhase4(root) {
     ),
     resInfo,
     el('div', { class: 'hint' },
-      'The Lossless quality stores every frame as PNG inside a MOV file: pixel-identical to the processed frames, at any resolution (8K included). Editors and QuickTime open it; web browsers do not play it back. All the other qualities use the browser encoder, which is always lossy.'),
+      'Lossless stores every frame as PNG inside a MOV: pixel-identical, any resolution (8K included); it opens in editors (DaVinci Resolve, Premiere) and VLC/IINA, but QuickTime Player and browsers no longer decode PNG video. ProRes 4444 is the QuickTime-playable master: visually lossless, 10-bit, ready for editing. The remaining qualities use the browser encoder, which is always lossy.'),
     field('File name', nameIn),
     buildBtn,
     prog.root,
@@ -263,7 +282,7 @@ export function mountPhase4(root) {
   const bench = el('div', { class: 'bench' },
     el('h2', {}, 'Result'),
     el('div', { class: 'hint', style: 'color:var(--cian-300)' },
-      'The video is built in your browser: H.264 MP4 or WebM (VP9/AV1) for the lossy qualities, or a lossless PNG-in-MOV for editors. Resolutions the browser encoder rejects (some machines refuse 5K/8K H.264) still work with the Lossless quality.'),
+      'The video is built in your browser: H.264 MP4 or WebM (VP9/AV1) for the lossy qualities, lossless PNG-in-MOV for editors, or ProRes 4444 for QuickTime and editing. Resolutions the browser encoder rejects (some machines refuse 5K/8K H.264) still work with the MOV qualities.'),
     preview,
   );
 

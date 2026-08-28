@@ -192,6 +192,14 @@ async function main() {
         if (outL.ext !== 'mov' || !headL.includes('ftyp')) throw new Error('lossless output is not a MOV');
         const totalPng = lossFrames.reduce((a, b) => a + b.size, 0);
         if (outL.bytes.length < totalPng) throw new Error('lossless MOV smaller than its PNG frames (not stream-copied)');
+
+        // ProRes 4444 en el navegador (prores_ks de ffmpeg.wasm)
+        const { buildVideoProres } = await import('./video.js');
+        const outP = await buildVideoProres(lossFrames, 2);
+        // el atom stsd con el fourcc va en el moov, al FINAL del archivo
+        const bodyP = new TextDecoder('latin1').decode(outP.bytes.slice(-65536));
+        log(`ProRes MOV: ${outP.bytes.length} bytes`);
+        if (outP.ext !== 'mov' || !bodyP.includes('ap4h')) throw new Error('ProRes output lacks the ap4h codec atom');
       } else {
         log('· (sin muestra de video: prueba de WebCodecs omitida)');
       }
