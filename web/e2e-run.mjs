@@ -33,6 +33,16 @@ if (!existsSync(avi)) {
     '-c:v', 'mpeg4', '-y', avi,
   ], { stdio: 'ignore' });
 }
+// MOV con ProRes: contenedor legible por mediabunny pero códec que WebCodecs
+// no decodifica, como los MOV HEVC 10 bits de las cámaras. Ejercita el
+// desvío por canDecode() hacia ffmpeg.wasm.
+const mov = join(DIST, 'e2e_sample_prores.mov');
+if (!existsSync(mov)) {
+  spawnSync('ffmpeg', [
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2',
+    '-c:v', 'prores', '-y', mov,
+  ], { stdio: 'ignore' });
+}
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml',

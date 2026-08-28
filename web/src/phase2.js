@@ -500,12 +500,12 @@ export function mountPhase2(root) {
     el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its marker IDs (or its QRs, on older projects) and crops every frame. No Photoshop.'),
     layoutDz, useCurrentBtn, layoutInfo,
     el('h3', {}, 'Options'),
-    el('div', { class: 'row' },
-      field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
-      field('Minimum markers', minMarkersIn),
-      field('Detection mode', modeSel),
-      field('Machine RAM (GB)', ramIn, 'Browsers cap what they report at 8 GB. Your real value lets more scans run in parallel.'),
-    ),
+    // campos apilados: con hints de largos distintos, en fila quedaban
+    // desalineados en altura
+    field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
+    field('Minimum markers', minMarkersIn),
+    field('Detection mode', modeSel),
+    field('Machine RAM (GB)', ramIn, 'Browsers cap what they report at 8 GB. Your real value lets more scans run in parallel.'),
     resizeCheck.label, patchesCheck.label, fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,

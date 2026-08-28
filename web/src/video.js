@@ -12,10 +12,10 @@ import {
 } from 'mediabunny';
 import { run, recycleIdle } from './pool.js';
 
-/** Formatos que WebCodecs/mediabunny no abren y ffmpeg.wasm sí. */
-export function needsFallback(name) {
-  return /\.(avi|mpg|mpeg|wmv|flv|3gp)$/i.test(name);
-}
+// ffmpeg.wasm cubre lo que WebCodecs no: contenedores que mediabunny no abre
+// (AVI, MPG…) y códecs que el navegador no decodifica aunque el contenedor
+// sea legible (los MOV de cámara: HEVC 10 bits, ProRes, DNxHD…). La detección
+// no va por extensión sino por lo que este navegador pueda decodificar.
 
 async function probeMediabunny(file) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
@@ -34,9 +34,14 @@ export async function probeVideo(file) {
   try {
     return await probeMediabunny(file);
   } catch (e) {
-    if (!needsFallback(file.name)) throw e;
-    const { probeFallback } = await import('./avi.js');
-    return probeFallback(file);
+    // mediabunny no abre el contenedor: que lo intente ffmpeg.wasm; si
+    // tampoco puede, el error original es el informativo
+    try {
+      const { probeFallback } = await import('./avi.js');
+      return await probeFallback(file);
+    } catch {
+      throw e;
+    }
   }
 }
 
@@ -46,13 +51,25 @@ export async function probeVideo(file) {
  * Devuelve el número de fotogramas extraídos.
  */
 export async function extractFrames(file, opts = {}) {
+  const useFallback = async () => {
+    const { extractFramesFallback } = await import('./avi.js');
+    return extractFramesFallback(file, opts);
+  };
   let probe;
   try {
     probe = await probeMediabunny(file);
   } catch (e) {
-    if (!needsFallback(file.name)) throw e;
-    const { extractFramesFallback } = await import('./avi.js');
-    return extractFramesFallback(file, opts);
+    try {
+      return await useFallback();
+    } catch {
+      throw e;
+    }
+  }
+  // contenedor legible pero códec fuera del alcance de WebCodecs en este
+  // navegador (MOV HEVC 10 bits de cámara, ProRes…): decodificar con ffmpeg
+  if (!(await probe.track.canDecode())) {
+    console.warn(`[video] ${file.name}: WebCodecs cannot decode this codec here; using the ffmpeg.wasm decoder (slower).`);
+    return useFallback();
   }
   const { track, duration, fps: nativeFps } = probe;
   const start = Math.max(0, opts.start ?? 0);
@@ -72,30 +89,40 @@ export async function extractFrames(file, opts = {}) {
     await opts.onFrame?.(blob, thumb, wrapped.timestamp, index, canvas.width, canvas.height);
   };
 
-  if (opts.fps && opts.fps > 0) {
-    const times = [];
-    for (let t = start; t < end - 1e-9; t += 1 / opts.fps) times.push(t);
-    if (!times.length) times.push(start);
-    let i = 0;
-    for await (const wrapped of sink.canvasesAtTimestamps(times)) {
-      if (opts.cancelled?.()) break;
-      if (wrapped) {
+  try {
+    if (opts.fps && opts.fps > 0) {
+      const times = [];
+      for (let t = start; t < end - 1e-9; t += 1 / opts.fps) times.push(t);
+      if (!times.length) times.push(start);
+      let i = 0;
+      for await (const wrapped of sink.canvasesAtTimestamps(times)) {
+        if (opts.cancelled?.()) break;
+        if (wrapped) {
+          await emit(wrapped, i);
+          count++;
+        }
+        i++;
+        opts.onProgress?.(i, times.length);
+      }
+    } else {
+      const est = nativeFps ? Math.round((end - start) * nativeFps) : null;
+      let i = 0;
+      for await (const wrapped of sink.canvases(start, end)) {
+        if (opts.cancelled?.()) break;
         await emit(wrapped, i);
         count++;
+        i++;
+        opts.onProgress?.(i, est);
       }
-      i++;
-      opts.onProgress?.(i, times.length);
     }
-  } else {
-    const est = nativeFps ? Math.round((end - start) * nativeFps) : null;
-    let i = 0;
-    for await (const wrapped of sink.canvases(start, end)) {
-      if (opts.cancelled?.()) break;
-      await emit(wrapped, i);
-      count++;
-      i++;
-      opts.onProgress?.(i, est);
+  } catch (e) {
+    // canDecode dijo que sí pero el decodificador falló antes de dar nada:
+    // último intento con ffmpeg.wasm
+    if (count === 0) {
+      console.warn('[video] WebCodecs decode failed, retrying with ffmpeg.wasm:', e);
+      return useFallback();
     }
+    throw e;
   }
   return { count, fps: opts.fps || nativeFps || 12, duration, origen: file.name };
 }

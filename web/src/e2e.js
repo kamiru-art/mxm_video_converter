@@ -199,6 +199,27 @@ async function main() {
       throw new Error(`flujo de video: ${e.message}`);
     }
 
+    // MOV ProRes: mediabunny abre el contenedor pero WebCodecs no decodifica
+    // el códec (como los MOV HEVC 10 bits de cámara) → desvío por canDecode()
+    try {
+      const presp = await fetch('/e2e_sample_prores.mov');
+      if (presp.ok) {
+        const pblob = new Blob([await presp.arrayBuffer()], { type: 'video/quicktime' });
+        pblob.name = 'e2e_sample_prores.mov';
+        const { probeVideo, extractFrames } = await import('./video.js');
+        const pprobe = await probeVideo(pblob);
+        if (!pprobe.width) throw new Error('ProRes MOV probe returned no dimensions');
+        const got = [];
+        const meta = await extractFrames(pblob, { start: 0, end: 1, fps: 4, onFrame: async (b) => got.push(b) });
+        log(`MOV ProRes: ${meta.count} frames extraídos vía ffmpeg.wasm (${pprobe.width}×${pprobe.height})`);
+        if (got.length < 3) throw new Error(`incomplete ProRes extraction (${got.length})`);
+      } else {
+        log('· (sin muestra ProRes: prueba del códec no decodificable omitida)');
+      }
+    } catch (e) {
+      throw new Error(`flujo MOV de cámara: ${e.message ?? e}`);
+    }
+
     // AVI: extracción por el decodificador de respaldo (ffmpeg.wasm)
     try {
       const aresp = await fetch('/e2e_sample.avi');

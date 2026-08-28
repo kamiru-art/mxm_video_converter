@@ -1,7 +1,8 @@
-// Decodificador de respaldo (ffmpeg.wasm) para formatos que WebCodecs no
-// cubre: AVI, MPG/MPEG, WMV, FLV, 3GP. Se carga bajo demanda (unos 32 MB, solo
-// la primera vez que alguien suelta uno de estos archivos) y se descarga de la
-// memoria al terminar la extracción.
+// Decodificador de respaldo (ffmpeg.wasm) para lo que WebCodecs no cubre:
+// contenedores que mediabunny no abre (AVI, MPG/MPEG, WMV, FLV, 3GP) y códecs
+// que el navegador no decodifica (MOV de cámara: HEVC 10 bits, ProRes,
+// DNxHD…). Se carga bajo demanda (unos 32 MB) y se descarga de la memoria al
+// terminar la extracción.
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 
@@ -36,6 +37,22 @@ export async function release() {
   try { (await p)?.terminate(); } catch { /* ya cerrada */ }
 }
 
+// El archivo de entrada se monta como WORKERFS: ffmpeg lee del Blob bajo
+// demanda, sin copiarlo a la memoria WASM (los clips de cámara pesan
+// gigabytes y writeFile los copiaría enteros).
+const MOUNT = '/input';
+
+async function mountInput(ff, file) {
+  await ff.createDir(MOUNT);
+  await ff.mount('WORKERFS', { blobs: [{ name: 'in', data: file }] }, MOUNT);
+  return `${MOUNT}/in`;
+}
+
+async function unmountInput(ff) {
+  try { await ff.unmount(MOUNT); } catch { /* sin montar */ }
+  try { await ff.deleteDir(MOUNT); } catch { /* ya no está */ }
+}
+
 function parseProbeLog(log) {
   const d = /Duration:\s*(\d+):(\d+):(\d+\.?\d*)/.exec(log);
   const duration = d ? (+d[1]) * 3600 + (+d[2]) * 60 + parseFloat(d[3]) : 0;
@@ -49,12 +66,12 @@ function parseProbeLog(log) {
   };
 }
 
-async function probeLoaded(ff) {
+async function probeLoaded(ff, path) {
   let log = '';
   const onLog = ({ message }) => { log += message + '\n'; };
   ff.on('log', onLog);
   try {
-    await ff.exec(['-hide_banner', '-i', 'in', '-frames:v', '0', '-f', 'null', 'out']);
+    await ff.exec(['-hide_banner', '-i', path, '-frames:v', '0', '-f', 'null', 'out']);
   } catch { /* ffmpeg sale con error al no producir salida; el log ya está */ }
   ff.off('log', onLog);
   const p = parseProbeLog(log);
@@ -67,11 +84,11 @@ async function probeLoaded(ff) {
 /** Sondeo: duración, dimensiones y fps. Mismo formato que probeVideo. */
 export async function probeFallback(file) {
   const ff = await getFF();
-  await ff.writeFile('in', new Uint8Array(await file.arrayBuffer()));
+  const path = await mountInput(ff, file);
   try {
-    return { ...(await probeLoaded(ff)), fallback: true };
+    return { ...(await probeLoaded(ff, path)), fallback: true };
   } finally {
-    try { await ff.deleteFile('in'); } catch { /* sin archivo */ }
+    await unmountInput(ff);
   }
 }
 
@@ -81,15 +98,16 @@ export async function probeFallback(file) {
  */
 export async function extractFramesFallback(file, opts = {}) {
   const ff = await getFF();
-  await ff.writeFile('in', new Uint8Array(await file.arrayBuffer()));
+  const path = await mountInput(ff, file);
   try {
-    const probe = await probeLoaded(ff);
+    const probe = await probeLoaded(ff, path);
     const start = Math.max(0, opts.start ?? 0);
     const end = Math.min(probe.duration, opts.end ?? probe.duration);
     const fps = opts.fps || probe.fps || 12;
     const dt = 1 / fps;
     const est = Math.max(1, Math.round((end - start) * fps));
-    const BATCH = 24;
+    // los PNG de cada tanda viven en la memoria WASM: tandas cortas en 4K/6K
+    const BATCH = Math.max(4, Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * 4))));
     let count = 0;
     let t = start;
     while (t < end - 1e-9) {
@@ -97,8 +115,11 @@ export async function extractFramesFallback(file, opts = {}) {
       const want = Math.min(BATCH, Math.max(1, Math.round((end - t) * fps)));
       await ff.exec([
         '-hide_banner', '-loglevel', 'error',
-        '-ss', t.toFixed(4), '-i', 'in',
+        '-ss', t.toFixed(4), '-i', path,
         '-vf', `fps=${fps}`, '-frames:v', String(want),
+        // rgb24: el resto del pipeline es de 8 bits; PNG de 16 bits solo
+        // duplicaría la memoria (fuentes de 10 bits incluidas)
+        '-pix_fmt', 'rgb24',
         '-f', 'image2', 'f_%03d.png',
       ]);
       let got = 0;
@@ -126,8 +147,8 @@ export async function extractFramesFallback(file, opts = {}) {
     }
     return { count, fps, duration: probe.duration, origen: file.name };
   } finally {
-    try { await ff.deleteFile('in'); } catch { /* sin archivo */ }
-    // liberar los ~350 MB (módulo + archivo) que retiene la instancia
+    await unmountInput(ff);
+    // liberar los ~350 MB que retiene la instancia del módulo
     await release();
   }
 }
