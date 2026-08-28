@@ -177,6 +177,21 @@ async function main() {
         const out2 = await buildVideo(getters, 2);
         log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
         if (out2.bytes.length < 5000) throw new Error('suspiciously small output video');
+
+        // reescalado de salida: ejercita resize_rgba (Lanczos3 del núcleo)
+        const out3 = await buildVideo(getters, 2, null, { targetH: 120 });
+        log(`video reescalado a 120p: ${out3.ext} de ${out3.bytes.length} bytes`);
+        if (out3.bytes.length < 2000) throw new Error('scaled video output too small');
+
+        // exportación lossless: PNG en MOV por stream copy (ffmpeg.wasm)
+        const { buildVideoLossless } = await import('./video.js');
+        const lossFrames = got.slice(0, 4);
+        const outL = await buildVideoLossless(lossFrames, 2);
+        const headL = new TextDecoder('latin1').decode(outL.bytes.slice(0, 16));
+        log(`lossless MOV: ${outL.bytes.length} bytes (${outL.ext})`);
+        if (outL.ext !== 'mov' || !headL.includes('ftyp')) throw new Error('lossless output is not a MOV');
+        const totalPng = lossFrames.reduce((a, b) => a + b.size, 0);
+        if (outL.bytes.length < totalPng) throw new Error('lossless MOV smaller than its PNG frames (not stream-copied)');
       } else {
         log('· (sin muestra de video: prueba de WebCodecs omitida)');
       }

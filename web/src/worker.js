@@ -44,6 +44,10 @@ const handlers = {
     if (r.overlay) transfer.push(r.overlay.buffer);
     return { value: r, transfer };
   },
+  resize_rgba: (a) => {
+    const out = core.resize_rgba(a.rgba, a.w, a.h, a.outW, a.outH);
+    return { value: out, transfer: [out.buffer] };
+  },
   encode_tiff: (a) => {
     const tif = core.encode_tiff(a.png);
     return { value: tif, transfer: [tif.buffer] };

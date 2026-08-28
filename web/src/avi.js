@@ -23,13 +23,14 @@ async function loadCore() {
   return ff;
 }
 
-function getFF() {
+// La exportación lossless (video.js) reutiliza esta instancia como muxer.
+export function getFF() {
   if (!ffPromise) ffPromise = loadCore();
   return ffPromise;
 }
 
 /** Cierra la instancia y libera su memoria WASM. */
-async function release() {
+export async function release() {
   const p = ffPromise;
   ffPromise = null;
   try { (await p)?.terminate(); } catch { /* ya cerrada */ }

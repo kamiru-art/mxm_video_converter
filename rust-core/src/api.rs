@@ -441,6 +441,21 @@ pub fn scan_finish(
     Ok(scan_output_to_js(out))
 }
 
+/// Remuestrea un buffer RGBA opaco con Lanczos3 (mismo filtro que las hojas).
+/// La fase de video escala aquí en vez de con el drawImage del navegador.
+#[wasm_bindgen]
+pub fn resize_rgba(rgba: &[u8], w: usize, h: usize, out_w: usize, out_h: usize) -> Result<Vec<u8>, JsValue> {
+    let area = w.checked_mul(h).ok_or_else(|| err("Image dimensions overflow"))?;
+    let out_area = out_w.checked_mul(out_h).ok_or_else(|| err("Image dimensions overflow"))?;
+    if area > MAX_IMAGE_PIXELS || out_area > MAX_IMAGE_PIXELS {
+        return Err(err(format!("Image too large ({w}×{h} → {out_w}×{out_h}).")));
+    }
+    if w == 0 || h == 0 || out_w == 0 || out_h == 0 || rgba.len() < area * 4 {
+        return Err(err("RGBA buffer does not match the given dimensions"));
+    }
+    Ok(crate::img::resize_rgba_bytes(&rgba[..area * 4], w, h, out_w, out_h))
+}
+
 /// Re-codifica un PNG (el que devuelve render_sheet) como TIFF, conservando
 /// la profundidad de bits.
 #[wasm_bindgen]

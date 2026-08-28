@@ -395,6 +395,12 @@ fn resize_channels(src: &[u8], sw: usize, sh: usize, ch: usize, dw: usize, dh: u
     out
 }
 
+/// RGBA plano (canvas del navegador) con Lanczos3. Solo para imágenes
+/// opacas: el alfa se remuestrea sin premultiplicar.
+pub fn resize_rgba_bytes(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    resize_channels(src, sw, sh, 4, dw.max(1), dh.max(1), Filter::Lanczos3)
+}
+
 pub fn resize_rgb(src: &Rgb, dw: usize, dh: usize, f: Filter) -> Rgb {
     let (dw, dh) = (dw.max(1), dh.max(1));
     Rgb { w: dw, h: dh, data: resize_channels(&src.data, src.w, src.h, 3, dw, dh, f) }
@@ -467,6 +473,17 @@ mod tests {
         assert_eq!(out.px(16, 10), [123, 45, 200]);
         let out = resize_rgb(&img, 13, 7, Filter::Area);
         assert_eq!(out.px(6, 3), [123, 45, 200]);
+    }
+
+    #[test]
+    fn resize_rgba_flat_and_opaque() {
+        let src: Vec<u8> = std::iter::repeat([9u8, 120, 240, 255]).take(40 * 30).flatten().collect();
+        for (dw, dh) in [(80usize, 60usize), (13, 9)] {
+            let out = resize_rgba_bytes(&src, 40, 30, dw, dh);
+            assert_eq!(out.len(), dw * dh * 4);
+            assert_eq!(&out[..4], &[9, 120, 240, 255]);
+            assert!(out.chunks_exact(4).all(|p| p == [9, 120, 240, 255]));
+        }
     }
 
     #[test]

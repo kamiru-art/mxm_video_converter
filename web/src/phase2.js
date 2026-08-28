@@ -59,6 +59,20 @@ export function mountPhase2(root) {
   const bleedIn = numberInput(1.5, { min: 0, max: 20, step: 0.5 });
   const minMarkersIn = numberInput(3, { min: 2, max: 12 });
   const modeSel = select([['auto', 'Automatic (from the layout)'], ['normal', 'Normal'], ['cianotipia', 'Cyanotype']], 'auto');
+  // los navegadores informan la RAM a medias (Chrome la limita a 8 GB;
+  // Safari/Firefox no la informan): el usuario puede declararla
+  const ramIn = numberInput(localStorage.getItem('mxm_ram_gb') ?? '', { min: 1, max: 2048 });
+  ramIn.placeholder = navigator.deviceMemory ? `detected: ${navigator.deviceMemory}+` : 'not detected';
+  ramIn.addEventListener('change', () => {
+    const v = parseFloat(ramIn.value);
+    if (Number.isFinite(v) && v > 0) localStorage.setItem('mxm_ram_gb', String(v));
+    else { ramIn.value = ''; localStorage.removeItem('mxm_ram_gb'); }
+  });
+  function machineRam() {
+    const manual = parseFloat(ramIn.value);
+    if (Number.isFinite(manual) && manual > 0) return { gb: manual, manual: true };
+    return { gb: navigator.deviceMemory || 4, manual: false };
+  }
   const resizeCheck = check('Resize each frame to its original digital size', false);
   const patchesCheck = check('Normalize levels with the gray strip (if the sheet has one)', false);
   const fineCheck = check('Local correction for warped paper (recommended for cyanotype)', true);
@@ -70,12 +84,30 @@ export function mountPhase2(root) {
   const resultsBox = el('div');
   const framesState = el('div');
 
+  // los archivos cargados se retienen para poder reprocesarlos con otras
+  // opciones sin volver a soltarlos
+  const loadedScans = new Map(); // nombre → File
+  const reprocessBtn = el('button', { class: 'btn ghost small', style: 'display:none; margin-top:6px' });
+  function refreshReprocess() {
+    reprocessBtn.style.display = loadedScans.size ? '' : 'none';
+    reprocessBtn.textContent = `Reprocess the ${loadedScans.size} loaded scan(s) with the current options`;
+  }
+  reprocessBtn.addEventListener('click', () => {
+    if (!loadedScans.size) return;
+    clearReport(); // borra resultados, claims y frames de la pasada anterior
+    processScans([...loadedScans.values()]);
+  });
+
   const scansDz = dropzone({
     label: 'Drop your scans here (any order, any orientation)',
     sublabel: 'TIFF / PNG / JPG / WebP, 8 or 16 bit, any resolution. Several at once.',
     accept: '.tif,.tiff,.png,.jpg,.jpeg,.webp,.bmp,image/*',
     multiple: true,
-    onFiles: (files) => processScans(files),
+    onFiles: (files) => {
+      for (const f of files) loadedScans.set(f.name, f);
+      refreshReprocess();
+      processScans(files);
+    },
   });
 
   /** Profundidad de bits de un PNG (byte 24 del IHDR). */
@@ -126,18 +158,25 @@ export function mountPhase2(root) {
   }
 
   /** Cuántos escaneos procesar a la vez, según la RAM y la GPU del equipo.
-   *  navigator.deviceMemory informa la RAM (Chrome la limita a 8). */
+   *  La RAM declarada por el usuario manda; si no, navigator.deviceMemory. */
   function pickConcurrency(files, gpu, singleSheet) {
     if (singleSheet) return 1; // una sola hoja: evitar carreras de identidad
-    const budget = (navigator.deviceMemory || 4) * 1e9 * 0.3;
+    const ram = machineRam();
+    const budget = ram.gb * 1e9 * 0.3;
     const worst = Math.max(1, ...files.map((f) => estimatePeakBytes(f, gpu)));
     const byRam = Math.max(1, Math.floor(budget / worst));
-    return Math.min(byRam, poolSize(), files.length, 3);
+    // el tope conservador de 3 solo aplica cuando la RAM es una suposición
+    return Math.min(byRam, poolSize(), files.length, ram.manual ? poolSize() : 3);
   }
 
+  let processing = false;
   async function processScans(files) {
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
+    if (processing) { toast('Wait for the current batch to finish.', 'err'); return; }
+    processing = true;
+    reprocessBtn.disabled = true;
     prog.show();
+    try {
     // Number.isFinite y no ||: el 0 es un valor válido de bleed
     const bleedVal = parseFloat(bleedIn.value);
     const minMarkersVal = parseInt(minMarkersIn.value, 10);
@@ -153,8 +192,11 @@ export function mountPhase2(root) {
     const gpu = await getGpuDevice();
     const singleSheet = (ph2.layout.hojas ?? []).length === 1;
     const width = pickConcurrency(files, !!gpu, singleSheet);
-    const ram = navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM` : 'RAM unknown';
-    specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ram}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
+    const ram = machineRam();
+    const ramTxt = ram.manual ? `${ram.gb} GB RAM (set by you)`
+      : navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM (browser estimate)`
+      : 'RAM not reported (assuming 4 GB; set yours in Options)';
+    specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ramTxt}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
     let done = 0;
 
     const processOne = async (f) => {
@@ -205,9 +247,14 @@ export function mountPhase2(root) {
       }
     }));
     recycleIdle(); // liberar la memoria WASM que infló el lote
-    prog.hide();
     renderSummary();
     toast('Processing finished. Check the report.', 'ok');
+    } finally {
+      prog.hide();
+      processing = false;
+      reprocessBtn.disabled = false;
+      refreshReprocess();
+    }
   }
 
   // La tabla del informe se construye INCREMENTALMENTE: cada resultado crea
@@ -457,10 +504,12 @@ export function mountPhase2(root) {
       field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
       field('Minimum markers', minMarkersIn),
       field('Detection mode', modeSel),
+      field('Machine RAM (GB)', ramIn, 'Browsers cap what they report at 8 GB. Your real value lets more scans run in parallel.'),
     ),
     resizeCheck.label, patchesCheck.label, fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,
+    reprocessBtn,
     specsInfo,
     prog.root,
   );
