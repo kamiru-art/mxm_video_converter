@@ -84,12 +84,16 @@ jobs:
       - name: Production build
         run: npm run build
         working-directory: web
+      # The deploy job below consumes this artifact minutes later, so it does
+      # not need to outlive the run. Actions storage is a shared quota: when
+      # it fills, this upload fails and takes the deploy down with it, even
+      # though every test passed.
       - name: Upload site artifact
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: web/dist
-          retention-days: 3
+          retention-days: 1
 
   deploy:
     name: Deploy to Cloudflare

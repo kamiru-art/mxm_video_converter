@@ -113,6 +113,13 @@ jobs:
         shell: bash
         run: tar -C dist -czf Kamiru-Studio-linux.tar.gz Kamiru-Studio
 
+      # Este artefacto solo existe para pasarle los binarios al job que
+      # publica el Release, que corre minutos después. Con la retención por
+      # defecto (90 días) cada versión dejaba 339 MB muertos que duplicaban
+      # los binarios YA publicados en la página del Release: trece versiones
+      # llenaron la cuota de almacenamiento de Actions y el siguiente push a
+      # main no pudo subir su artefacto, así que la web no se desplegó.
+      # Un día es de sobra para el traspaso entre jobs.
       - uses: actions/upload-artifact@v4
         with:
           name: Kamiru-Studio-${{ matrix.nombre }}
@@ -122,6 +129,7 @@ jobs:
             legacy-desktop/Kamiru-Studio-*.zip
             legacy-desktop/Kamiru-Studio-*.tar.gz
           if-no-files-found: error
+          retention-days: 1
 
   release:
     name: Publicar Release
