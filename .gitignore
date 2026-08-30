@@ -32,3 +32,9 @@ desktop.ini
 
 # Núcleo de ffmpeg.wasm (se genera en el build desde node_modules)
 web/public/ffmpeg/
+
+# Coverage reports (local test runs only; CI produces its own)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
