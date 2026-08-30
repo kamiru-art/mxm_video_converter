@@ -263,7 +263,7 @@ export function mountPhase4(root) {
     missingBox,
     el('h3', {}, 'Output'),
     el('div', { class: 'row' },
-      field('Frames per second', fpsIn, 'Read from the project; you can change it.'),
+      field('Frames per second', fpsIn, 'From the project; editable.'),
       field('Format', fmtSel),
     ),
     el('div', { class: 'row' },

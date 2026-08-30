@@ -62,7 +62,6 @@ run('version', {}).then(
 // por ningún lado. Aquí se dice, sin tener que abrir la fase ②.
 (async () => {
   const badge = document.getElementById('capbadge');
-  const dot = document.getElementById('capdot');
   const text = document.getElementById('capbadge-text');
   if (!badge) return;
   const cores = navigator.hardwareConcurrency;
@@ -70,7 +69,6 @@ run('version', {}).then(
   let gpu = null;
   try { gpu = await getGpuDevice(); } catch { gpu = null; }
   badge.classList.add(gpu ? 'gpu' : 'cpu');
-  dot.textContent = gpu ? '⚡' : '⚙';
   text.textContent = `${gpu ? 'WebGPU' : 'CPU (WebAssembly)'}${coresTxt}`;
   badge.title = gpu
     ? 'This browser can straighten scans on the graphics card: the heavy step of phase ② runs several times faster and uses half the memory. TIFF and 16-bit PNG scans still go through WebAssembly, so their bit depth survives untouched.'

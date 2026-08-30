@@ -104,7 +104,8 @@ body {
   cursor: help; white-space: nowrap;
 }
 .capbadge.gpu { border-color: rgba(240,180,41,.45); color: var(--sol); }
-.capdot { font-size: 12px; line-height: 1; }
+.capdot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--cian-300); }
+.capbadge.gpu .capdot { background: var(--sol); }
 
 /* ── Vistas ───────────────────────────────────────────────── */
 .view { display: none; }
@@ -205,6 +206,11 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .btn.ghost-light { background: transparent; color: var(--cian-200); border: 1.5px solid var(--prusia-500); }
 .btn.small { font-size: 12.5px; padding: 6px 12px; }
 .btn.danger { background: transparent; color: var(--quimico-error); border: 1.5px solid var(--quimico-error); }
+/* Botones en fila. El `display` vive en la clase y no en el atributo style
+   porque quien enseña estas filas lo hace con `style.display = ''`, y eso
+   borraba un `display:flex` puesto en línea: los botones se quedaban pegados
+   unos a otros, sin separación ninguna. */
+.btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 
 /* zona de soltar archivos */
 .dropzone {
@@ -304,10 +310,37 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
 .assign-hint { font-size: 12.5px; color: var(--cian-300); margin: 6px 0 10px; line-height: 1.45; }
 .assign-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .assign-row .mono { font-family: var(--font-mono); font-size: 12px; flex: 1 1 180px; word-break: break-all; }
-.assign-sel { font-size: 12px; padding: 4px 6px; }
-.assign-row .assign-sel { flex: 0 1 340px; width: auto; min-width: 200px; }
-table.report td.sheet-cell { min-width: 130px; }
-table.report td.sheet-cell .assign-sel { margin-top: 4px; width: 100%; }
+/* Este desplegable cae sobre la mesa oscura del informe, no sobre el papel:
+   con el estilo del navegador (blanco, tipografía del sistema) cantaba como
+   un parche. `appearance:none` lo devuelve a la paleta y a la mono de la
+   tabla, y `color-scheme:dark` pinta también la lista que se despliega. */
+.assign-sel {
+  --caret: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="%238FB3DE" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+  appearance: none;
+  width: auto;
+  padding: 5px 26px 5px 9px;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--cian-200);
+  background-color: var(--prusia-800);
+  background-image: var(--caret);
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 10px 6px;
+  border: 1px solid var(--prusia-500); border-radius: 6px;
+  color-scheme: dark;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.assign-sel option { background: var(--prusia-800); color: var(--cian-200); }
+.assign-sel:hover:not(:disabled) { background-color: var(--prusia-700); border-color: var(--cian-300); }
+.assign-sel:disabled { background-color: var(--prusia-900); background-image: var(--caret); opacity: .45; cursor: not-allowed; }
+.assign-row .assign-sel { flex: 0 1 340px; min-width: 200px; }
+table.report td.sheet-cell { white-space: nowrap; }
+/* menos aire arriba: el desplegable es más alto que el texto de la fila y,
+   con el relleno normal de la celda, quedaba 4 px por debajo de la línea. */
+table.report td.assign-cell { white-space: nowrap; padding-top: 2px; }
+table.report td.assign-cell .assign-sel { width: 200px; }
+@media (max-width: 640px) { table.report td.assign-cell .assign-sel { width: 132px; } }
 .byhand {
   margin-left: 6px; padding: 1px 6px; border-radius: 999px;
   background: rgba(240,180,41,.16); color: var(--sol);

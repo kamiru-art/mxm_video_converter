@@ -367,7 +367,7 @@ export function mountPhase2(root) {
   // y filtraba URLs sin liberar: por eso el final del lote se arrastraba.
   // Cada entrada guarda ADEMÁS sus propias filas y URLs, para poder cambiar
   // una sola cuando se le asigna la hoja a mano.
-  const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
+  const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Assign', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
   const reportTable = el('table', { class: 'report' }, reportHeader);
   const missingSlot = el('div');
   const assignSlot = el('div');
@@ -454,9 +454,11 @@ export function mountPhase2(root) {
     const rows = [el('tr', {},
       el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
       el('td', { class: 'mono' }, r.scan),
+      // el selector va en su propia columna: metido en la celda de la hoja
+      // estiraba esa columna a media tabla y empujaba el número a otro renglón
       el('td', { class: 'sheet-cell' },
-        el('div', {}, r.hoja_numero ?? '—', manual ? el('span', { class: 'byhand' }, 'by hand') : null),
-        assignControl(r.scan)),
+        String(r.hoja_numero ?? '—'), manual ? el('span', { class: 'byhand' }, 'by hand') : null),
+      el('td', { class: 'assign-cell' }, assignControl(r.scan)),
       el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
       el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
       el('td', {}, String(frames?.length ?? 0)),
@@ -464,7 +466,7 @@ export function mountPhase2(root) {
         ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint', style: 'color:#D8B04C' }, a)),
         r.error ? el('div', { style: 'color:#E98C77' }, r.error) : null,
       ]),
-    ), el('tr', {}, el('td', {}), el('td', { colspan: '6' }, thumbs))];
+    ), el('tr', {}, el('td', {}), el('td', { colspan: '7' }, thumbs))];
     entry.rows = rows;
     return rows;
   }
@@ -581,7 +583,7 @@ export function mountPhase2(root) {
   }
 
   // descarga de resultados
-  const downloadRow = el('div', { style: 'margin-top:12px; display:flex; gap:10px; flex-wrap:wrap' },
+  const downloadRow = el('div', { class: 'btn-row' },
     el('button', {
       class: 'btn sun', onclick: async () => {
         const files = new Map();
@@ -733,7 +735,7 @@ export function mountPhase2(root) {
 
   const rescueSection = el('div', { style: 'display:none; margin-top:16px' },
     el('h2', {}, 'Rescue sheets'),
-    rescueDz, rescueInfo, rescueBtn, rescueProg.root,
+    rescueDz, rescueInfo, el('div', { class: 'btn-row' }, rescueBtn), rescueProg.root,
   );
 
   // ── escaneos de demostración ─────────────────────────────────
