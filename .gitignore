@@ -5,6 +5,11 @@
 # ffmpeg.wasm core (the build generates it from node_modules)
 web/public/ffmpeg/
 
+# Codebase notes that stay local: the raw scan, and the concerns list, which
+# is an internal audit rather than something to publish
+docs/codebase/.codebase-scan.txt
+docs/codebase/CONCERNS.md
+
 # Coverage reports: they belong to the local test runs and to CI, not here
 .coverage
 .coverage.*

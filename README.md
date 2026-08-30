@@ -132,6 +132,7 @@ example 10-bit HEVC and ProRes.
 | `rust-core/` | The image processing core. It is written in Rust and compiled to WebAssembly. It makes the sheets, it makes and finds the ArUco markers, it reads the QR codes, and it does the homography, the warp, the cyanotype curves, the calibration and the PDF output. |
 | `web/` | The web application, in HTML, JavaScript and CSS. It uses no framework. The video work uses WebCodecs. The browser does all of the work, in web workers. |
 | `assets/` | The icons of the application. |
+| `docs/codebase/` | Notes about the codebase: the stack, the structure, the architecture, the conventions, the integrations and the tests. |
 
 There is no server. The site is fully static, and it is on Cloudflare Workers
 with static assets. The site is a Progressive Web Application: it has a
