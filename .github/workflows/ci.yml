@@ -3,10 +3,14 @@
 # Every push and pull request runs the full test pyramid:
 #   1. rust  — native tests of the core (includes synthetic end-to-end
 #              roundtrips: sheet → simulated scan → recovered frames).
-#   2. web   — compiles the core to WebAssembly, builds the site and runs
-#              the browser end-to-end test (real Chrome, workers + WASM).
-# Every push to `main` that passes both then deploys automatically to
-# Cloudflare (mxm.sebastianlopez.me), Pages-style.
+#   2. web   — compiles the core to WebAssembly, builds the site, runs the
+#              browser end-to-end test (real Chrome, workers + WASM) and, on
+#              a push to `main`, deploys that exact build to Cloudflare
+#              (mxm.sebastianlopez.me), Pages-style.
+# The web job waits for the rust job, so nothing is published that has not
+# passed both. The deploy deliberately lives inside the web job rather than
+# in one of its own: it publishes the dist it just tested, with no artifact
+# in between and no second build to keep in sync.
 #
 # Deploy requires two repository secrets:
 #   CLOUDFLARE_API_TOKEN  — API token with "Workers Scripts: Edit"
@@ -50,7 +54,12 @@ jobs:
         working-directory: rust-core
 
   web:
-    name: Web (WASM build + browser E2E)
+    name: Web (WASM build + browser E2E + deploy)
+    # El despliegue sale de este job, así que tiene que esperar a los tests
+    # nativos del núcleo: publicar algo que no los ha pasado sería peor que
+    # tardar minuto y medio más. Es el único motivo por el que estos dos jobs
+    # ya no corren en paralelo.
+    needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -84,30 +93,30 @@ jobs:
       - name: Production build
         run: npm run build
         working-directory: web
-      # The deploy job below consumes this artifact minutes later, so it does
-      # not need to outlive the run. Actions storage is a shared quota: when
-      # it fills, this upload fails and takes the deploy down with it, even
-      # though every test passed.
-      - name: Upload site artifact
+
+      # Best effort ON PURPOSE, and no longer on the way to the deploy.
+      # Actions storage is one quota shared by the whole organisation; when it
+      # fills, this upload fails, and while the deploy lived in its own job
+      # downloading this artifact, that failure took the deploy with it — the
+      # site went unpublished with every test green. The artifact is now only
+      # a convenience for downloading a build, so losing it costs nothing.
+      - name: Upload site artifact (best effort)
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: dist
           path: web/dist
           retention-days: 1
 
-  deploy:
-    name: Deploy to Cloudflare
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [rust, web]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: web/dist
+      # The deploy happens HERE, from the dist this job just built and tested,
+      # so there is exactly one build in the pipeline: what gets published is
+      # byte for byte what the browser E2E ran against. A separate job would
+      # have to either receive the build through an artifact (the failure
+      # above) or build it a second time — and a second build is a second
+      # place to keep in sync, which is how the site once shipped without its
+      # ffmpeg decoder.
       - name: Check deploy credentials
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         id: creds
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -119,7 +128,7 @@ jobs:
             echo "::warning::CLOUDFLARE_API_TOKEN secret is not set — skipping deploy. Add it in Settings → Secrets to enable automatic deploys."
           fi
       - name: Deploy (wrangler)
-        if: steps.creds.outputs.have == 'true'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.creds.outputs.have == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
