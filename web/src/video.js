@@ -104,7 +104,11 @@ export async function extractFrames(file, opts = {}) {
       for await (const wrapped of sink.canvasesAtTimestamps(times)) {
         if (opts.cancelled?.()) break;
         if (wrapped) {
-          await emit(wrapped, i);
+          // count, NO i: canvasesAtTimestamps devuelve null cuando no hay
+          // fotograma para ese instante (clip recortado, primer PTS > 0), y
+          // con i el primer fotograma se llamaba clip_000003.png, así que las
+          // etiquetas impresas dejaban de casar con la línea de tiempo.
+          await emit(wrapped, count);
           count++;
         }
         i++;
@@ -115,7 +119,7 @@ export async function extractFrames(file, opts = {}) {
       let i = 0;
       for await (const wrapped of sink.canvases(start, end)) {
         if (opts.cancelled?.()) break;
-        await emit(wrapped, i);
+        await emit(wrapped, count);
         count++;
         i++;
         opts.onProgress?.(i, est);

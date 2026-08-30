@@ -84,14 +84,38 @@ fn try_decode(gray: &Gray) -> Option<String> {
 
 /// Decodifica un QR probando varias mejoras de imagen (gris ampliado, Otsu,
 /// umbral adaptativo, polaridad invertida) — port del pipeline original.
+/// Tope de píxeles del recorte una vez ampliado (2 Mpx ~ 1414×1414, de sobra
+/// para cualquier QR real: uno de 10 mm a 600 ppp ocupa unos 236 px).
+const MAX_UPSCALE_PIXELS: usize = 2_000_000;
+
+/// Cuántas veces ampliar un recorte de w×h antes de buscar el QR. Devuelve 1
+/// cuando no hay que tocarlo.
+fn upscale_factor(w: usize, h: usize) -> usize {
+    let short = w.min(h);
+    if short == 0 || short >= 360 {
+        return 1;
+    }
+    let mut k = ((400.0 / short as f32).round() as usize).max(2);
+    let area = w.saturating_mul(h);
+    while k > 1 && area.saturating_mul(k * k) > MAX_UPSCALE_PIXELS {
+        k -= 1;
+    }
+    k
+}
+
 pub fn decode_qr(gray: &Gray) -> Option<String> {
     if gray.w < 8 || gray.h < 8 {
         return None;
     }
     let mut variants: Vec<Gray> = Vec::new();
     let mut base = gray.clone();
-    if base.w.min(base.h) < 360 {
-        let k = ((400.0 / base.w.min(base.h) as f32).round() as usize).max(2);
+    // El factor sale del lado CORTO y se aplica a los dos, así que el área
+    // crece con su cuadrado: una bbox alargada de 4000×10 daba k=40, o sea
+    // 64 Mpx — y de ahí salen siete variantes más un desenfoque en f32. Las
+    // bboxes vienen del layout.json, que se comparte entre usuarios, así que
+    // el tope no es una precaución teórica.
+    let k = upscale_factor(base.w, base.h);
+    if k > 1 {
         base = resize_gray(&base, base.w * k, base.h * k, Filter::Triangle);
     }
     variants.push(base.clone());
@@ -206,5 +230,24 @@ mod debug_tests {
             );
             println!("{mmv} mm ({}x{}) -> {:?} (esperado {texto})", crop.w, crop.h, decode_qr_rgb(&crop));
         }
+    }
+
+    #[test]
+    fn upscale_factor_is_capped_by_area() {
+        // Recorte normal: se amplía como siempre.
+        assert_eq!(upscale_factor(100, 100), 4);
+        assert_eq!(upscale_factor(200, 200), 2);
+        // Ya grande: no se toca.
+        assert_eq!(upscale_factor(400, 400), 1);
+        // Alargado y hostil: el factor del lado corto daba k=40 sobre 4000×10,
+        // o sea 64 Mpx. Ahora el área manda.
+        for (w, h) in [(4000usize, 10usize), (20000, 4), (10, 4000), (3000, 2)] {
+            let k = upscale_factor(w, h);
+            let area = (w * k) * (h * k);
+            assert!(area <= MAX_UPSCALE_PIXELS, "{w}×{h}: k={k} da {area} px");
+        }
+        // Ningún caso puede devolver 0 (se usa como multiplicador).
+        assert!(upscale_factor(1, 1) >= 1);
+        assert!(upscale_factor(0, 0) >= 1);
     }
 }

@@ -4,19 +4,27 @@
 #   1. rust  — native tests of the core (includes synthetic end-to-end
 #              roundtrips: sheet → simulated scan → recovered frames).
 #   2. web   — compiles the core to WebAssembly, builds the site, runs the
-#              browser end-to-end test (real Chrome, workers + WASM) and, on
-#              a push to `main`, deploys that exact build to Cloudflare
-#              (mxm.sebastianlopez.me), Pages-style.
+#              browser end-to-end test (real Chrome, workers + WASM) and
+#              deploys that exact build to Cloudflare (mxm.sebastianlopez.me),
+#              Pages-style.
 # The web job waits for the rust job, so nothing is published that has not
 # passed both. The deploy deliberately lives inside the web job rather than
 # in one of its own: it publishes the dist it just tested, with no artifact
 # in between and no second build to keep in sync.
 #
+# The deploy runs on a push to `main` AND on a manual run (workflow_dispatch)
+# of `main`. It never runs for a pull request: once the repository is public,
+# anyone can open one, and a fork must not be able to publish. Manual runs are
+# allowed because otherwise the only way to republish — after adding a secret,
+# or to redo a deploy that was skipped — is to invent a commit.
+#
 # Deploy requires two repository secrets:
 #   CLOUDFLARE_API_TOKEN  — API token with "Workers Scripts: Edit"
 #   CLOUDFLARE_ACCOUNT_ID — the Cloudflare account id
 # Until the token secret exists, the deploy step reports itself as skipped
-# and the workflow stays green.
+# and the workflow stays green. That means a green run is NOT by itself proof
+# that the site was published: check the deploy step, or the Worker's
+# modified_on.
 
 name: CI
 
@@ -116,7 +124,7 @@ jobs:
       # place to keep in sync, which is how the site once shipped without its
       # ffmpeg decoder.
       - name: Check deploy credentials
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         id: creds
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -128,7 +136,7 @@ jobs:
             echo "::warning::CLOUDFLARE_API_TOKEN secret is not set — skipping deploy. Add it in Settings → Secrets to enable automatic deploys."
           fi
       - name: Deploy (wrangler)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.creds.outputs.have == 'true'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.creds.outputs.have == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
