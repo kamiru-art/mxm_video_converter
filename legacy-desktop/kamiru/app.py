@@ -1011,7 +1011,7 @@ class SheetsPhase(PhaseFrame):
         self._update_estimate()
 
     def _sync_custom(self):
-        state = "normal" if self.var_paper.get() == "Personalizado" else "disabled"
+        state = "normal" if paper.canonical_paper(self.var_paper.get()) == "Personalizado" else "disabled"
         for child in self.custom_box.winfo_children():
             try:
                 child.configure(state=state)

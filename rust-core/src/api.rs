@@ -292,6 +292,8 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     if let Some(b) = opts_v.get("fine_align").and_then(|v| v.as_bool()) {
         opts.fine_align = b;
     }
+    // asignación manual de hoja (cuando el QR no se lee)
+    opts.forced_sheet = opts_v.get("forced_sheet").and_then(|v| v.as_i64());
     opts
 }
 

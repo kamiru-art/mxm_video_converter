@@ -279,3 +279,78 @@ fn sixteen_bit_scan_keeps_depth() {
         _ => panic!("el recorte debería seguir siendo de 16 bits"),
     }
 }
+
+#[test]
+fn manual_sheet_assignment_when_the_qr_is_unreadable() {
+    // Caso real: los marcadores se leen bien (la hoja se endereza), pero el
+    // QR quedó tapado por la pintura, así que nada identifica la hoja. El
+    // usuario dice a mano cuál es y los recortes salen con sus etiquetas.
+    let mut s = base_settings();
+    s.qr_on = true; // con QR NO hay ids_por_hoja: la identidad es solo el QR
+    let l = build_layout(&s, (16.0, 9.0)).unwrap();
+
+    let mut records = Vec::new();
+    let mut page2_img = None;
+    for sheet_num in 1..=2i64 {
+        let frames: Vec<_> = [[200u8, 60, 60], [60, 60, 200]]
+            .iter()
+            .map(|base| synth_frame(320, 180, *base).0)
+            .collect();
+        let labels: Vec<String> = (1..=2)
+            .map(|i| format!("demo_{:03}", (sheet_num - 1) * 2 + i))
+            .collect();
+        let page = render_page(&s, &l, &frames, &labels, sheet_num, true);
+        let mut record = page.record.unwrap();
+        record["archivo_hoja"] = json!(format!("demo_p{sheet_num}.png"));
+        records.push(record);
+        if sheet_num == 2 {
+            page2_img = page.image;
+        }
+    }
+    let mut layout = build_layout_json(&s, &l, &records, json!([]), json!({}), None);
+    assert!(layout["marcadores"]["ids_por_hoja"].is_null(), "con QR no debe haber ids_por_hoja");
+    // simular que ningún QR se puede leer: se quitan del layout
+    for hoja in layout["hojas"].as_array_mut().unwrap() {
+        hoja["qrs"] = json!({});
+    }
+
+    let scan = simulate_scan(&page2_img.unwrap(), 1.3, 33);
+
+    // 1. Sin asignación manual: la hoja no se identifica.
+    let auto = process_scan(
+        DynImg::U8(scan.clone()),
+        "s2.png",
+        &layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
+    assert_eq!(auto.result["ok"], json!(false), "{}", auto.result);
+    assert!(auto.frames.is_empty());
+    assert!(!auto.unidentified.is_empty(), "debe dejar los recortes sin identificar");
+
+    // 2. Con asignación manual a la hoja 2: recortes con sus etiquetas.
+    let opts = ScanOptions { forced_sheet: Some(2), ..ScanOptions::default() };
+    let out = process_scan(DynImg::U8(scan), "s2.png", &layout, &opts, &HashMap::new());
+    assert_eq!(out.result["ok"], json!(true), "{}", out.result);
+    assert_eq!(out.result["hoja_numero"], json!(2), "{}", out.result);
+    let via = out.result["via"].as_str().unwrap();
+    assert!(via.starts_with("assigned by hand"), "via = {via}");
+    let mut labs: Vec<&str> = out.frames.iter().map(|(lab, _)| lab.as_str()).collect();
+    labs.sort();
+    assert_eq!(labs, vec!["demo_003", "demo_004"]);
+
+    // 3. Un número de hoja inexistente no rompe: vuelve a lo automático.
+    let opts = ScanOptions { forced_sheet: Some(99), ..ScanOptions::default() };
+    let bad = process_scan(
+        DynImg::U8(simulate_scan(&render_page(&s, &l, &[], &[], 1, true).image.unwrap(), 1.3, 34)),
+        "s1.png",
+        &layout,
+        &opts,
+        &HashMap::new(),
+    );
+    let adv = bad.result["advertencias"].as_array().unwrap();
+    assert!(
+        adv.iter().any(|a| a.as_str().unwrap_or("").contains("does not exist")),
+        "debe avisar del número inválido: {adv:?}"
+    );
+}

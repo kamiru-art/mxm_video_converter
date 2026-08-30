@@ -22,10 +22,13 @@ pub const MAX_IMAGE_PIXELS: usize = 250_000_000;
 pub struct ScanOptions {
     pub bleed: f64,
     pub min_markers: usize,
-    pub mode: String, // auto | normal | cianotipia
+    pub mode: String, // auto | normal | cyanotype
     pub resize_to_original: bool,
     pub normalize_patches: bool,
     pub fine_align: bool,
+    /// Hoja asignada a mano: cuando el QR no se lee y los IDs de marcador no
+    /// bastan, el usuario dice a qué hoja pertenece este escaneo.
+    pub forced_sheet: Option<i64>,
 }
 
 impl Default for ScanOptions {
@@ -37,6 +40,7 @@ impl Default for ScanOptions {
             resize_to_original: false,
             normalize_patches: false,
             fine_align: true,
+            forced_sheet: None,
         }
     }
 }
@@ -45,10 +49,17 @@ impl Default for ScanOptions {
 // Variantes de grises (estrategias de preprocesado)
 // ────────────────────────────────────────────────────────────────
 
+/// El modo de cianotipia llega como "cyanotype" desde la web actual y como
+/// "cianotipia" desde los layouts y presets ya guardados: ambos valen.
+pub fn is_cyan_mode(mode: &str) -> bool {
+    let m = mode.trim().to_ascii_lowercase();
+    m.starts_with("cyan") || m.starts_with("cian")
+}
+
 fn gray_variants_base(rgb: &Rgb, mode: &str) -> Vec<(String, Gray)> {
     let gray = rgb.to_gray();
     let red = rgb.red_channel();
-    if mode == "cianotipia" {
+    if is_cyan_mode(mode) {
         vec![
             ("canal_rojo".into(), red.clone()),
             ("rojo_aplanado".into(), flat_field(&red)),
@@ -95,7 +106,7 @@ pub fn detect_markers_multi(
     let target = target.min(expected_set.len()).max(1);
     let solido = 3usize.max(target / 2);
     let mut profiles: Vec<(&str, bool)> = vec![(mode, false)];
-    if escalar && mode != "cianotipia" {
+    if escalar && !is_cyan_mode(mode) {
         profiles.push(("cianotipia", true));
     }
     let mut best = MultiDetect {
@@ -1065,11 +1076,29 @@ pub fn finish_scan(
         }
     }
 
-    // 6. Identificación: primero por IDs de marcador (hojas sin QR), luego
-    // por QR (proyectos con QR / legados), luego por eliminación.
+    // 6. Identificación: la asignación manual manda (el usuario ya vio el
+    // escaneo); si no la hay, IDs de marcador (hojas sin QR), luego QR
+    // (proyectos con QR / legados), luego eliminación.
     let mut hoja: Option<(&Value, String)> = None;
-    if let Some(iph) = &markers.ids_por_hoja {
-        hoja = identify_by_markers(layout, iph, &fin.refined_ids);
+    if let Some(num) = opts.forced_sheet {
+        match layoutfile::sheet_by_number(layout, num) {
+            Some(h) => {
+                if let Some(otro) = claimed_sheets.get(&num) {
+                    if otro != scan_name {
+                        warn!("Sheet {num} was also claimed by '{otro}': the frames of whichever is processed last are the ones that stay.");
+                    }
+                }
+                hoja = Some((h, format!("assigned by hand (sheet {num})")));
+            }
+            None => {
+                warn!("Sheet {num} was assigned by hand but does not exist in this layout: falling back to automatic identification.");
+            }
+        }
+    }
+    if hoja.is_none() {
+        if let Some(iph) = &markers.ids_por_hoja {
+            hoja = identify_by_markers(layout, iph, &fin.refined_ids);
+        }
     }
     if hoja.is_none() {
         hoja = identify_sheet(&warp, layout, s, local.as_ref());

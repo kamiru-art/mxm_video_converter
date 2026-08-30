@@ -194,17 +194,37 @@ digitales alineados, **sin Photoshop**.
     un QR de OTRO proyecto se rechaza. Si el layout tiene una sola hoja se
     identifica por descarte (salvo que otro escaneo ya la haya reclamado por
     QR). Compatibilidad con QRs v1 (solo etiqueta).
+11b. **Asignación manual de hoja**: el caso en que los marcadores hacen su
+    trabajo (la hoja se endereza perfecta) pero nadie puede decir **cuál**
+    hoja es — el QR quedó bajo una pincelada, la exposición se lo comió, o el
+    proyecto identifica solo por QR. Esos escaneos aparecen arriba del informe
+    con un desplegable: el usuario lee el **número de hoja impreso en el
+    papel** (esquina inferior derecha por defecto) o reconoce los dibujos en
+    las miniaturas, elige la hoja y la app **reprocesa ese escaneo solo** y
+    recorta sus fotogramas con sus etiquetas reales. La asignación manda
+    sobre la identificación automática (`forced_sheet` en las opciones del
+    núcleo), avisa si otro escaneo ya reclamó esa hoja, y el mismo
+    desplegable está en la columna *Sheet* de cada fila para corregir una
+    hoja mal identificada. Sobrevive a un reprocesado del lote con otras
+    opciones.
 12. **Recorte** de cada fotograma según su bbox × escala, con **bleed**
     configurable (1.5 % por defecto) y la corrección local aplicada.
     Opcionalmente se reescala cada recorte a su tamaño digital original.
-13. **Modo emergencia**: marcadores OK pero ningún QR legible → los recortes
-    se guardan en `sin_identificar/` para no perder el arte.
+13. **Modo emergencia**: marcadores OK y ninguna identidad (ni IDs, ni QR, ni
+    asignación manual) → los recortes se guardan en `sin_identificar/` para no
+    perder el arte, y quedan visibles como miniaturas para poder reconocer la
+    hoja y asignarla a mano.
 14. **Paralelismo**: varios escaneos a la vez.
+14b. **Escaneos de prueba**: si las hojas se acaban de generar en la misma
+    sesión (hasta 8), la fase ② puede simular su escaneo — las pega giradas 2°
+    sobre un fondo de escáner — y recorrer el circuito ①→②→③ entero sin
+    imprimir ni escanear nada.
 15. **Informe**: JSON + CSV + HTML con miniaturas, estado por hoja
     (marcadores detectados, estrategia ganadora, escala, residuo en mm,
     espejado), fotogramas extraídos y **lista de faltantes**; miniatura de
     diagnóstico de la alineación (marcadores verdes/rojos, recortes azules,
-    QRs naranjas).
+    QRs naranjas). Un clic abre cualquier miniatura a tamaño completo y
+    **← / →** recorren todo el lote sin cerrar el visor (**Esc** cierra).
 
 ---
 

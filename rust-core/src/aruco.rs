@@ -129,7 +129,7 @@ pub const PARAMS_CYANO: DetectorParams = DetectorParams {
 };
 
 pub fn params_for_mode(mode: &str) -> DetectorParams {
-    if mode == "cianotipia" {
+    if crate::scanproc::is_cyan_mode(mode) {
         PARAMS_CYANO
     } else {
         PARAMS_NORMAL

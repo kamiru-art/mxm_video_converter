@@ -41,7 +41,9 @@ function zfill(n, digits) {
  */
 export async function resolveCyanCurve(settings, thumbFrames) {
   const s = { ...settings };
-  if (!String(s.mode).startsWith('cian')) return s;
+  // "cyanotype" (actual) o "cianotipia" (proyectos anteriores)
+  const m = String(s.mode ?? '').toLowerCase();
+  if (!m.startsWith('cyan') && !m.startsWith('cian')) return s;
   let hist = 'null';
   if ((s.cyan_adaptive ?? 0) > 0 && thumbFrames?.length) {
     const { meta, pixels } = packThumbs(thumbFrames.slice(0, 200));
@@ -118,6 +120,9 @@ export function packImageData(items) {
 // dos generaciones a la vez (fase ① y hojas de rescate) entrelazarían páginas.
 let genLock = Promise.resolve();
 
+/** Hasta cuántas hojas se guardan en memoria para los escaneos de prueba. */
+const DEMO_SHEET_LIMIT = 8;
+
 export function generateSheets(args) {
   const run_ = genLock.then(() => generateSheetsInner(args));
   genLock = run_.catch(() => {});
@@ -137,7 +142,8 @@ async function generateSheetsInner({
   const firstH = frames[0]?.h ?? 9;
 
   const files = new Map();
-  const originalesDir = s.registration_on && keepOriginals ? `${safeName}_originales` : '';
+  const sheetImages = new Map();
+  const originalesDir = s.registration_on && keepOriginals ? `${safeName}_originals` : '';
 
   // copiar originales (para hojas de rescate)
   if (originalesDir) {
@@ -216,10 +222,12 @@ async function generateSheetsInner({
         const tif = await run('encode_tiff', { png: res.png });
         files.set(`${pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
       }
-      if (s.fmt_png) {
-        // como Blob: el navegador puede sacarlo del heap de JS hasta el ZIP
-        files.set(`${pageBase}.png`, new Blob([res.png], { type: 'image/png' }));
-      }
+      // como Blob: el navegador puede sacarlo del heap de JS hasta el ZIP
+      const sheetBlob = new Blob([res.png], { type: 'image/png' });
+      if (s.fmt_png) files.set(`${pageBase}.png`, sheetBlob);
+      // proyectos cortos: se retienen para poder simular escaneos en la
+      // fase ② sin imprimir (en uno largo serían cientos de megas)
+      if (numPages <= DEMO_SHEET_LIMIT) sheetImages.set(`${pageBase}.png`, sheetBlob);
       done++;
       onProgress(done, totalSel, `sheet ${pnum} ready`);
     }
@@ -250,5 +258,5 @@ async function generateSheetsInner({
 
   const layoutInfo = JSON.parse(await run('compute_layout', { settings: coreSettings, firstW, firstH }));
   recycleIdle(); // devolver al sistema la memoria WASM que infló la generación
-  return { files, layoutJson, avisos: layoutInfo.avisos ?? [], numPages, layoutInfo };
+  return { files, sheetImages, layoutJson, avisos: layoutInfo.avisos ?? [], numPages, layoutInfo };
 }

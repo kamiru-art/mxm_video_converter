@@ -16,6 +16,21 @@ PAPER_SIZES_MM = {
     "Personalizado": None,  # se define con ancho/alto manuales
 }
 
+# La versión web guarda estos mismos tamaños con su nombre en inglés dentro
+# del snapshot de ajustes del layout.json. Los proyectos hechos allí tienen
+# que poder reimprimirse aquí sin cambiar de tamaño de papel en silencio.
+PAPER_ALIASES = {
+    "Letter": "Carta (Letter)",
+    "Legal": "Oficio (Legal)",
+    "Tabloid": "Tabloide (Tabloid)",
+    "Custom": "Personalizado",
+}
+
+
+def canonical_paper(name: str) -> str:
+    """Nombre de papel canónico (traduce los alias en inglés de la web)."""
+    return PAPER_ALIASES.get((name or "").strip(), name)
+
 # Orden de aparición en el menú desplegable.
 PAPER_ORDER = [
     "A4",
@@ -46,7 +61,7 @@ def pt_to_px(pt: float, dpi: int) -> int:
 def page_size_px(paper_name: str, dpi: int, landscape: bool,
                  custom_w_mm: float = 210.0, custom_h_mm: float = 297.0):
     """Devuelve (ancho_px, alto_px) de la hoja según tamaño, DPI y orientación."""
-    dims = PAPER_SIZES_MM.get(paper_name)
+    dims = PAPER_SIZES_MM.get(canonical_paper(paper_name))
     if dims is None:  # Personalizado
         w_mm, h_mm = float(custom_w_mm), float(custom_h_mm)
     else:

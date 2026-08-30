@@ -125,7 +125,7 @@ async function main() {
 
     // ☀️ cianotipia: negativo → copia azul simulada → escaneo → procesado
     // (con QR activado: ejercita el camino LEGADO de identificación por QR)
-    const sc2 = { ...s, mode: 'cianotipia', cyan_mirror: true, cyan_bg: 'ahorro', out_name: 'cy', project_name: 'cy', marker_size_mm: 12, qr_on: true, qr_size_mm: 16, fmt_tiff: false };
+    const sc2 = { ...s, mode: 'cyanotype', cyan_mirror: true, cyan_bg: 'saving', out_name: 'cy', project_name: 'cy', marker_size_mm: 12, qr_on: true, qr_size_mm: 16, fmt_tiff: false };
     const cyFrames = [synthFrame(320, 180, [200, 60, 60]), synthFrame(320, 180, [40, 40, 40])];
     const cyLabels = ['cy_001', 'cy_002'];
     const cyGen = await generateSheets({
@@ -158,6 +158,42 @@ async function main() {
     const cyResult = JSON.parse(cyRes.result);
     log(`cianotipia: ok=${cyResult.ok} marcadores=${cyResult.marcadores}/${cyResult.marcadores_total} frames=${cyRes.frames.length} estrategia=${cyResult.estrategia}`);
     if (!cyResult.ok || cyRes.frames.length !== 2) throw new Error(`cianotipia falló: ${cyRes.result}`);
+
+    // ✋ asignación manual: mismo escaneo, pero con los QR ilegibles (se
+    // quitan del layout). Este layout tiene una sola hoja, así que sin QR se
+    // identifica por eliminación; lo que se comprueba aquí es que decir la
+    // hoja a mano manda sobre eso y llega entera hasta los recortes.
+    const blindLayout = JSON.parse(cyGen.layoutJson);
+    for (const h of blindLayout.hojas) h.qrs = {};
+    const blindStr = JSON.stringify(blindLayout);
+    const cyScan2 = new Uint8Array(await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    const blindRes = await run('scan_process', {
+      bytes: cyScan2, name: 'cyan1.png', layout: blindStr, opts: '{}', claims: '{}',
+    }, [cyScan2.buffer]);
+    const blindResult = JSON.parse(blindRes.result);
+    if (!String(blindResult.via ?? '').startsWith('only sheet')) {
+      throw new Error(`sin QR debería caer en la identificación por eliminación: via=${blindResult.via}`);
+    }
+    const cyScan3 = new Uint8Array(await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    const handRes = await run('scan_process', {
+      bytes: cyScan3, name: 'cyan1.png', layout: blindStr,
+      opts: JSON.stringify({ forced_sheet: 1 }), claims: '{}',
+    }, [cyScan3.buffer]);
+    const handResult = JSON.parse(handRes.result);
+    log(`asignación manual: ok=${handResult.ok} hoja=${handResult.hoja_numero} via=${handResult.via} frames=${handRes.frames.length}`);
+    if (!handResult.ok || handRes.frames.length !== 2) throw new Error(`asignación manual falló: ${handRes.result}`);
+    if (!String(handResult.via ?? '').startsWith('assigned by hand')) throw new Error(`via inesperada: ${handResult.via}`);
+
+    // ↩ compatibilidad: los ajustes en español de versiones anteriores deben
+    // producir exactamente el mismo lienzo que los nuevos en inglés
+    const legacy = { ...s, paper: 'Carta (Letter)', orientation: 'Horizontal', page_num_corner: 'Inferior derecha', mode: 'cianotipia', cyan_bg: 'ahorro' };
+    const modern = { ...s, paper: 'Letter', orientation: 'landscape', page_num_corner: 'Bottom right', mode: 'cyanotype', cyan_bg: 'saving' };
+    const [lay1, lay2] = await Promise.all([
+      run('compute_layout', { settings: settingsForCore(legacy), firstW: 320, firstH: 180 }),
+      run('compute_layout', { settings: settingsForCore(modern), firstW: 320, firstH: 180 }),
+    ]);
+    if (lay1 !== lay2) throw new Error(`los ajustes heredados ya no equivalen:\n${lay1}\n${lay2}`);
+    log('compatibilidad de ajustes en español ✓');
 
     // fase ①/④ con VIDEO REAL (WebCodecs): extraer y reconstruir
     try {

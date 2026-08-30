@@ -12,7 +12,8 @@ export const ph2 = {
   layout: null,        // objeto layout.json (v1 o v2; el núcleo normaliza)
   layoutName: '',
   results: [],         // resultados por escaneo
-  claims: {},          // nº hoja → nombre de escaneo (identificadas por QR)
+  claims: {},          // nº hoja → nombre de escaneo (ya identificadas)
+  assign: {},          // nombre de escaneo → nº de hoja puesto a mano
 };
 
 function layoutSummary(layout) {
@@ -33,12 +34,21 @@ function expectedLabels(layout) {
 export function mountPhase2(root) {
   const layoutInfo = el('div', { class: 'hint' }, 'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).');
 
+  /** Un layout nuevo es otro proyecto: las hojas que el usuario asignó a mano
+   *  se refieren a números del anterior y aquí no significan lo mismo. */
+  function setLayout(layout, name, info) {
+    ph2.layout = layout;
+    ph2.layoutName = name;
+    ph2.assign = {};
+    layoutInfo.textContent = info;
+  }
+
   const useCurrentBtn = el('button', { class: 'btn ghost small', style: 'margin-top:6px' }, 'Use the current project layout');
   useCurrentBtn.addEventListener('click', () => {
     if (!project.layoutJson) { toast('You have not generated sheets in this session yet.', 'err'); return; }
-    ph2.layout = JSON.parse(project.layoutJson);
-    ph2.layoutName = 'current project layout';
-    layoutInfo.textContent = `✔ ${layoutSummary(ph2.layout)}`;
+    const layout = JSON.parse(project.layoutJson);
+    setLayout(layout, 'current project layout', `✔ ${layoutSummary(layout)}`);
+    renderSummary();
   });
 
   const layoutDz = dropzone({
@@ -46,9 +56,9 @@ export function mountPhase2(root) {
     accept: '.json,application/json',
     onFiles: async ([f]) => {
       try {
-        ph2.layout = JSON.parse(await f.text());
-        ph2.layoutName = f.name;
-        layoutInfo.textContent = `✔ ${f.name}: ${layoutSummary(ph2.layout)}`;
+        const layout = JSON.parse(await f.text());
+        setLayout(layout, f.name, `✔ ${f.name}: ${layoutSummary(layout)}`);
+        renderSummary();
       } catch (e) {
         toast(`Could not read the layout: ${e.message}`, 'err');
       }
@@ -58,7 +68,7 @@ export function mountPhase2(root) {
   // opciones
   const bleedIn = numberInput(1.5, { min: 0, max: 20, step: 0.5 });
   const minMarkersIn = numberInput(3, { min: 2, max: 12 });
-  const modeSel = select([['auto', 'Automatic (from the layout)'], ['normal', 'Normal'], ['cianotipia', 'Cyanotype']], 'auto');
+  const modeSel = select([['auto', 'Automatic (from the layout)'], ['normal', 'Normal'], ['cyanotype', 'Cyanotype']], 'auto');
   // los navegadores informan la RAM a medias (Chrome la limita a 8 GB;
   // Safari/Firefox no la informan): el usuario puede declararla
   const ramIn = numberInput(localStorage.getItem('mxm_ram_gb') ?? '', { min: 1, max: 2048 });
@@ -94,7 +104,7 @@ export function mountPhase2(root) {
   }
   reprocessBtn.addEventListener('click', () => {
     if (!loadedScans.size) return;
-    clearReport(); // borra resultados, claims y frames de la pasada anterior
+    clearReport(true); // borra resultados y frames; conserva las hojas puestas a mano
     processScans([...loadedScans.values()]);
   });
 
@@ -175,6 +185,109 @@ export function mountPhase2(root) {
   }
 
   let processing = false;
+
+  /** Opciones de detección comunes a todo el lote. */
+  function currentOpts() {
+    // Number.isFinite y no ||: el 0 es un valor válido de bleed
+    const bleedVal = parseFloat(bleedIn.value);
+    const minMarkersVal = parseInt(minMarkersIn.value, 10);
+    return {
+      bleed: (Number.isFinite(bleedVal) ? bleedVal : 1.5) / 100,
+      min_markers: Number.isFinite(minMarkersVal) ? minMarkersVal : 3,
+      mode: modeSel.value,
+      resize_to_original: resizeCheck.input.checked,
+      normalize_patches: patchesCheck.input.checked,
+      fine_align: fineCheck.input.checked,
+    };
+  }
+
+  /** Opciones de UN escaneo: las del lote más la hoja asignada a mano. */
+  function optsFor(name, base) {
+    const n = ph2.assign[name];
+    return JSON.stringify(n == null ? base : { ...base, forced_sheet: n });
+  }
+
+  async function makeContext() {
+    return { base: currentOpts(), layoutStr: JSON.stringify(ph2.layout), gpu: await getGpuDevice() };
+  }
+
+  /** Procesa un escaneo y devuelve su entrada de informe, SIN registrarla:
+   *  quien llama decide si se añade al informe o reemplaza a otra. */
+  async function runOne(f, ctx) {
+    const opts = optsFor(f.name, ctx.base);
+    let r = null;
+    if (ctx.gpu) {
+      let bmp = null;
+      try {
+        bmp = await decodeForGpu(f);
+        // cualquier fallo del camino GPU (canvas demasiado grande, memoria
+        // de GPU, etc.) cae al camino todo-en-WASM en vez de perder el escaneo
+        if (bmp) r = await processViaGpu(f, bmp, ctx.layoutStr, opts);
+      } catch (e) {
+        console.warn('[scan] GPU path failed, falling back to WASM:', e);
+        r = null;
+      } finally {
+        bmp?.close?.();
+      }
+    }
+    if (!r) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      r = await run('scan_process', {
+        bytes, name: f.name, layout: ctx.layoutStr, opts,
+        claims: JSON.stringify(ph2.claims),
+      }, [bytes.buffer]);
+    }
+    const asBlob = (u8, type) => new Blob([u8], { type });
+    return {
+      result: JSON.parse(r.result),
+      frames: (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
+      sinIdentificar: (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
+      overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
+    };
+  }
+
+  /** Escaneos que dicen ser la MISMA hoja: sus recortes comparten etiqueta y
+   *  solo puede quedar uno. Se recalcula con el informe, no se avisa y se
+   *  olvida: mientras el conflicto siga ahí, hay que verlo. */
+  let sheetConflicts = [];
+
+  /** Los fotogramas recuperados y las identidades se DERIVAN del informe: se
+   *  rehacen enteros a partir de ph2.results, en orden.
+   *
+   *  Llevarlos a mano (sumar al añadir un resultado, restar al quitarlo) se
+   *  equivocaba en cuanto dos escaneos compartían etiquetas: al soltar uno se
+   *  llevaba por delante los fotogramas del otro, que seguía en el informe
+   *  con sus recortes intactos, y la fase ③ armaba el video sin ellos. */
+  function rebuildFromResults() {
+    project.processedFrames.clear();
+    ph2.claims = {};
+    const byNumber = new Map(); // nº hoja → escaneos que la reclaman
+    for (const e of ph2.results) {
+      const r = e.result;
+      const via = String(r.via ?? '');
+      if (r.hoja_numero != null && /^(QR|marker|assigned)/.test(via)) {
+        ph2.claims[r.hoja_numero] = r.scan;
+        const list = byNumber.get(r.hoja_numero) ?? [];
+        list.push(r.scan);
+        byNumber.set(r.hoja_numero, list);
+      }
+      // el último resultado de la lista es el que se queda con la etiqueta,
+      // igual que en la tabla
+      for (const fr of e.frames) project.processedFrames.set(fr.label, fr.png);
+    }
+    sheetConflicts = [...byNumber.entries()]
+      .filter(([, scans]) => scans.length > 1)
+      .map(([numero, scans]) => ({ numero, scans }));
+  }
+
+  function describeMachine(gpu, width) {
+    const ram = machineRam();
+    const ramTxt = ram.manual ? `${ram.gb} GB RAM (set by you)`
+      : navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM (browser estimate)`
+      : 'RAM not reported (assuming 4 GB; set yours in Options)';
+    specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ramTxt}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
+  }
+
   async function processScans(files) {
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
     if (processing) { toast('Wait for the current batch to finish.', 'err'); return; }
@@ -182,78 +295,27 @@ export function mountPhase2(root) {
     reprocessBtn.disabled = true;
     prog.show();
     try {
-    // Number.isFinite y no ||: el 0 es un valor válido de bleed
-    const bleedVal = parseFloat(bleedIn.value);
-    const minMarkersVal = parseInt(minMarkersIn.value, 10);
-    const opts = JSON.stringify({
-      bleed: (Number.isFinite(bleedVal) ? bleedVal : 1.5) / 100,
-      min_markers: Number.isFinite(minMarkersVal) ? minMarkersVal : 3,
-      mode: modeSel.value,
-      resize_to_original: resizeCheck.input.checked,
-      normalize_patches: patchesCheck.input.checked,
-      fine_align: fineCheck.input.checked,
-    });
-    const layoutStr = JSON.stringify(ph2.layout);
-    const gpu = await getGpuDevice();
-    const singleSheet = (ph2.layout.hojas ?? []).length === 1;
-    const width = pickConcurrency(files, !!gpu, singleSheet);
-    const ram = machineRam();
-    const ramTxt = ram.manual ? `${ram.gb} GB RAM (set by you)`
-      : navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM (browser estimate)`
-      : 'RAM not reported (assuming 4 GB; set yours in Options)';
-    specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ramTxt}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
-    let done = 0;
-
-    const processOne = async (f) => {
-      let r = null;
-      if (gpu) {
-        let bmp = null;
-        try {
-          bmp = await decodeForGpu(f);
-          // cualquier fallo del camino GPU (canvas demasiado grande, memoria
-          // de GPU, etc.) cae al camino todo-en-WASM en vez de perder el escaneo
-          if (bmp) r = await processViaGpu(f, bmp, layoutStr, opts);
-        } catch (e) {
-          console.warn('[scan] GPU path failed, falling back to WASM:', e);
-          r = null;
-        } finally {
-          bmp?.close?.();
+      const ctx = await makeContext();
+      const singleSheet = (ph2.layout.hojas ?? []).length === 1;
+      const width = pickConcurrency(files, !!ctx.gpu, singleSheet);
+      describeMachine(ctx.gpu, width);
+      let done = 0;
+      const queue = [...files];
+      await Promise.all(Array.from({ length: width }, async () => {
+        while (queue.length) {
+          const f = queue.shift();
+          try {
+            addResult(await runOne(f, ctx));
+          } catch (e) {
+            toast(`Error in one scan: ${e.message}`, 'err');
+          }
+          done++;
+          prog.set(done / files.length, `${done}/${files.length} scans`);
         }
-      }
-      if (!r) {
-        const bytes = new Uint8Array(await f.arrayBuffer());
-        r = await run('scan_process', {
-          bytes, name: f.name, layout: layoutStr, opts,
-          claims: JSON.stringify(ph2.claims),
-        }, [bytes.buffer]);
-      }
-      const result = JSON.parse(r.result);
-      const via = String(result.via ?? '');
-      if (result.hoja_numero != null && (via.startsWith('QR') || via.startsWith('marker'))) {
-        ph2.claims[result.hoja_numero] = f.name;
-      }
-      const asBlob = (u8, type) => new Blob([u8], { type });
-      const frames = (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
-      const sinIdentificar = (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') }));
-      for (const fr of frames) project.processedFrames.set(fr.label, fr.png);
-      addResult({
-        result, frames, sinIdentificar,
-        overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
-      });
-    };
-
-    const queue = [...files];
-    await Promise.all(Array.from({ length: width }, async () => {
-      while (queue.length) {
-        const f = queue.shift();
-        try { await processOne(f); } catch (e) { toast(`Error in one scan: ${e.message}`, 'err'); }
-        done++;
-        prog.set(done / files.length, `${done}/${files.length} scans`);
-      }
-    }));
-    recycleIdle(); // liberar la memoria WASM que infló el lote
-    renderSummary();
-    toast('Processing finished. Check the report.', 'ok');
+      }));
+      recycleIdle(); // liberar la memoria WASM que infló el lote
+      renderSummary();
+      toast('Processing finished. Check the report.', 'ok');
     } finally {
       prog.hide();
       processing = false;
@@ -262,40 +324,139 @@ export function mountPhase2(root) {
     }
   }
 
+  /** Vuelve a procesar UN escaneo (tras asignarle una hoja a mano) y cambia
+   *  su fila en el sitio, sin tocar el resto del informe. */
+  async function reprocessOne(name) {
+    const f = loadedScans.get(name);
+    if (!f) { toast(`“${name}” is no longer loaded: drop it again to reprocess it.`, 'err'); return false; }
+    if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return false; }
+    if (processing) { toast('Wait for the current batch to finish.', 'err'); return false; }
+    processing = true;
+    reprocessBtn.disabled = true;
+    prog.show();
+    prog.set(0.35, `reprocessing ${name}…`);
+    try {
+      const ctx = await makeContext();
+      describeMachine(ctx.gpu, 1);
+      // el informe solo cambia cuando el nuevo resultado ya existe: si esto
+      // falla, se queda como estaba en vez de perder sus fotogramas
+      const entry = await runOne(f, ctx);
+      addResult(entry); // reemplaza la fila anterior de este mismo archivo
+      prog.set(1, '');
+      recycleIdle();
+      const n = entry.result.hoja_numero;
+      toast(n != null
+        ? `“${name}” → sheet ${n}: ${entry.frames.length} frame(s) cropped.`
+        : `“${name}” still has no sheet: ${entry.result.error || 'check the alignment overlay.'}`,
+        n != null ? 'ok' : 'err');
+    } catch (e) {
+      console.error(e);
+      toast(`Could not reprocess “${name}”: ${e.message ?? e}`, 'err');
+    } finally {
+      prog.hide();
+      processing = false;
+      reprocessBtn.disabled = false;
+      refreshReprocess();
+    }
+    return true;
+  }
+
   // La tabla del informe se construye INCREMENTALMENTE: cada resultado crea
   // sus filas (y sus URLs de miniaturas) UNA sola vez. Reconstruir todo el
   // informe tras cada escaneo redecodificaba todas las miniaturas anteriores
   // y filtraba URLs sin liberar: por eso el final del lote se arrastraba.
+  // Cada entrada guarda ADEMÁS sus propias filas y URLs, para poder cambiar
+  // una sola cuando se le asigna la hoja a mano.
   const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
   const reportTable = el('table', { class: 'report' }, reportHeader);
   const missingSlot = el('div');
-  const reportUrls = []; // object URLs de las miniaturas, para revocarlas al limpiar
+  const assignSlot = el('div');
+  const conflictSlot = el('div');
 
-  function trackUrl(u) {
-    reportUrls.push(u);
-    return u;
+  /** Las hojas del layout como opciones legibles: número + qué fotogramas
+   *  lleva, que es lo que deja reconocerla en las miniaturas. */
+  function sheetChoices(forScan) {
+    const out = [['', 'automatic']];
+    for (const h of ph2.layout?.hojas ?? []) {
+      const labels = Object.keys(h.frames ?? {}).sort();
+      const range = labels.length > 1 ? ` · ${labels[0]} → ${labels[labels.length - 1]}`
+        : labels.length === 1 ? ` · ${labels[0]}` : '';
+      const taken = ph2.claims[h.numero];
+      const busy = taken && taken !== forScan ? ` · already taken by ${taken}` : '';
+      out.push([String(h.numero), `Sheet ${h.numero}${range}${busy}`]);
+    }
+    return out;
   }
 
-  function buildResultRows({ result: r, frames, sinIdentificar, overlay }) {
+  /** Selector “esta hoja es la N”: al elegir, reprocesa ESE escaneo. */
+  function assignControl(scanName) {
+    const cur = ph2.assign[scanName];
+    const sel = select(sheetChoices(scanName), cur == null ? '' : String(cur));
+    sel.className = 'assign-sel';
+    sel.title = 'Tell the app which sheet this scan is';
+    sel.disabled = !ph2.layout || !loadedScans.has(scanName);
+    sel.addEventListener('change', async () => {
+      const previous = ph2.assign[scanName];
+      if (sel.value === '') delete ph2.assign[scanName];
+      else ph2.assign[scanName] = parseInt(sel.value, 10);
+      // si no se pudo reprocesar (otro lote en marcha), el desplegable no
+      // debe quedarse mostrando una hoja que nadie aplicó
+      if (!(await reprocessOne(scanName))) {
+        if (previous == null) delete ph2.assign[scanName];
+        else ph2.assign[scanName] = previous;
+        sel.value = previous == null ? '' : String(previous);
+      }
+    });
+    return sel;
+  }
+
+  /** Todas las imágenes del informe en orden, para recorrerlas con ← →. */
+  function galleryItems() {
+    const items = [];
+    for (const e of ph2.results) {
+      if (e.overlay) {
+        items.push({ data: e.overlay, caption: `${e.result.scan}: green = marker found, red = missing, blue = frames, orange = QRs` });
+      }
+      for (const f of e.shown ?? []) items.push({ data: f.png, caption: `${e.result.scan} · ${f.label}` });
+    }
+    return items;
+  }
+
+  function openInGallery(blob, caption) {
+    const items = galleryItems();
+    const index = items.findIndex((it) => it.data === blob);
+    if (index < 0) { lightbox(blob, caption); return; }
+    lightbox(blob, caption, { items, index });
+  }
+
+  function buildResultRows(entry) {
+    const { result: r, frames, sinIdentificar, overlay } = entry;
+    entry.urls = [];
+    const trackUrl = (u) => { entry.urls.push(u); return u; };
     // miniaturas pequeñas; un clic abre la imagen a tamaño completo
+    const shown = [...frames, ...sinIdentificar].slice(0, 60);
+    entry.shown = shown;
     const thumbs = el('div', { class: 'thumbs report-thumbs' });
     if (overlay) {
       const t = el('div', { class: 'thumb clickable', title: 'View the alignment overlay' },
         el('img', { src: trackUrl(URL.createObjectURL(overlay)), alt: 'alignment' }),
         el('div', { class: 'tag' }, 'alignment'));
-      t.addEventListener('click', () => lightbox(overlay, `${r.scan}: green = marker found, red = missing, blue = frames, orange = QRs`));
+      t.addEventListener('click', () => openInGallery(overlay, r.scan));
       thumbs.append(t);
     }
-    for (const f of [...frames, ...sinIdentificar].slice(0, 60)) {
-      const t = el('div', { class: 'thumb clickable', title: 'View at full size' },
+    for (const f of shown) {
+      const t = el('div', { class: 'thumb clickable', title: 'View at full size (← → to move between frames, Esc to close)' },
         el('img', { src: trackUrl(pngUrl(f.png)) }), el('div', { class: 'tag' }, f.label));
-      t.addEventListener('click', () => lightbox(f.png, f.label));
+      t.addEventListener('click', () => openInGallery(f.png, f.label));
       thumbs.append(t);
     }
-    return [el('tr', {},
+    const manual = ph2.assign[r.scan] != null;
+    const rows = [el('tr', {},
       el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
       el('td', { class: 'mono' }, r.scan),
-      el('td', {}, r.hoja_numero ?? '—'),
+      el('td', { class: 'sheet-cell' },
+        el('div', {}, r.hoja_numero ?? '—', manual ? el('span', { class: 'byhand' }, 'by hand') : null),
+        assignControl(r.scan)),
       el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
       el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
       el('td', {}, String(frames?.length ?? 0)),
@@ -304,28 +465,102 @@ export function mountPhase2(root) {
         r.error ? el('div', { style: 'color:#E98C77' }, r.error) : null,
       ]),
     ), el('tr', {}, el('td', {}), el('td', { colspan: '6' }, thumbs))];
+    entry.rows = rows;
+    return rows;
   }
 
+  /** Añade un resultado, o reemplaza el que ya hubiera para ese mismo
+   *  archivo: `ph2.assign` y el reprocesado individual buscan por nombre de
+   *  escaneo, así que dos filas con el mismo nombre harían que editar una
+   *  cambiara la otra. Un archivo, una fila. */
   function addResult(entry) {
+    const dup = ph2.results.find((e) => e.result.scan === entry.result.scan);
+    if (dup) { replaceResult(dup, entry); return; }
     ph2.results.push(entry);
     reportTable.append(...buildResultRows(entry));
+    rebuildFromResults();
     renderSummary();
   }
 
-  function clearReport() {
-    ph2.results = [];
-    ph2.claims = {};
-    project.processedFrames.clear();
-    reportTable.replaceChildren(reportHeader);
-    for (const u of reportUrls) URL.revokeObjectURL(u); // soltar los Blobs
-    reportUrls.length = 0;
+  /** Suelta las filas y las URLs de una entrada (sus Blobs siguen vivos si
+   *  otro resultado los usa; las URLs no). */
+  function dropRows(entry) {
+    for (const row of entry.rows ?? []) row.remove();
+    for (const u of entry.urls ?? []) URL.revokeObjectURL(u);
+    entry.rows = null;
+    entry.urls = [];
+  }
+
+  function replaceResult(oldEntry, entry) {
+    const i = ph2.results.indexOf(oldEntry);
+    const anchor = oldEntry.rows?.[0] ?? null;
+    if (i >= 0) ph2.results[i] = entry; else ph2.results.push(entry);
+    const rows = buildResultRows(entry);
+    if (anchor) anchor.before(...rows); else reportTable.append(...rows);
+    dropRows(oldEntry);
+    rebuildFromResults();
     renderSummary();
+  }
+
+  /** `keepAssign`: al reprocesar el lote con otras opciones, las hojas que el
+   *  usuario asignó a mano deben sobrevivir; el botón “Clear results” no. */
+  function clearReport(keepAssign = false) {
+    for (const e of ph2.results) dropRows(e);
+    ph2.results = [];
+    if (!keepAssign) ph2.assign = {};
+    reportTable.replaceChildren(reportHeader);
+    rebuildFromResults();
+    renderSummary();
+  }
+
+  /** Dónde imprimió ESTE proyecto el número de hoja: es lo primero que hay
+   *  que mirar para saber qué hoja es un escaneo sin identificar. */
+  function whereTheSheetNumberIs() {
+    const aj = ph2.layout?.ajustes;
+    if (!aj) return 'Look for the sheet number printed on the page';
+    if (aj.page_num_on === false) return 'This project printed no sheet number, so go by the drawings';
+    const corner = String(aj.page_num_corner ?? 'Bottom right').toLowerCase();
+    const edge = corner.includes('top') || corner.includes('superior') ? 'top' : 'bottom';
+    const side = corner.includes('left') || corner.includes('izquierda') ? 'left' : 'right';
+    return `Read the sheet number this project printed on the ${edge} ${side} of the page`;
+  }
+
+  /** Caja de asignación manual: los escaneos que se enderezaron bien pero
+   *  cuya hoja nadie pudo nombrar. */
+  function renderAssignBox() {
+    assignSlot.replaceChildren();
+    const pending = ph2.results.filter((e) => e.result.hoja_numero == null);
+    if (!ph2.layout || !pending.length) return;
+    assignSlot.append(el('div', { class: 'assign-box' },
+      el('strong', {}, `${pending.length} scan${pending.length > 1 ? 's' : ''} with no sheet identified`),
+      el('div', { class: 'assign-hint' },
+        'The markers straightened the sheet, but nothing said WHICH sheet it is: the QR is painted over, '
+        + 'unreadable, or the project identifies sheets by QR only. '
+        + `${whereTheSheetNumberIs()}, or recognise the drawings in the thumbnails below, and pick the sheet here. `
+        + 'The scan is reprocessed on the spot and its frames come out with their real labels.'),
+      ...pending.map((e) => el('div', { class: 'assign-row' },
+        el('span', { class: 'mono' }, e.result.scan),
+        assignControl(e.result.scan))),
+    ));
+  }
+
+  function renderConflicts() {
+    conflictSlot.replaceChildren();
+    if (!sheetConflicts.length) return;
+    conflictSlot.append(el('div', { class: 'missing-box' },
+      el('strong', {}, `Two scans claim the same sheet:`),
+      ...sheetConflicts.map(({ numero, scans }) => el('div', { style: 'margin-top:4px' },
+        `Sheet ${numero}: ${scans.join(', ')} — only the frames of the last one are kept.`)),
+      el('div', { style: 'margin-top:6px' },
+        'Send the wrong one to another sheet with its selector, or set it back to automatic.'),
+    ));
   }
 
   function renderSummary() {
     const any = ph2.results.length > 0;
     reportTable.style.display = any ? '' : 'none';
     downloadRow.style.display = any ? '' : 'none';
+    renderConflicts();
     missingSlot.replaceChildren();
     if (ph2.layout && any) {
       const expected = expectedLabels(ph2.layout);
@@ -339,6 +574,7 @@ export function mountPhase2(root) {
       rescueSection.style.display = missing.length ? '' : 'none';
       rescueMissing = missing;
     }
+    renderAssignBox();
     framesState.textContent = project.processedFrames.size
       ? `${project.processedFrames.size} recovered frames in memory (ready for the Video phase).`
       : '';
@@ -363,10 +599,10 @@ export function mountPhase2(root) {
       },
     }, 'Download frames + report (ZIP)'),
     el('button', {
-      class: 'btn ghost-light small', onclick: clearReport,
+      class: 'btn ghost-light small', onclick: () => clearReport(),
     }, 'Clear results'),
   );
-  resultsBox.append(missingSlot, reportTable, downloadRow);
+  resultsBox.append(assignSlot, conflictSlot, missingSlot, reportTable, downloadRow);
   renderSummary();
 
   function buildInforme() {
@@ -399,7 +635,7 @@ export function mountPhase2(root) {
   const rescueOriginals = new Map(); // nombre → File
   const rescueInfo = el('div', { class: 'hint' });
   const rescueDz = dropzone({
-    label: 'Drop the project originals folder (…_originales/)',
+    label: 'Drop the project originals folder (…_originals/)',
     sublabel: 'The copies phase ① saved next to the layout. They let you reprint ONLY the failed frames.',
     accept: 'image/*,.tif,.tiff', multiple: true, dark: true,
     onFiles: (files) => {
@@ -500,9 +736,59 @@ export function mountPhase2(root) {
     rescueDz, rescueInfo, rescueBtn, rescueProg.root,
   );
 
+  // ── escaneos de demostración ─────────────────────────────────
+  /** Convierte una hoja recién generada en un “escaneo”: la pega girada 2°
+   *  sobre un fondo mayor, como saldría de un escáner de mesa. Recorre el
+   *  circuito ①→②→③ entero sin imprimir ni escanear nada. */
+  async function simulateScan(blob, name) {
+    const bmp = await createImageBitmap(blob);
+    const w = Math.round(bmp.width * 1.08);
+    const h = Math.round(bmp.height * 1.08);
+    const c = new OffscreenCanvas(w, h);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#B6B4AE'; // tapa del escáner
+    ctx.fillRect(0, 0, w, h);
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate((2 * Math.PI) / 180);
+    ctx.drawImage(bmp, -bmp.width / 2, -bmp.height / 2);
+    bmp.close();
+    const png = await c.convertToBlob({ type: 'image/png' });
+    return new File([png], `${name.replace(/\.png$/i, '')}_scan.png`, { type: 'image/png' });
+  }
+
+  const demoBtn = el('button', { class: 'btn ghost small', style: 'display:none; margin-top:6px' },
+    'No scans yet? Simulate them from this session’s sheets');
+  demoBtn.addEventListener('click', async () => {
+    if (!project.sheetImages.size) { toast('Generate the sheets in phase ① first.', 'err'); return; }
+    if (!ph2.layout) {
+      if (!project.layoutJson) { toast('Generate the sheets in phase ① first.', 'err'); return; }
+      const layout = JSON.parse(project.layoutJson);
+      setLayout(layout, 'current project layout', `✔ ${layoutSummary(layout)}`);
+    }
+    demoBtn.disabled = true;
+    try {
+      const files = [];
+      for (const [name, blob] of project.sheetImages) files.push(await simulateScan(blob, name));
+      for (const f of files) loadedScans.set(f.name, f);
+      refreshReprocess();
+      toast(`${files.length} simulated scan(s): your sheets, printed and scanned back crooked.`, 'ok');
+      await processScans(files);
+    } catch (e) {
+      console.error(e);
+      toast(`Could not simulate the scans: ${e.message ?? e}`, 'err');
+    } finally {
+      demoBtn.disabled = false;
+    }
+  });
+  function refreshDemo() {
+    demoBtn.style.display = project.sheetImages.size ? '' : 'none';
+  }
+  root.addEventListener('mxm:activated', refreshDemo);
+  refreshDemo();
+
   const paper = el('div', { class: 'paper' },
     el('h2', {}, '② Process scans'),
-    el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its marker IDs (or its QRs, on older projects) and crops every frame. No Photoshop.'),
+    el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its marker IDs (or its QRs, on older projects) and crops every frame. If nothing identifies a sheet, you can tell the app which one it is in the report. No Photoshop.'),
     layoutDz, useCurrentBtn, layoutInfo,
     el('h3', {}, 'Options'),
     // campos apilados: con hints de largos distintos, en fila quedaban
@@ -514,6 +800,7 @@ export function mountPhase2(root) {
     resizeCheck.label, patchesCheck.label, fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,
+    demoBtn,
     reprocessBtn,
     specsInfo,
     prog.root,

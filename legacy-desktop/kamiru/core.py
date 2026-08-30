@@ -213,7 +213,9 @@ class Settings:
 
     @property
     def is_cyanotype(self) -> bool:
-        return (self.mode or "normal").lower().startswith("cian")
+        # "cianotipia" (esta app) y "cyanotype" (la versión web)
+        m = (self.mode or "normal").strip().lower()
+        return m.startswith("cian") or m.startswith("cyan")
 
     def format_label(self, num: int) -> str:
         """Aplica nombre base + separador + ceros a la izquierda a un número."""
@@ -542,9 +544,9 @@ def resolve_page_layout(s, frame_paths, meta_h=0, label_gap=0):
       antiguo produjera áreas impresas menores que la elección manual).
     """
     o = (s.orientation or "").strip().lower()
-    if o.startswith("horizontal"):
+    if o.startswith("horizontal") or o.startswith("landscape"):
         return True, s.cols, s.rows
-    if o.startswith("vertical"):
+    if o.startswith("vertical") or o.startswith("portrait"):
         return False, s.cols, s.rows
 
     src_w, src_h = _first_frame_aspect(frame_paths)
@@ -724,10 +726,32 @@ def _ink_full_color(s: Settings):
     return cyan.solid_density_color(255, s.cyan_ink, s.cyan_ink_stops)
 
 
+# La versión web guarda la esquina del numerador en inglés; un proyecto hecho
+# allí tiene que reimprimirse aquí con el número en el mismo sitio.
+_CORNERS_EN = {
+    "bottom right": "Inferior derecha",
+    "bottom left": "Inferior izquierda",
+    "top right": "Superior derecha",
+    "top left": "Superior izquierda",
+}
+
+
+def _alpha_border_mode(s) -> bool:
+    """Modo de alfa "borde" ("border" en el vocabulario de la versión web)."""
+    m = (s.alpha_mode or "ninguno").strip().lower()
+    return m.startswith("borde") or m.startswith("border")
+
+
+def _canonical_corner(corner: str) -> str:
+    """Esquina canónica en español (traduce los nombres en inglés)."""
+    return _CORNERS_EN.get((corner or "").strip().lower(), corner)
+
+
 def _cyan_saving(s: Settings) -> bool:
     """True si el negativo usa el modo AHORRO DE TINTA (fondo transparente y
     solo halos entintados alrededor de marcadores/QRs/nombres)."""
-    return s.is_cyanotype and (s.cyan_bg or "ahorro").lower().startswith("ahorro")
+    bg = (s.cyan_bg or "ahorro").strip().lower()
+    return s.is_cyanotype and (bg.startswith("ahorro") or bg.startswith("saving"))
 
 
 def _page_bg_color(s: Settings):
@@ -1030,7 +1054,7 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
                             px + new_w - 1 + bw, py + new_h - 1 + bw],
                            outline=_ink_full_color(s), width=bw)
         elif (tiene_alfa and not s.is_cyanotype
-              and (s.alpha_mode or "ninguno").lower().startswith("borde")
+              and _alpha_border_mode(s)
               and s.alpha_border_mm > 0):
             # Marco POR FUERA del fotograma transparente (no tapa imagen):
             # delimita el frame sobre el papel sin entintar todo el fondo.
@@ -1101,7 +1125,7 @@ def _render_page(s: Settings, L: _Layout, chunk, page_idx: int,
     if s.page_num_on and L.page_font is not None:
         pno = s.format_page_label(sheet_num)
         tw, th = _text_size(draw, pno, L.page_font)
-        corner = s.page_num_corner
+        corner = _canonical_corner(s.page_num_corner)
         if s.registration_on:
             # Con marcadores activos, las esquinas están ocupadas por los
             # parches ArUco: el numerador se corre hacia dentro del borde

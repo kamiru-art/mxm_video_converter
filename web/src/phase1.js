@@ -9,26 +9,62 @@ import { generateSheets, resolveCyanCurve, packThumbs, packImageData, settingsFo
 import * as store from './store.js';
 import { makeZip } from './zip.js';
 
-const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', ['Carta (Letter)', 'Letter'], ['Oficio (Legal)', 'Legal'], ['Tabloide (Tabloid)', 'Tabloid'], ['Personalizado', 'Custom']];
-const ORIENTATIONS = [['Mejor ajuste (automático)', 'Best fit (automatic)'], 'Vertical', 'Horizontal'];
-const CORNERS = [['Inferior derecha', 'Bottom right'], ['Inferior izquierda', 'Bottom left'], ['Superior derecha', 'Top right'], ['Superior izquierda', 'Top left']];
+const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', 'Letter', 'Legal', 'Tabloid', 'Custom'];
+const ORIENTATIONS = [['auto', 'Best fit (automatic)'], ['portrait', 'Portrait'], ['landscape', 'Landscape']];
+const CORNERS = ['Bottom right', 'Bottom left', 'Top right', 'Top left'];
+
+// Los ajustes guardados antes de unificar la interfaz en inglés llevan los
+// valores en español. El núcleo Rust sigue aceptando ambos, pero los
+// desplegables solo tienen los nuevos: sin esta tabla, cargar un preset
+// antiguo dejaría el control en la primera opción y cambiaría el proyecto.
+const LEGACY_VALUES = {
+  paper: { 'Carta (Letter)': 'Letter', 'Oficio (Legal)': 'Legal', 'Tabloide (Tabloid)': 'Tabloid', Personalizado: 'Custom' },
+  orientation: { 'Mejor ajuste (automático)': 'auto', 'Mejor ajuste (automatico)': 'auto', Vertical: 'portrait', Horizontal: 'landscape' },
+  page_num_corner: {
+    'Inferior derecha': 'Bottom right', 'Inferior izquierda': 'Bottom left',
+    'Superior derecha': 'Top right', 'Superior izquierda': 'Top left',
+  },
+  alpha_mode: { ninguno: 'none', color: 'color', borde: 'border' },
+  cyan_bg: { ahorro: 'saving', completo: 'full' },
+  mode: { cianotipia: 'cyanotype', normal: 'normal' },
+};
+
+/** Traduce al vocabulario actual los ajustes que vengan de una versión
+ *  anterior (localStorage, un preset exportado o el layout de un proyecto). */
+export function normalizeSettings(settings) {
+  const out = { ...settings };
+  for (const [key, table] of Object.entries(LEGACY_VALUES)) {
+    const v = out[key];
+    if (typeof v === 'string' && table[v]) out[key] = table[v];
+  }
+  return out;
+}
+
+/** Lo mismo para el estado de la fase (numeración de etiquetas y de hojas). */
+function normalizePhase(fase) {
+  const out = { ...fase };
+  for (const k of ['numbering', 'pageNumbering']) {
+    if (out[k] === 'continua') out[k] = 'sequential';
+  }
+  return out;
+}
 
 export function defaultSettings() {
   return {
-    paper: 'A4', orientation: 'Mejor ajuste (automático)', dpi: 300,
+    paper: 'A4', orientation: 'auto', dpi: 300,
     custom_w_mm: 210, custom_h_mm: 297, margin_mm: 10, gutter_mm: 5,
-    bg_color: '#FFFFFF', alpha_mode: 'ninguno', alpha_bg_color: '#000000',
+    bg_color: '#FFFFFF', alpha_mode: 'none', alpha_bg_color: '#000000',
     alpha_border_color: '#000000', alpha_border_mm: 0.5,
     cols: 4, rows: 5, labels_on: true, base_name: 'abc', separator: '_',
     leading_zeros: 3, start_index: 1, font_size_pt: 9, label_gap_mm: 1.5,
-    label_color: '#000000', page_num_on: true, page_num_corner: 'Inferior derecha',
+    label_color: '#000000', page_num_on: true, page_num_corner: 'Bottom right',
     page_num_prefix: '', page_num_start: 1, page_num_zeros: 1, page_num_size_pt: 11,
     page_num_color: '#000000', registration_on: true, marker_count: 8,
     marker_size_mm: 10, marker_margin_mm: 4, marker_dict: 'DICT_5X5_100',
     qr_on: false, qr_size_mm: 10, gray_patch_on: false, project_name: '',
     mode: 'normal', cyan_mirror: true, cyan_ink: '#000000', cyan_curve: null,
     cyan_curve_strength: 100, cyan_adaptive: 0, cyan_clarity: 0,
-    cyan_bg: 'ahorro', cyan_halo_mm: 5, cyan_frame_border_mm: 0.8,
+    cyan_bg: 'saving', cyan_halo_mm: 5, cyan_frame_border_mm: 0.8,
     cyan_block_color: null, cyan_ink_stops: null,
     print_scale_x: 1, print_scale_y: 1, out_name: 'hojas',
     fmt_png: true, fmt_pdf: true, fmt_tiff: false,
@@ -37,11 +73,11 @@ export function defaultSettings() {
 
 // estado de la fase (persistido en localStorage)
 export const ph1 = {
-  settings: { ...defaultSettings(), ...(store.loadSettings() ?? {}) },
+  settings: normalizeSettings({ ...defaultSettings(), ...(store.loadSettings() ?? {}) }),
   include: '', exclude: '',
   naming: 'auto',           // auto | original (nombre de archivo)
-  numbering: 'continua',    // continua | original
-  pageNumbering: 'continua',
+  numbering: 'sequential',  // sequential | original
+  pageNumbering: 'sequential',
   dedupOn: false, dedupThreshold: 4,
   dedupGroups: null,        // {reps, rep_of} sobre la selección actual
   keepOriginals: true, exportFrames: false,
@@ -49,6 +85,13 @@ export const ph1 = {
   previewPage: 0, previewSimulate: false,
   cyanResponse: null,       // respuesta medida del perfil (soft-proof)
 };
+
+/** El modo cianotipia se guarda como "cyanotype"; los proyectos anteriores
+ *  lo llamaban "cianotipia". */
+function isCyanotype(s) {
+  const m = String(s.mode ?? '').toLowerCase();
+  return m.startsWith('cyan') || m.startsWith('cian');
+}
 
 function stem(name) {
   return name.replace(/\.[^.]+$/, '');
@@ -231,8 +274,8 @@ export function mountPhase1(root) {
   excludeIn.addEventListener('change', () => { ph1.exclude = excludeIn.value; afterFramesChanged(); });
 
   const namingSel = select([['auto', 'Auto-increment (abc_001…)'], ['original', 'Original file name']], ph1.naming);
-  const numberingSel = select([['continua', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
-  const pageNumberingSel = select([['continua', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
+  const numberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
+  const pageNumberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
   // los tres cambian las etiquetas visibles: refrescar también las miniaturas
   namingSel.addEventListener('change', async () => { ph1.naming = namingSel.value; await renderThumbs(); refreshPreview(); });
   numberingSel.addEventListener('change', async () => { ph1.numbering = numberingSel.value; await renderThumbs(); refreshPreview(); });
@@ -290,15 +333,15 @@ export function mountPhase1(root) {
     field('Height (mm)', bindNum('custom_h_mm', numberInput(297, { min: 30 }))),
   );
   const paperSel = bindSel('paper', select(PAPERS, s.paper));
-  const syncCustom = () => { customRow.style.display = paperSel.value === 'Personalizado' ? '' : 'none'; };
+  const syncCustom = () => { customRow.style.display = paperSel.value === 'Custom' ? '' : 'none'; };
   paperSel.addEventListener('change', syncCustom);
   syncCustom();
 
   // ---------- cianotipia ----------
-  const modeCheck = check('CYANOTYPE MODE: generate negatives for transparency film', String(s.mode).startsWith('cian'));
+  const modeCheck = check('CYANOTYPE MODE: generate negatives for transparency film', isCyanotype(s));
   const cyanBox = el('fieldset', {}, el('legend', {}, 'Cyanotype'));
   modeCheck.input.addEventListener('change', () => {
-    s.mode = modeCheck.input.checked ? 'cianotipia' : 'normal';
+    s.mode = modeCheck.input.checked ? 'cyanotype' : 'normal';
     cyanBody.style.display = modeCheck.input.checked ? '' : 'none';
     simulateToggle.parentElement.style.display = modeCheck.input.checked ? '' : 'none';
     persist(); refreshPreview();
@@ -343,13 +386,13 @@ export function mountPhase1(root) {
       field('Content adaptation (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 }))),
       field('Micro-contrast (%)', bindNum('cyan_clarity', numberInput(0, { min: 0, max: 100 }))),
     ),
-    field('Negative background', bindSel('cyan_bg', select([['ahorro', 'INK-SAVING (inked halos only)'], ['completo', 'Full (entire background inked)']], s.cyan_bg))),
+    field('Negative background', bindSel('cyan_bg', select([['saving', 'INK-SAVING (inked halos only)'], ['full', 'Full (entire background inked)']], s.cyan_bg))),
     el('div', { class: 'row' },
       field('Inked halo (mm)', bindNum('cyan_halo_mm', numberInput(5, { min: 0, step: 0.5 }))),
       field('Blocking border (mm)', bindNum('cyan_frame_border_mm', numberInput(0.8, { min: 0, step: 0.1 }))),
     ),
   );
-  cyanBody.style.display = String(s.mode).startsWith('cian') ? '' : 'none';
+  cyanBody.style.display = isCyanotype(s) ? '' : 'none';
   cyanBox.append(modeCheck.label, cyanBody);
 
   // ---------- perfil de impresora ----------
@@ -381,8 +424,8 @@ export function mountPhase1(root) {
           if (!presetSel.value) return;
           const p = store.loadProfile('presets', presetSel.value);
           if (p?.settings) {
-            Object.assign(s, p.settings);
-            Object.assign(ph1, p.fase ?? {});
+            Object.assign(s, normalizeSettings(p.settings));
+            Object.assign(ph1, normalizePhase(p.fase ?? {}));
             binds.forEach((b) => b());
             persist(); refreshPreview();
             toast(`Preset “${presetSel.value}” loaded.`, 'ok');
@@ -424,7 +467,7 @@ export function mountPhase1(root) {
     genProg.show();
     try {
       const thumbs = [];
-      if (String(s.mode).startsWith('cian') && (s.cyan_adaptive ?? 0) > 0) {
+      if (isCyanotype(s) && (s.cyan_adaptive ?? 0) > 0) {
         for (const p of plan.printed) thumbs.push(await ensureThumb(p.frameIdx));
       }
       const settings = await resolveCyanCurve({ ...s, sheets_include: ph1.sheets_include, sheets_exclude: ph1.sheets_exclude }, thumbs);
@@ -443,6 +486,7 @@ export function mountPhase1(root) {
         onProgress: (d, t, note) => genProg.set(d / t, note),
       });
       project.layoutJson = out.layoutJson;
+      project.sheetImages = out.sheetImages;
       warnBox.replaceChildren(...out.avisos.map((a) => el('li', {}, a)));
       genProg.set(1, 'packing ZIP…');
       const zip = await makeZip(out.files, (i, n) => genProg.set(1, `packing ${i}/${n}`));
@@ -565,11 +609,81 @@ export function mountPhase1(root) {
     refreshPresetList();
   });
 
+  // ---------- proyecto de muestra ----------
+  /** Un fotograma del ejemplo: pelota que rebota + cuadrado que gira, con el
+   *  número grande para reconocerlo en la hoja impresa y en el escaneo. */
+  function demoFrame(i, n) {
+    const w = 480, h = 270;
+    const c = new OffscreenCanvas(w, h);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, w, h);
+    const t = n > 1 ? i / (n - 1) : 0;
+    ctx.strokeStyle = '#BEB8A6';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.8);
+    ctx.lineTo(w, h * 0.8);
+    ctx.stroke();
+    ctx.fillStyle = '#17315C';
+    ctx.beginPath();
+    ctx.arc(58 + t * (w - 116), h * 0.8 - 28 - Math.abs(Math.sin(t * Math.PI * 1.5)) * h * 0.42, 28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.save();
+    ctx.translate(w - 74, 66);
+    ctx.rotate(t * Math.PI);
+    ctx.fillStyle = '#F0B429';
+    ctx.fillRect(-24, -24, 48, 48);
+    ctx.restore();
+    ctx.fillStyle = '#201B14';
+    ctx.font = 'bold 40px system-ui, sans-serif';
+    ctx.fillText(String(i + 1), 20, 52);
+    return c;
+  }
+
+  const DEMO_FRAMES = 6;
+  const demoBtn = el('button', { class: 'btn ghost small', style: 'margin-top:8px' },
+    `Try it with a ${DEMO_FRAMES}-frame example`);
+  demoBtn.addEventListener('click', async () => {
+    demoBtn.disabled = true;
+    try {
+      clearFrames();
+      for (let i = 0; i < DEMO_FRAMES; i++) {
+        const canvas = demoFrame(i, DEMO_FRAMES);
+        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        project.frames.push({
+          name: `demo_${String(i + 1).padStart(3, '0')}.png`,
+          blob, thumb: null, w: canvas.width, h: canvas.height, hasAlpha: false,
+        });
+      }
+      project.videoMeta = { origen: 'demo', fps_extraccion: 6 };
+      // una sola hoja: el ejemplo se imprime, se escanea y se rearma entero
+      Object.assign(s, { cols: 3, rows: 2, base_name: 'demo', out_name: 'demo', project_name: 'Demo' });
+      ph1.include = ''; ph1.exclude = '';
+      includeIn.value = ''; excludeIn.value = '';
+      binds.forEach((b) => b());
+      syncCustom();
+      persist();
+      pendingVideo = null;
+      videoInfo.textContent = '';
+      extractBtn.disabled = true;
+      await afterFramesChanged();
+      toast(`${DEMO_FRAMES} example frames ready. Press “Generate sheets”, then go to ② and simulate the scans: the whole loop without printing anything.`, 'ok');
+    } catch (e) {
+      console.error(e);
+      toast(`Could not build the example: ${e.message ?? e}`, 'err');
+    } finally {
+      demoBtn.disabled = false;
+    }
+  });
+
   // ---------- montaje ----------
   const paper = el('div', { class: 'paper' },
     el('h2', {}, '① Generate contact sheets'),
     el('div', { class: 'hint' }, 'From a video (or images) to printable sheets with registration markers.'),
-    dz, videoInfo,
+    dz,
+    demoBtn,
+    videoInfo,
     el('div', { class: 'row tight', style: 'margin-top:8px' },
       field('Start (s)', startIn), field('End (s)', endIn), field('fps', fpsIn),
     ),
@@ -680,7 +794,7 @@ export function mountPhase1(root) {
       previewImg,
     ),
     el('div', { class: 'pagenav' }, prevBtn, pageLabel, nextBtn),
-    el('div', { style: `display:${String(s.mode).startsWith('cian') ? '' : 'none'}` }, simulateToggle.label),
+    el('div', { style: `display:${isCyanotype(s) ? '' : 'none'}` }, simulateToggle.label),
     previewInfo,
     framesInfo,
     thumbsGrid,

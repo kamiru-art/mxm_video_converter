@@ -4,7 +4,7 @@ import { run } from './pool.js';
 import { el, toast, download, dropzone, field, numberInput, select, check, pngUrl } from './ui.js';
 import * as store from './store.js';
 
-const PAPERS = ['A4', 'A3', 'A5', ['Carta (Letter)', 'Letter']];
+const PAPERS = ['A4', 'A3', 'A5', 'Letter'];
 
 function profileSaver(kind, getData) {
   const name = el('input', { type: 'text', placeholder: 'profile name' });

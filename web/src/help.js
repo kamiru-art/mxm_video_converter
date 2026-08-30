@@ -18,6 +18,11 @@ export function mountHelp(root) {
 <div>
 
 <h3>① Sheets</h3>
+<p>In a hurry? <strong>&ldquo;Try it with a 6-frame example&rdquo;</strong>
+builds a small animation right there, so you can walk ① → ② → ③ without
+looking for files: generate the sheets, then in ② press <strong>&ldquo;Simulate
+them from this session&rsquo;s sheets&rdquo;</strong> and the app scans its own
+sheets back, crooked, exactly as a flatbed would hand them to you.</p>
 <p>Drop a video (MP4, MOV, WebM, MKV, and also AVI, MPG, WMV or FLV through the
 built-in converter) or a folder of images. Choose how many frames per second
 you want, or all of them for frame-by-frame animation. If you enable
@@ -56,7 +61,10 @@ exposed the film flipped. The app still corrects it when scanning.</p>
 <p>All processing happens <strong>in your browser</strong> (Rust compiled to
 WebAssembly, plus WebGPU where it helps): your videos and scans never leave
 your machine, there are no accounts or limits, and once loaded the page works
-offline. Frames are extracted <strong>losslessly</strong> (PNG) with no color
+offline. You can also <strong>install it</strong> as a desktop or phone app
+(in Chrome and Edge, the install icon in the address bar; on iPhone and iPad,
+Share → Add to Home Screen) and it opens in its own window, with or without
+a connection. Frames are extracted <strong>losslessly</strong> (PNG) with no color
 filtering. Projects from the original desktop app (<code>layout.json</code>
 v1 and v2, QRs included) are processed unchanged.</p>
 <p>This tool was born from a real artist's workflow and is released free,
@@ -80,7 +88,20 @@ by water and crops every frame. 16-bit scans are preserved end to end.</p>
 <p>The app reads your machine's cores, memory and graphics card, and processes
 as many scans in parallel as fit safely in memory. The heavy straightening
 step runs on the <strong>graphics card (WebGPU)</strong> when the browser
-supports it. In the report, click any thumbnail to see it at full size.</p>
+supports it; the badge at the top right of the page says which of the two
+your browser is using. In the report, click any thumbnail to see it at full
+size, and move through the whole batch with <strong>←</strong> and
+<strong>→</strong> without closing it (<strong>Esc</strong> closes).</p>
+<p><strong>When the sheet cannot be named.</strong> Sometimes the markers do
+their job — the sheet straightens perfectly — but nothing says <em>which</em>
+sheet it is: the QR is under a brushstroke, the exposure ate it, or the
+project identifies sheets by QR only. Those scans appear at the top of the
+report with a selector: read the <strong>sheet number printed on the page</strong>
+(bottom right, unless you moved it), or recognise the drawings in the
+thumbnails, pick the sheet and the app reprocesses that scan on the spot and
+crops its frames with their real labels. The same selector sits in the
+<em>Sheet</em> column of every row, so you can also correct a sheet the app
+got wrong.</p>
 <p>The report tells you what was recovered and what is missing. One click
 generates <strong>rescue sheets</strong> containing only the failed frames.</p>
 

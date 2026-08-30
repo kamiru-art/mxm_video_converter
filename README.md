@@ -37,6 +37,12 @@ aquí lo tienes gratis, con código abierto y con más funciones.
   corrección local para papel deformado, escala automática, recuperación
   guiada de marcadores, 16 bits de punta a punta, informe con miniaturas y
   hojas de rescate para reimprimir solo lo fallido.
+- **Asignación manual de hoja**: cuando los marcadores alinean bien pero el QR
+  no se lee (pintura encima, mala exposición), le dices tú a la app qué hoja
+  es y reprocesa ese escaneo solo, con sus etiquetas reales.
+- **Proyecto de ejemplo**: un botón arma una animación de 6 fotogramas y la
+  fase ② puede simular el escaneo de sus propias hojas, para recorrer
+  ①→②→③ entero sin buscar archivos ni imprimir nada.
 - **Calibración**: perfil de impresora (escala real, respuesta tonal,
   tamaños mínimos), curva de cianotipia (tira de 21 parches o carta EDN de
   256 tonos) y ColorBlocker (el color de tinta que mejor bloquea el UV en TU
@@ -57,7 +63,8 @@ La lista completa, con la explicación técnica de cada función:
 | `docs/` | Documentación funcional y manual. |
 
 No hay servidor: el sitio es 100 % estático (Cloudflare Workers con assets
-estáticos) y funciona offline una vez cargado. Los proyectos, presets y perfiles de calibración se
+estáticos), se **instala como aplicación** (PWA: manifiesto + service worker)
+y funciona offline una vez cargado. Los proyectos, presets y perfiles de calibración se
 guardan en tu propio navegador y se pueden exportar/importar como JSON.
 
 Los `layout.json` generados por la versión de escritorio (v1 y v2) se

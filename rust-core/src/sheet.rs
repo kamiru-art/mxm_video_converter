@@ -50,7 +50,7 @@ pub fn page_size_px(paper: &str, dpi: u32, landscape: bool, cw: f64, ch: f64) ->
 
 fn default_true() -> bool { true }
 fn d_paper() -> String { "A4".into() }
-fn d_orientation() -> String { "Vertical".into() }
+fn d_orientation() -> String { "portrait".into() }
 fn d_dpi() -> u32 { 300 }
 fn d_custom_w() -> f64 { 210.0 }
 fn d_custom_h() -> f64 { 297.0 }
@@ -58,7 +58,7 @@ fn d_margin() -> f64 { 10.0 }
 fn d_gutter() -> f64 { 5.0 }
 fn d_white() -> String { "#FFFFFF".into() }
 fn d_black() -> String { "#000000".into() }
-fn d_alpha_mode() -> String { "ninguno".into() }
+fn d_alpha_mode() -> String { "none".into() }
 fn d_alpha_border_mm() -> f64 { 0.5 }
 fn d_cols() -> u32 { 4 }
 fn d_rows() -> u32 { 5 }
@@ -67,7 +67,7 @@ fn d_sep() -> String { "_".into() }
 fn d_one() -> i64 { 1 }
 fn d_font_pt() -> f64 { 9.0 }
 fn d_label_gap() -> f64 { 1.5 }
-fn d_corner() -> String { "Inferior derecha".into() }
+fn d_corner() -> String { "Bottom right".into() }
 fn d_page_pt() -> f64 { 11.0 }
 fn d_marker_count() -> u32 { 8 }
 fn d_marker_mm() -> f64 { 8.0 }
@@ -76,7 +76,7 @@ fn d_dict() -> String { "DICT_4X4_50".into() }
 fn d_qr_mm() -> f64 { 10.0 }
 fn d_mode() -> String { "normal".into() }
 fn d_100() -> f64 { 100.0 }
-fn d_cyan_bg() -> String { "ahorro".into() }
+fn d_cyan_bg() -> String { "saving".into() }
 fn d_halo() -> f64 { 5.0 }
 fn d_frame_border() -> f64 { 0.8 }
 fn d_scale() -> f64 { 1.0 }
@@ -156,7 +156,9 @@ impl Settings {
         ((self.cols * self.rows) as usize).max(1)
     }
     pub fn is_cyanotype(&self) -> bool {
-        self.mode.to_lowercase().starts_with("cian")
+        // "cyanotype" (actual) y "cianotipia" (proyectos y presets antiguos)
+        let m = self.mode.trim().to_lowercase();
+        m.starts_with("cyan") || m.starts_with("cian")
     }
     pub fn ink_stops(&self) -> Option<Vec<cyan::InkStop>> {
         self.cyan_ink_stops.as_ref().map(|ss| {
@@ -345,7 +347,8 @@ fn effective_margin(s: &Settings, dpi: u32) -> i64 {
 }
 
 pub fn cyan_saving(s: &Settings) -> bool {
-    s.is_cyanotype() && s.cyan_bg.to_lowercase().starts_with("ahorro")
+    let bg = s.cyan_bg.trim().to_lowercase();
+    s.is_cyanotype() && (bg.starts_with("saving") || bg.starts_with("ahorro"))
 }
 
 fn meta_content_height(s: &Settings, label_h: i64, dpi: u32) -> i64 {
@@ -393,11 +396,13 @@ pub fn resolve_page_layout(
     meta_h: i64,
     label_gap: i64,
 ) -> (bool, u32, u32) {
+    // "landscape"/"portrait" (actual) y "horizontal"/"vertical" (ajustes y
+    // proyectos ya guardados); cualquier otra cosa = mejor ajuste automático
     let o = s.orientation.trim().to_lowercase();
-    if o.starts_with("horizontal") {
+    if o.starts_with("landscape") || o.starts_with("horizontal") {
         return (true, s.cols, s.rows);
     }
-    if o.starts_with("vertical") {
+    if o.starts_with("portrait") || o.starts_with("vertical") {
         return (false, s.cols, s.rows);
     }
     let (sw, sh) = first_frame;
@@ -558,8 +563,14 @@ fn page_bg_color(s: &Settings) -> [u8; 3] {
     cyan::hex_to_rgb(&s.bg_color)
 }
 
+/// "border" (actual) o "borde" (ajustes antiguos).
+fn alpha_border_mode(s: &Settings) -> bool {
+    let m = s.alpha_mode.trim().to_lowercase();
+    m.starts_with("border") || m.starts_with("borde")
+}
+
 fn alpha_base_color(s: &Settings) -> [u8; 3] {
-    if s.alpha_mode.to_lowercase().starts_with("color") {
+    if s.alpha_mode.trim().to_lowercase().starts_with("color") {
         return cyan::hex_to_rgb(&s.alpha_bg_color);
     }
     if s.is_cyanotype() {
@@ -874,7 +885,7 @@ pub fn render_page(
                 canvas.stroke_rect(px - bw, py - bw, px + new_w + bw, py + new_h + bw, bw, ink_full_color(s));
             } else if frame.has_alpha
                 && !s.is_cyanotype()
-                && s.alpha_mode.to_lowercase().starts_with("borde")
+                && alpha_border_mode(s)
                 && s.alpha_border_mm > 0.0
             {
                 let bw = mm_to_px(s.alpha_border_mm, l.dpi).max(1);

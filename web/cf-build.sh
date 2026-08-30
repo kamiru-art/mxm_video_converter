@@ -17,4 +17,9 @@ fi
 
 (cd ../rust-core && wasm-pack build --target web --out-dir ../web/src/wasm --release)
 npm ci
-npx vite build
+# npm run build, no `vite build` a secas: el script de npm corre antes
+# prepare-ffmpeg.mjs, que copia y trocea el núcleo de ffmpeg.wasm a
+# public/ffmpeg. Sin ese paso el sitio se publica sin decodificador de AVI y
+# los MOV de cámara, y como los 404 caen en el index.html (la app es una SPA)
+# el fallo llega al usuario como un error de JavaScript, no como un 404.
+npm run build

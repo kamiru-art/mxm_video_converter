@@ -167,22 +167,56 @@ export function originalPageNumbers(positions, perPage, start = 1) {
   return out;
 }
 
-/** Vista ampliada centrada de una imagen (Blob o URL). Se cierra con un
- *  clic en cualquier parte o con Escape. */
-export function lightbox(data, caption = '') {
-  const madeUrl = data instanceof Blob;
-  const url = madeUrl ? URL.createObjectURL(data) : data;
-  const fig = el('figure', {}, el('img', { src: url, alt: caption }));
-  if (caption) fig.append(el('figcaption', {}, caption));
-  const box = el('div', { class: 'lightbox', role: 'dialog', 'aria-label': caption || 'Image preview' }, fig);
+/** Vista ampliada centrada de una imagen (Blob o URL). Se cierra con un clic
+ *  o con Escape. Con `gallery` ({items:[{data,caption}], index}) las flechas
+ *  ← → (y los botones laterales) recorren el lote sin cerrar el visor: en un
+ *  informe de 100+ fotogramas, revisarlos uno a uno de otro modo es abrir y
+ *  cerrar 100 veces. */
+export function lightbox(data, caption = '', gallery = null) {
+  const items = gallery?.items?.length ? gallery.items : [{ data, caption }];
+  let idx = Math.min(Math.max(gallery?.index ?? 0, 0), items.length - 1);
+  let url = null;
+
+  const img = el('img', {});
+  const cap = el('figcaption', {});
+  const fig = el('figure', {}, img, cap);
+  const prevBtn = el('button', { class: 'lb-nav prev', 'aria-label': 'Previous image' }, '‹');
+  const nextBtn = el('button', { class: 'lb-nav next', 'aria-label': 'Next image' }, '›');
+  const box = el('div', { class: 'lightbox', role: 'dialog', 'aria-label': 'Image preview' }, fig);
+  if (items.length > 1) box.append(prevBtn, nextBtn);
+
+  function render() {
+    if (url) URL.revokeObjectURL(url);
+    const it = items[idx];
+    url = it.data instanceof Blob ? URL.createObjectURL(it.data) : null;
+    img.src = url ?? it.data;
+    img.alt = it.caption ?? '';
+    const pos = items.length > 1 ? ` · ${idx + 1} / ${items.length}` : '';
+    cap.textContent = `${it.caption ?? ''}${pos}`;
+    cap.style.display = cap.textContent ? '' : 'none';
+  }
+  function step(d) {
+    if (items.length < 2) return;
+    idx = (idx + d + items.length) % items.length;
+    render();
+  }
   const close = () => {
     box.remove();
     document.removeEventListener('keydown', onKey);
-    if (madeUrl) URL.revokeObjectURL(url);
+    if (url) URL.revokeObjectURL(url);
+    url = null;
   };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+  };
+  for (const [btn, d] of [[prevBtn, -1], [nextBtn, 1]]) {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); step(d); });
+  }
   box.addEventListener('click', close);
   document.addEventListener('keydown', onKey);
+  render();
   document.body.append(box);
   return close;
 }

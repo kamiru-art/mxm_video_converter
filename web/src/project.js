@@ -8,6 +8,9 @@ export const project = {
   videoMeta: {},
   /** deduplicación: null o {reps: [idx], repOf: [idx]} sobre la SELECCIÓN */
   layoutJson: null,       // último layout.json generado (fase ①)
+  /** PNG de las hojas de la última generación (solo proyectos cortos): la
+   *  fase ② las usa para simular escaneos sin imprimir nada. */
+  sheetImages: new Map(),  // nombre de hoja → Blob PNG
   processedFrames: new Map(), // etiqueta → {png: Uint8Array} (fase ②)
   lastReport: null,
 };
