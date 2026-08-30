@@ -46,29 +46,39 @@ Between phase 1 and phase 2, you do the manual work:
 - You can select which frames and which sheets to print.
 - The application finds the drawings that are identical. It prints each
   repeated frame one time only, and it uses that frame again for the video.
+- You can write the sheets as PNG, as TIFF, or as a PDF that is ready to
+  print.
+- You can keep a group of settings as a named preset.
 
 ### Registration markers
 
-- Each sheet has 4, 8 or 12 redundant ArUco markers.
-- Each frame has one QR code.
+- Each sheet has 4, 8 or 12 redundant ArUco markers. The application
+  identifies each sheet by the marker IDs.
+- You can also put one QR code on each frame. This is not the default. Use it
+  for a project with many sheets.
 - The application aligns and identifies a scanned sheet without your help.
   This is also true when the sheet is rotated, upside down or mirrored, and
   when there is paint on some of the markers.
+- You can add a strip of gray patches. The application uses the strip to
+  correct the levels of the scan.
 
 ### Cyanotype mode
 
 - The application makes negatives for transparent sheets.
 - You can apply a compensation curve. The Easy Digital Negatives method is
   included.
-- You can select an ink color or a gradient of two ink colors.
+- You can select one ink color, or a gradient with three ink stops.
 - An ink-economy mode prints halos in the place of solid areas.
 - The application can also add a blocker border, mirror the image, and show a
   preview of the blue print.
 
 ### Scan processing
 
-- The application calculates a RANSAC homography, and you can set the
-  accuracy.
+- The application calculates a RANSAC homography to align each scan.
+- You can set how many markers a scan must show before the application
+  accepts it.
+- If the browser has WebGPU, the application straightens the scans on the
+  graphics card. If not, it uses WebAssembly.
 - A local correction adjusts paper that is deformed.
 - The application finds the scale of the scan automatically.
 - If the application does not find sufficient markers, it lets you point at
@@ -128,8 +138,10 @@ with static assets. The site is a Progressive Web Application: it has a
 manifest and a service worker. Thus you can install it as an application, and
 it also works offline after the first load.
 
-Your browser keeps the projects, the presets and the calibration profiles.
-You can export this data as JSON, and you can import it again.
+Your browser keeps the presets, the calibration profiles and your last sheet
+settings. You can export this data as JSON, and you can import it again. The
+project itself stays in memory: if you reload the page, you must load your
+files again.
 
 The application also reads the `layout.json` files of the older desktop
 versions, thus your old projects still work.
@@ -155,15 +167,25 @@ npm install
 npm run dev                             # development server
 npm run test:e2e                        # end-to-end test in Chrome
 npm run build                           # production build, into web/dist
-npx wrangler deploy                     # publish the site
+npx wrangler@4 deploy                   # publish the site
 ```
+
+`npm run dev` does not make the `ffmpeg.wasm` files. Only `npm run build` and
+`npm run test:e2e` make them. Thus the AVI files and the camera MOV files do
+not open in the development server until you do one of those two commands one
+time.
 
 The CI workflow does the same tests for each push and for each pull request.
 When the tests pass on the `main` branch, the workflow publishes the site.
 
 ## License
 
+Source code: <https://github.com/kamiru-art/mxm_video_converter>
+
 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). You
 can use this work, adapt it and give it to other persons. You cannot sell it,
 and you cannot make money from it. All work that you build on it must stay
 free and must keep the same license. Refer to [LICENSE](LICENSE).
+
+The core embeds the DejaVu Sans font. That font has its own license. Refer to
+[rust-core/assets/DejaVuSans-LICENSE.txt](rust-core/assets/DejaVuSans-LICENSE.txt).

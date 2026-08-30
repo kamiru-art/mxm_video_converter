@@ -12,7 +12,7 @@ pub fn hex_to_rgb(color: &str) -> [u8; 3] {
     } else {
         c.to_string()
     };
-    if c.len() != 6 {
+    if c.len() != 6 || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
         return [0, 0, 0];
     }
     let p = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).unwrap_or(0);
@@ -393,5 +393,17 @@ mod tests {
         assert!(effective_lut(Some(&lut2), 100.0, 0.0, None).is_some());
         // fuerza 0 anula la curva
         assert!(effective_lut(Some(&lut2), 0.0, 0.0, None).is_none());
+    }
+
+    #[test]
+    fn hex_to_rgb_survives_non_ascii() {
+        // c.len() cuenta bytes: "€€" son 6 bytes y 2 caracteres, así que pasaba
+        // el control de longitud y luego &c[0..2] partía un carácter y reventaba.
+        assert_eq!(hex_to_rgb("€€"), [0, 0, 0]);
+        assert_eq!(hex_to_rgb("€"), [0, 0, 0]);
+        assert_eq!(hex_to_rgb("#zzzzzz"), [0, 0, 0]);
+        // los válidos siguen funcionando
+        assert_eq!(hex_to_rgb("#FF8000"), [255, 128, 0]);
+        assert_eq!(hex_to_rgb("f80"), [255, 136, 0]);
     }
 }

@@ -343,7 +343,7 @@ export function mountPhase1(root) {
   modeCheck.input.addEventListener('change', () => {
     s.mode = modeCheck.input.checked ? 'cyanotype' : 'normal';
     cyanBody.style.display = modeCheck.input.checked ? '' : 'none';
-    simulateToggle.parentElement.style.display = modeCheck.input.checked ? '' : 'none';
+    simulateToggle.label.parentElement.style.display = modeCheck.input.checked ? '' : 'none';
     persist(); refreshPreview();
   });
 
@@ -511,7 +511,6 @@ export function mountPhase1(root) {
   const simulateToggle = check('Simulate final blue print', false);
   simulateToggle.input.addEventListener('change', () => { ph1.previewSimulate = simulateToggle.input.checked; refreshPreview(); });
   simulateToggle.label.style.color = 'var(--cian-200)';
-  simulateToggle.label.parentElement;
 
   let previewBusy = false, previewQueued = false, previewTimer = null;
   function refreshPreviewSoon() {

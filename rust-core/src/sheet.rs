@@ -470,6 +470,9 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     }
 
     let (landscape, cols, rows) = resolve_page_layout(s, first_frame, meta_h + meta_halo, label_gap);
+    if cols == 0 || rows == 0 {
+        return Err("The sheet needs at least one column and one row.".into());
+    }
     let (page_w, page_h) = page_size_px(&s.paper, dpi, landscape, s.custom_w_mm, s.custom_h_mm);
     // tope contra lienzos absurdos (DPI/tamaño tecleados u hostiles): sin él,
     // w*h*3 puede desbordar usize en wasm32 o abortar por falta de memoria
@@ -488,7 +491,7 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     let cell_h = (content_h - ((rows - 1) as i64 * gutter) as f64) / rows as f64;
     let label_area = if meta_h > 0 { meta_h + meta_halo + label_gap } else { 0 };
     let img_area_h = cell_h - label_area as f64;
-    if cell_w <= 1.0 || img_area_h <= 1.0 {
+    if !cell_w.is_finite() || !img_area_h.is_finite() || cell_w <= 1.0 || img_area_h <= 1.0 {
         return Err(
             "Not enough room for the cells. Reduce columns/rows, margins, \
              gutter or halo, or increase the sheet size/DPI."
@@ -1316,5 +1319,24 @@ mod tests {
         }
         let got = frame_fit_area(&s, l.landscape, 32.0, 9.0, l.meta_h, l.label_gap, l.cols, l.rows);
         assert!((got - best_area).abs() < 1.0, "got={got} best={best_area}");
+    }
+
+    #[test]
+    fn zero_cols_or_rows_is_rejected() {
+        // cols = 0 hacía que (cols - 1) desbordara, cell_w saliera +inf (que se
+        // colaba por el control de <= 1.0) y render_page dividiera entre cero.
+        let mut s = base_settings();
+        s.orientation = "Vertical".into();
+        s.gutter_mm = 0.0;
+        s.cols = 0;
+        s.rows = 3;
+        assert!(build_layout(&s, (4.0, 3.0)).is_err());
+        s.cols = 3;
+        s.rows = 0;
+        assert!(build_layout(&s, (4.0, 3.0)).is_err());
+        // el caso normal sigue construyendo
+        s.cols = 3;
+        s.rows = 3;
+        assert!(build_layout(&s, (4.0, 3.0)).is_ok());
     }
 }

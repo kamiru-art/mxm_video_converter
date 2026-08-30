@@ -1,40 +1,25 @@
-# Entornos virtuales (creados por los lanzadores)
-.venv/
-venv/
-env/
+# Build outputs and dependencies live in the .gitignore of each subproject:
+#   rust-core/.gitignore  -> /target
+#   web/.gitignore        -> node_modules/, dist/, src/wasm/
 
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-
-# Configuración local del usuario (se guarda fuera del repo de todas formas)
-settings.json
-
-# Carpetas de salida típicas
-output/
-salida/
-contact_sheets/
-*.contact_sheets/
-
-# Sistema
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Editores
-.vscode/
-.idea/
-*.swp
-
-# Núcleo de ffmpeg.wasm (se genera en el build desde node_modules)
+# ffmpeg.wasm core (the build generates it from node_modules)
 web/public/ffmpeg/
 
-# Coverage reports (local test runs only; CI produces its own)
+# Coverage reports: they belong to the local test runs and to CI, not here
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
+
+# Python virtual environment left over from the retired desktop application
+.venv/
+
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
