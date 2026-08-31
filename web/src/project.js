@@ -11,16 +11,25 @@ export const project = {
   /** PNG de las hojas de la última generación (solo proyectos cortos): la
    *  fase ② las usa para simular escaneos sin imprimir nada. */
   sheetImages: new Map(),  // nombre de hoja → Blob PNG
-  processedFrames: new Map(), // etiqueta → {png: Uint8Array} (fase ②)
+  processedFrames: new Map(), // etiqueta → Blob PNG del fotograma (fase ②)
   lastReport: null,
 };
 
 const rgbaCache = new Map(); // `${idx}:${full}` → {data,w,h}
 let cacheBytes = 0;
 
+/** Empieza un proyecto: se van los fotogramas Y todo lo derivado de ellos.
+ *  Dejar el layout, las hojas o los fotogramas procesados del proyecto
+ *  anterior no es "conservar trabajo": la fase ④ los da por buenos y rearma
+ *  el video que ya no está en pantalla, mientras cada control visible nombra
+ *  el proyecto nuevo. */
 export function clearFrames() {
   project.frames = [];
   project.videoMeta = {};
+  project.layoutJson = null;
+  project.sheetImages.clear();
+  project.processedFrames.clear();
+  project.lastReport = null;
   rgbaCache.clear();
   cacheBytes = 0;
 }

@@ -316,6 +316,11 @@ export function mountPhase2(root) {
       recycleIdle(); // liberar la memoria WASM que infló el lote
       renderSummary();
       toast('Processing finished. Check the report.', 'ok');
+    } catch (e) {
+      // la zona de soltar y el botón de reprocesar lanzan el lote sin await:
+      // lo que falle al preparar el contexto (GPU, layout) no lo ve nadie más
+      console.error(e);
+      toast(`Could not process the scans: ${e.message ?? e}`, 'err');
     } finally {
       prog.hide();
       processing = false;
@@ -325,7 +330,13 @@ export function mountPhase2(root) {
   }
 
   /** Vuelve a procesar UN escaneo (tras asignarle una hoja a mano) y cambia
-   *  su fila en el sitio, sin tocar el resto del informe. */
+   *  su fila en el sitio, sin tocar el resto del informe.
+   *
+   *  Devuelve si el reprocesado LLEGÓ A CORRER: quien llama deshace la
+   *  asignación cuando no. Que el escaneo siga sin hoja no cuenta como
+   *  fallo — es un resultado, y el aviso ya lo dice —; deshacerlo también
+   *  impediría volver a “automatic” justamente en los escaneos que nadie
+   *  identifica solo, que es lo que pide la caja de conflictos. */
   async function reprocessOne(name) {
     const f = loadedScans.get(name);
     if (!f) { toast(`“${name}” is no longer loaded: drop it again to reprocess it.`, 'err'); return false; }
@@ -335,6 +346,7 @@ export function mountPhase2(root) {
     reprocessBtn.disabled = true;
     prog.show();
     prog.set(0.35, `reprocessing ${name}…`);
+    let ran = false;
     try {
       const ctx = await makeContext();
       describeMachine(ctx.gpu, 1);
@@ -344,6 +356,7 @@ export function mountPhase2(root) {
       addResult(entry); // reemplaza la fila anterior de este mismo archivo
       prog.set(1, '');
       recycleIdle();
+      ran = true;
       const n = entry.result.hoja_numero;
       toast(n != null
         ? `“${name}” → sheet ${n}: ${entry.frames.length} frame(s) cropped.`
@@ -358,7 +371,7 @@ export function mountPhase2(root) {
       reprocessBtn.disabled = false;
       refreshReprocess();
     }
-    return true;
+    return ran;
   }
 
   // La tabla del informe se construye INCREMENTALMENTE: cada resultado crea
@@ -399,8 +412,10 @@ export function mountPhase2(root) {
       const previous = ph2.assign[scanName];
       if (sel.value === '') delete ph2.assign[scanName];
       else ph2.assign[scanName] = parseInt(sel.value, 10);
-      // si no se pudo reprocesar (otro lote en marcha), el desplegable no
-      // debe quedarse mostrando una hoja que nadie aplicó
+      // si el reprocesado no llegó a correr (otro lote en marcha, el archivo
+      // ya no está cargado, el escaneo falló), el desplegable no debe quedarse
+      // mostrando una hoja que nadie aplicó, ni ph2.assign guardarla para
+      // reaplicarla en el siguiente lote
       if (!(await reprocessOne(scanName))) {
         if (previous == null) delete ph2.assign[scanName];
         else ph2.assign[scanName] = previous;
@@ -586,18 +601,25 @@ export function mountPhase2(root) {
   const downloadRow = el('div', { class: 'btn-row' },
     el('button', {
       class: 'btn sun', onclick: async () => {
-        const files = new Map();
-        for (const [label, png] of project.processedFrames) {
-          files.set(`frames/${sanitizeLabel(label)}.png`, png);
+        try {
+          const files = new Map();
+          for (const [label, png] of project.processedFrames) {
+            files.set(`frames/${sanitizeLabel(label)}.png`, png);
+          }
+          for (const { result, sinIdentificar } of ph2.results) {
+            for (const f of sinIdentificar ?? []) files.set(`sin_identificar/${sanitizeLabel(f.label)}.png`, f.png);
+          }
+          const informe = buildInforme();
+          files.set('informe.json', new TextEncoder().encode(JSON.stringify(informe, null, 2)));
+          files.set('informe.csv', new TextEncoder().encode(informeCsv()));
+          const zip = await makeZip(files);
+          download(zip, 'processed_frames.zip', 'application/zip');
+        } catch (e) {
+          // un ZIP de cientos de fotogramas puede quedarse sin memoria: sin
+          // esto, el botón simplemente no hacía nada
+          console.error(e);
+          toast(`Could not build the ZIP: ${e.message ?? e}`, 'err');
         }
-        for (const { result, sinIdentificar } of ph2.results) {
-          for (const f of sinIdentificar ?? []) files.set(`sin_identificar/${sanitizeLabel(f.label)}.png`, f.png);
-        }
-        const informe = buildInforme();
-        files.set('informe.json', new TextEncoder().encode(JSON.stringify(informe, null, 2)));
-        files.set('informe.csv', new TextEncoder().encode(informeCsv()));
-        const zip = await makeZip(files);
-        download(zip, 'processed_frames.zip', 'application/zip');
       },
     }, 'Download frames + report (ZIP)'),
     el('button', {

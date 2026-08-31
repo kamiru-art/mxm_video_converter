@@ -128,6 +128,12 @@ pub fn render_sheet(
     let labels: Vec<String> =
         serde_json::from_str(labels_json).map_err(|e| err(format!("Invalid labels: {e}")))?;
     let res = sheet::render_page(&s, &l, &frames, &labels, sheet_num as i64, render);
+    // una etiqueta que no cabe en un QR aborta la página entera: sin esto
+    // llegaba a JS un resultado sin `png` y sin motivo, y la interfaz no tenía
+    // nada que enseñar más que un hueco
+    if let Some(msg) = res.error {
+        return Err(err(msg));
+    }
     let out = Object::new();
     if let Some(mut img) = res.image {
         match finish {
@@ -255,16 +261,15 @@ pub fn effective_curve(lut_json: &str, strength: f64, adapt: f64, hist_json: &st
 /// para mostrarla o usarla como fotograma. Devuelve {w, h, rgba, sixteen}.
 #[wasm_bindgen]
 pub fn decode_image(bytes: &[u8]) -> Result<JsValue, JsValue> {
-    let (dimg, has_alpha) = codecs::decode(bytes).map_err(err)?;
-    let sixteen = matches!(dimg, DynImg::U16(_));
-    let rgb = dimg.to_rgb8();
-    let mut rgba = Vec::with_capacity(rgb.w * rgb.h * 4);
-    for p in rgb.data.chunks_exact(3) {
-        rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
-    }
+    // conserva el alfa a propósito: el color de fondo lo elige el usuario y se
+    // aplica al componer la hoja, no aquí (ver codecs::decode_rgba8). Antes se
+    // aplanaba sobre blanco y el ajuste "alpha over colour" no hacía nada para
+    // los TIFF y los PNG de 16 bits, que son justo los que decodifica el
+    // núcleo; el mismo archivo en PNG normal sí lo respetaba.
+    let (rgba, w, h, sixteen, has_alpha) = codecs::decode_rgba8(bytes).map_err(err)?;
     let out = Object::new();
-    Reflect::set(&out, &"w".into(), &JsValue::from_f64(rgb.w as f64)).ok();
-    Reflect::set(&out, &"h".into(), &JsValue::from_f64(rgb.h as f64)).ok();
+    Reflect::set(&out, &"w".into(), &JsValue::from_f64(w as f64)).ok();
+    Reflect::set(&out, &"h".into(), &JsValue::from_f64(h as f64)).ok();
     Reflect::set(&out, &"rgba".into(), &Uint8Array::from(rgba.as_slice())).ok();
     Reflect::set(&out, &"sixteen".into(), &JsValue::from_bool(sixteen)).ok();
     Reflect::set(&out, &"had_alpha".into(), &JsValue::from_bool(has_alpha)).ok();

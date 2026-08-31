@@ -47,7 +47,18 @@ const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4', '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon',
+  '.avi': 'video/x-msvideo', '.mov': 'video/quicktime',
 };
+
+// La CSP se lee de web/public/_headers, el mismo archivo que Cloudflare
+// aplica al sitio publicado. Se sirve también aquí para que una política que
+// rompa la aplicación falle en este test y no en producción, que es donde una
+// CSP mal puesta se descubre tarde y sin señal: el navegador bloquea en
+// silencio y la página aparece simplemente vacía.
+const CSP = (await readFile(new URL('./public/_headers', import.meta.url), 'utf8'))
+  .match(/^[ \t]+Content-Security-Policy:[ \t]*(.+)$/m)?.[1]?.trim();
+if (!CSP) throw new Error('No Content-Security-Policy in web/public/_headers');
 
 const server = createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -55,7 +66,10 @@ const server = createServer(async (req, res) => {
   const file = join(DIST, path);
   try {
     const data = await readFile(file);
-    res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[extname(file)] ?? 'application/octet-stream',
+      'Content-Security-Policy': CSP,
+    });
     res.end(data);
   } catch {
     res.writeHead(404);
@@ -85,7 +99,17 @@ const browser = await puppeteer.launch({
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
 const page = await browser.newPage();
-page.on('console', (m) => { if (m.text().startsWith('[E2E]')) console.log(m.text()); });
+// Una violación de CSP no lanza: el navegador bloquea el recurso, avisa por
+// consola y la página sigue a medias. Si no se recogen aquí, una política mal
+// puesta pasa el test y rompe el sitio publicado.
+const cspViolations = [];
+page.on('console', (m) => {
+  const t = m.text();
+  if (t.startsWith('[E2E]')) console.log(t);
+  if (/Content Security Policy|Refused to (load|execute|connect|create)/i.test(t)) {
+    cspViolations.push(t);
+  }
+});
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto(`http://127.0.0.1:${port}/e2e.html`);
 try {
@@ -97,6 +121,10 @@ const title = await page.title();
 const log = await page.$eval('#log', (el) => el.textContent).catch(() => '(no log)');
 console.log('---\nRESULT:', title);
 console.log(log);
+if (cspViolations.length) {
+  console.log(`\nCSP: ${cspViolations.length} violation(s) against web/public/_headers:`);
+  for (const v of new Set(cspViolations)) console.log('  ' + v);
+}
 await browser.close();
 server.close();
-process.exit(title === 'E2E-OK' ? 0 : 1);
+process.exit(title === 'E2E-OK' && cspViolations.length === 0 ? 0 : 1);

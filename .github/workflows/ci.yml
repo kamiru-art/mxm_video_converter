@@ -13,7 +13,7 @@
 # in between and no second build to keep in sync.
 #
 # The deploy runs on a push to `main` AND on a manual run (workflow_dispatch)
-# of `main`. It never runs for a pull request: once the repository is public,
+# of `main`. It never runs for a pull request: the repository is public, so
 # anyone can open one, and a fork must not be able to publish. Manual runs are
 # allowed because otherwise the only way to republish — after adding a secret,
 # or to redo a deploy that was skipped — is to invent a commit.
@@ -25,6 +25,12 @@
 # and the workflow stays green. That means a green run is NOT by itself proof
 # that the site was published: check the deploy step, or the Worker's
 # modified_on.
+#
+# Every third-party action is pinned to a commit SHA, not to a tag. A tag is
+# mutable: whoever owns the action can move it to different code, and that
+# code runs in this job, which can read the deploy token. The version comment
+# next to each SHA is what the SHA was when it was pinned; to upgrade, change
+# both together.
 
 name: CI
 
@@ -47,43 +53,69 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust-core
       - name: Tests (native, includes e2e roundtrips)
         run: cargo test --release
         working-directory: rust-core
-      - name: Clippy (informational)
-        run: cargo clippy --release --all-targets 2>&1 | tail -5
+
+      # Clippy warnings are NOT fatal: the core carries a backlog of them,
+      # mostly indexed-loop lints in the pixel kernels where the index is the
+      # point. What must stay fatal is clippy failing to run at all — a real
+      # compile error. Without `pipefail` the pipe to `tail` returns tail's
+      # exit status, which is always 0, so the step could not fail either way.
+      - name: Clippy (warnings informational, errors fatal)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --release --all-targets 2>&1 | tail -5
         working-directory: rust-core
 
   web:
     name: Web (WASM build + browser E2E + deploy)
-    # El despliegue sale de este job, así que tiene que esperar a los tests
-    # nativos del núcleo: publicar algo que no los ha pasado sería peor que
-    # tardar minuto y medio más. Es el único motivo por el que estos dos jobs
-    # ya no corren en paralelo.
+    # The deploy comes out of this job, so it has to wait for the native tests
+    # of the core: publishing something that has not passed them would be
+    # worse than taking a minute and a half longer. That is the only reason
+    # these two jobs no longer run in parallel.
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust-core
+
+      # This used to be `curl … | sh`, which runs whatever that URL serves at
+      # the moment the job runs, with no record of what that was. This job can
+      # reach the deploy step below, so it is worth pinning: fixed version,
+      # and the archive is rejected unless its checksum matches.
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        env:
+          WASM_PACK_VERSION: v0.15.0
+          WASM_PACK_SHA256: c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
+        run: |
+          set -euo pipefail
+          pkg="wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl"
+          curl -sSLf -o wasm-pack.tar.gz \
+            "https://github.com/wasm-bindgen/wasm-pack/releases/download/${WASM_PACK_VERSION}/${pkg}.tar.gz"
+          echo "${WASM_PACK_SHA256}  wasm-pack.tar.gz" | sha256sum -c -
+          tar -xzf wasm-pack.tar.gz -C "$HOME/.cargo/bin" --strip-components=1 "${pkg}/wasm-pack"
+          rm wasm-pack.tar.gz
+          wasm-pack --version
+
       - name: Compile core to WebAssembly
         run: wasm-pack build --release --target web --out-dir ../web/src/wasm
         working-directory: rust-core
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -109,7 +141,7 @@ jobs:
       # site went unpublished with every test green. The artifact is now only
       # a convenience for downloading a build, so losing it costs nothing.
       - name: Upload site artifact (best effort)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         continue-on-error: true
         with:
           name: dist
@@ -128,20 +160,29 @@ jobs:
         id: creds
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -n "$CF_TOKEN" ]; then
+          # BOTH are required. The account id used to live in wrangler.jsonc
+          # and is now only a secret, so checking the token alone would let
+          # the job pass this gate and then fail inside wrangler — or, worse,
+          # publish to whichever account the token can reach.
+          missing=""
+          [ -n "$CF_TOKEN" ] || missing="CLOUDFLARE_API_TOKEN"
+          [ -n "$CF_ACCOUNT" ] || missing="${missing:+$missing and }CLOUDFLARE_ACCOUNT_ID"
+          if [ -z "$missing" ]; then
             echo "have=true" >> "$GITHUB_OUTPUT"
           else
             echo "have=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::CLOUDFLARE_API_TOKEN secret is not set — skipping deploy. Add it in Settings → Secrets to enable automatic deploys."
+            echo "::warning::$missing not set — skipping deploy. Add it in Settings → Secrets to enable automatic deploys."
           fi
       - name: Deploy (wrangler)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.creds.outputs.have == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: web
-          # la acción instala wrangler 3 por defecto, que no entiende la
-          # config de Worker con assets estáticos
+          # wrangler 3 does not understand the Worker config with static
+          # assets. Action v4 already defaults to wrangler 4; this stays
+          # explicit so a change of default cannot silently take the site back.
           wranglerVersion: "4"

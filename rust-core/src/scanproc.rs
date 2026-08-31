@@ -1,4 +1,4 @@
-//! Procesador de escaneos: port fiel de la fase ② de la app original.
+//! Procesador de escaneos de la fase ②.
 //! Alinea cada escaneo con los marcadores ArUco (multi-estrategia, espejo y
 //! polaridad automáticos), lo identifica por QR y recorta cada fotograma.
 
@@ -17,6 +17,19 @@ pub const RESIDUAL_OUTLIER_MM: f64 = 2.5;
 pub const RESIDUAL_WARN_MM: f64 = 1.0;
 pub const FINE_ALIGN_MIN_MM: f64 = 0.15;
 pub const MAX_IMAGE_PIXELS: usize = 250_000_000;
+/// Escala medida admisible (px de escaneo por px de layout). Fuera de este
+/// rango la medida es basura, y por arriba el enderezado deja de caber en
+/// memoria por mucho que el lienzo sea razonable.
+pub const SCALE_MIN: f64 = 0.2;
+pub const SCALE_MAX: f64 = 12.0;
+
+/// ¿Cabe un lienzo de `w`×`h` px en el tope de la aplicación? El producto se
+/// evalúa en i128 porque `usize` es de 32 bits en wasm32 y `[profile.release]`
+/// no comprueba desbordamiento: en usize, 65544×65544 da la vuelta a 1_048_640
+/// y colaría por debajo del tope. Mismo patrón que en `sheet.rs`.
+pub fn fits_image_budget(w: u64, h: u64) -> bool {
+    w > 0 && h > 0 && (w as i128) * (h as i128) <= MAX_IMAGE_PIXELS as i128
+}
 
 #[derive(Clone)]
 pub struct ScanOptions {
@@ -89,7 +102,7 @@ pub struct MultiDetect {
 }
 
 /// Prueba variantes de preprocesado (ambas polaridades) y perfiles del
-/// detector; devuelve la mejor detección. Port de _detect_markers_multi.
+/// detector; devuelve la mejor detección.
 /// `target`: cuántos marcadores hay REALMENTE en una hoja. En layouts sin QR
 /// `expected` es la unión de los IDs de todas las hojas, así que sin este tope
 /// el detector agotaría todas las variantes buscando marcadores inexistentes.
@@ -942,7 +955,7 @@ pub fn detect_scan(
 
     // 3. Escala medida.
     let mut s = match estimate_scale(&refined, layout_bboxes) {
-        Some(s) if (0.2..=12.0).contains(&s) => s,
+        Some(s) if (SCALE_MIN..=SCALE_MAX).contains(&s) => s,
         other => fail!("Could not estimate the scan scale (s={:?}).", other),
     };
     let diag = ((page_w * s).powi(2) + (page_h * s).powi(2)).sqrt();
@@ -957,7 +970,7 @@ pub fn detect_scan(
         refined.extend(extra);
         res["marcadores"] = json!(refined.len());
         if let Some(s2) = estimate_scale(&refined, layout_bboxes) {
-            if (0.2..=12.0).contains(&s2) {
+            if (SCALE_MIN..=SCALE_MAX).contains(&s2) {
                 s = s2;
             }
         }
@@ -1029,10 +1042,11 @@ pub fn detect_scan(
         None
     };
 
-    // 5. Dimensiones del enderezado.
+    // 5. Dimensiones del enderezado. El área NO se comprueba en usize: en
+    // wasm32 son 32 bits y el producto daría la vuelta por debajo del tope.
     let out_w = (page_w * s).round() as usize;
     let out_h = (page_h * s).round() as usize;
-    if out_w == 0 || out_h == 0 || out_w * out_h > MAX_IMAGE_PIXELS {
+    if !fits_image_budget(out_w as u64, out_h as u64) {
         fail!("The requested rectification is disproportionate ({out_w}×{out_h} px); check the layout.");
     }
     Ok(DetectData { m, s, flipped: det.flipped, out_w, out_h, refined, local })
@@ -1192,10 +1206,20 @@ pub fn finish_scan(
             if opts.resize_to_original {
                 if let Some(op) = info.get("orig_px").and_then(|v| v.as_array()) {
                     if op.len() == 2 {
-                        let ow = op[0].as_u64().unwrap_or(0) as usize;
-                        let oh = op[1].as_u64().unwrap_or(0) as usize;
-                        if ow > 0 && oh > 0 {
-                            crop = crate::img::resize_dyn(&crop, ow, oh, crate::img::Filter::Lanczos3);
+                        // orig_px sale del layout: se mide en u64 y se compara
+                        // con el tope ANTES de estrechar a usize, que en wasm32
+                        // trunca a 32 bits y luego desborda dentro del remuestreo.
+                        let ow = op[0].as_u64().unwrap_or(0);
+                        let oh = op[1].as_u64().unwrap_or(0);
+                        if fits_image_budget(ow, oh) {
+                            crop = crate::img::resize_dyn(
+                                &crop,
+                                ow as usize,
+                                oh as usize,
+                                crate::img::Filter::Lanczos3,
+                            );
+                        } else if ow > 0 && oh > 0 {
+                            warn!("'{etiqueta}': the layout asks to restore an impossible original size ({ow}×{oh} px); the crop is left at scan resolution.");
                         }
                     }
                 }
@@ -1382,4 +1406,38 @@ fn build_overlay(
         }
     }
     Some(mini)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_budget_survives_a_32_bit_wrap() {
+        // El caso del informe: lienzo de 5462×5462 px con escala ×12 da un
+        // enderezado de 65544×65544. El área real son 4_296_015_936 px, pero en
+        // usize de 32 bits (wasm32, sin overflow-checks) da la vuelta a
+        // 1_048_640 y colaba por debajo del tope.
+        let (w, h) = (5462u64 * 12, 5462u64 * 12);
+        assert_eq!((w, h), (65_544, 65_544));
+        let wrapped = (w * h) % (1u64 << 32);
+        assert_eq!(wrapped, 1_048_640);
+        assert!(wrapped < MAX_IMAGE_PIXELS as u64, "el guard viejo lo dejaba pasar");
+        assert!(!fits_image_budget(w, h));
+        // un lienzo degenerado (todo el tope de ancho, la escala máxima de
+        // alto) tampoco entra
+        assert!(!fits_image_budget(MAX_IMAGE_PIXELS as u64, SCALE_MAX as u64));
+    }
+
+    #[test]
+    fn image_budget_accepts_real_scans_and_rejects_the_degenerate() {
+        // A4 a 600 dpi enderezado sigue entrando
+        assert!(fits_image_budget(4960, 7016));
+        assert!(fits_image_budget(MAX_IMAGE_PIXELS as u64, 1));
+        assert!(!fits_image_budget(0, 100));
+        assert!(!fits_image_budget(100, 0));
+        // orig_px del layout: un u64 que en wasm32 se truncaría a 1 px al
+        // estrecharlo a usize se rechaza antes de llegar al remuestreo
+        assert!(!fits_image_budget((1u64 << 32) + 1, 1));
+    }
 }

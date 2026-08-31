@@ -4,6 +4,7 @@
 
 use crate::img::{resize_gray, Filter, Gray};
 use crate::imgproc::{adaptive_threshold_inv, otsu_threshold, threshold_binary};
+use qrcode::types::QrError;
 use qrcode::{EcLevel, QrCode};
 
 pub const QR_PREFIX: &str = "K2";
@@ -42,11 +43,37 @@ pub fn parse_qr_payload(text: &str) -> Option<QrIdentity> {
     Some(QrIdentity { proyecto: None, hoja: None, celda: None, etiqueta: text.to_string() })
 }
 
+/// Bytes que caben en un QR de versión 40 con corrección H: el tope real del
+/// payload. Se cita en el mensaje de error para que el aviso sea accionable.
+const MAX_QR_BYTES_ECC_H: usize = 1273;
+
+fn encode_error(text: &str, e: QrError) -> String {
+    match e {
+        QrError::DataTooLong => format!(
+            "The label is too long for a QR code at error-correction level H: \
+             {} bytes, and the limit is about {MAX_QR_BYTES_ECC_H}. Shorten the project \
+             name or the frame labels.",
+            text.len()
+        ),
+        other => format!("The QR code could not be generated ({other})."),
+    }
+}
+
+/// Comprueba que el payload cabe en un QR con corrección H, sin rasterizar
+/// nada: sirve para avisar antes de dibujar la hoja.
+pub fn check_payload_fits(text: &str) -> Result<(), String> {
+    QrCode::with_error_correction_level(text.as_bytes(), EcLevel::H)
+        .map(|_| ())
+        .map_err(|e| encode_error(text, e))
+}
+
 /// Genera un QR con corrección H y zona de silencio de 2 módulos, reescalado
-/// NEAREST al tamaño pedido (como la app original).
-pub fn qr_image(text: &str, size_px: usize, inverted: bool) -> Gray {
+/// NEAREST al tamaño pedido para que los módulos queden con bordes duros.
+/// Devuelve Err cuando el texto no cabe: sustituirlo por un QR de "?" dejaba
+/// una hoja impecable a la vista, y el fallo solo aparecía al escanearla.
+pub fn try_qr_image(text: &str, size_px: usize, inverted: bool) -> Result<Gray, String> {
     let code = QrCode::with_error_correction_level(text.as_bytes(), EcLevel::H)
-        .unwrap_or_else(|_| QrCode::new(b"?").unwrap());
+        .map_err(|e| encode_error(text, e))?;
     let n = code.width();
     let border = 2usize;
     let total = n + 2 * border;
@@ -67,7 +94,14 @@ pub fn qr_image(text: &str, size_px: usize, inverted: bool) -> Gray {
             out.data[y * size_px + x] = v;
         }
     }
-    out
+    Ok(out)
+}
+
+/// Variante infalible, solo para textos de longitud fija de la propia app (la
+/// carta de calibración). Cualquier texto que venga del usuario tiene que ir
+/// por `try_qr_image`, que devuelve el error en vez de tragárselo.
+pub fn qr_image(text: &str, size_px: usize, inverted: bool) -> Gray {
+    try_qr_image(text, size_px, inverted).expect("texto de longitud fija")
 }
 
 fn try_decode(gray: &Gray) -> Option<String> {
@@ -83,7 +117,7 @@ fn try_decode(gray: &Gray) -> Option<String> {
 }
 
 /// Decodifica un QR probando varias mejoras de imagen (gris ampliado, Otsu,
-/// umbral adaptativo, polaridad invertida) — port del pipeline original.
+/// umbral adaptativo, polaridad invertida).
 /// Tope de píxeles del recorte una vez ampliado (2 Mpx ~ 1414×1414, de sobra
 /// para cualquier QR real: uno de 10 mm a 600 ppp ocupa unos 236 px).
 const MAX_UPSCALE_PIXELS: usize = 2_000_000;
@@ -180,15 +214,34 @@ mod tests {
     #[test]
     fn qr_encode_decode_roundtrip() {
         let text = qr_payload("proj", 1, 0, "abc_001");
-        let img = qr_image(&text, 240, false);
+        let img = try_qr_image(&text, 240, false).unwrap();
         let got = decode_qr(&img).expect("QR debería decodificarse");
         assert_eq!(got, text);
     }
 
     #[test]
+    fn over_long_payload_is_an_error_not_a_question_mark() {
+        // Antes esto devolvía un QR perfectamente legible que codificaba "?":
+        // la hoja se imprimía bien y el fallo salía al escanear.
+        let text = qr_payload(&"p".repeat(1400), 1, 0, "abc_001");
+        let e = match try_qr_image(&text, 240, false) {
+            Ok(_) => panic!("un payload de 1400 bytes no cabe en un QR con ECC H"),
+            Err(e) => e,
+        };
+        assert!(e.contains("too long"), "{e}");
+        assert!(e.contains("1273"), "{e}");
+        assert_eq!(check_payload_fits(&text).unwrap_err(), e);
+        // El payload que sí cabe se sigue generando y decodificando.
+        let ok = qr_payload("proj", 1, 0, "abc_001");
+        assert!(check_payload_fits(&ok).is_ok());
+        let img = try_qr_image(&ok, 240, false).unwrap();
+        assert_eq!(decode_qr(&img).as_deref(), Some(ok.as_str()));
+    }
+
+    #[test]
     fn qr_decode_inverted() {
         let text = qr_payload("proj", 2, 5, "xy_9");
-        let img = qr_image(&text, 240, true); // invertido (negativo)
+        let img = try_qr_image(&text, 240, true).unwrap(); // invertido (negativo)
         let got = decode_qr(&img).expect("QR invertido debería decodificarse");
         assert_eq!(got, text);
     }
@@ -203,12 +256,12 @@ mod debug_tests {
     fn small_qr_sizes_decode() {
         for size in [40usize, 47, 59, 70, 100] {
             let text = format!("KQR|{size}");
-            let img = qr_image(&text, size, false);
+            let img = try_qr_image(&text, size, false).unwrap();
             let got = decode_qr(&img);
             println!("size={size} -> {:?}", got);
         }
         // y con padding blanco alrededor (como el crop del análisis)
-        let img = qr_image("KQR|8", 47, false);
+        let img = try_qr_image("KQR|8", 47, false).unwrap();
         let mut padded = Gray::new(75, 75, 255);
         for y in 0..47 { for x in 0..47 { padded.data[(y+14)*75 + (x+14)] = img.at(x, y); } }
         println!("padded 47 -> {:?}", decode_qr(&padded));

@@ -189,6 +189,22 @@ fn sample_cells(gray: &Gray, quad: &[Pt; 4], modules: usize) -> Vec<f64> {
     means
 }
 
+/// Bits de corrección admitidos al comparar contra el diccionario. La tasa es
+/// una fracción de la capacidad del diccionario, pero truncarla dejaba
+/// `allowed` en 0 en los 4x4 (`max_correction() == 1`) con cualquier tasa
+/// menor que 1: los diccionarios con menos redundancia, que además son los que
+/// se imprimen más pequeños, se quedaban sin corrección. Una tasa positiva
+/// vale siempre al menos un bit; el tope sigue siendo `max_correction()`, que
+/// es el radio dentro del cual la coincidencia con el diccionario es única.
+/// Una tasa de 0.0 sigue significando "sin corrección".
+fn allowed_correction(dict: Dict, rate: f32) -> u32 {
+    let cap = dict.max_correction();
+    if cap == 0 || !rate.is_finite() || rate <= 0.0 {
+        return 0;
+    }
+    ((rate * cap as f32).floor() as u32).clamp(1, cap)
+}
+
 /// Identifica un candidato: devuelve (id, rotación) si coincide con el
 /// diccionario dentro de la corrección permitida.
 fn identify(cells: &[f64], dict: Dict, params: &DetectorParams) -> Option<(usize, usize)> {
@@ -231,7 +247,7 @@ fn identify(cells: &[f64], dict: Dict, params: &DetectorParams) -> Option<(usize
             bits[r * n + c] = bin[(r + 1) * modules + (c + 1)];
         }
     }
-    let allowed = (params.error_correction_rate * dict.max_correction() as f32).floor() as u32;
+    let allowed = allowed_correction(dict, params.error_correction_rate);
     let mut best: Option<(usize, usize, u32)> = None;
     let mut rot_bits = bits.clone();
     for rot in 0..4 {
@@ -375,6 +391,77 @@ mod tests {
     use super::*;
     use crate::geometry::apply_h;
     use crate::img::Gray;
+
+    /// Invierte un módulo interior del marcador ya rasterizado (size_px debe
+    /// ser múltiplo de n+2 para que el módulo caiga en píxeles exactos).
+    fn flip_module(m: &mut Gray, n: usize, row: usize, col: usize) {
+        let cell = m.w / (n + 2);
+        let (x0, y0) = ((col + 1) * cell, (row + 1) * cell);
+        for y in y0..y0 + cell {
+            for x in x0..x0 + cell {
+                m.data[y * m.w + x] = 255 - m.data[y * m.w + x];
+            }
+        }
+    }
+
+    /// Distancia de Hamming mínima del diccionario contando las 4 rotaciones
+    /// (también las de un marcador consigo mismo): es lo que acota cuántos
+    /// bits se pueden corregir sin que dos IDs distintos encajen a la vez.
+    fn min_inter_marker_distance(dict: Dict) -> u32 {
+        let n = dict.n();
+        let size = dict.size();
+        let mut min_d = u32::MAX;
+        for a in 0..size {
+            let ba = marker_bits(dict, a);
+            for b in 0..size {
+                let mut rot = marker_bits(dict, b);
+                for r in 0..4 {
+                    if a != b || r != 0 {
+                        min_d = min_d.min(hamming(&ba, &rot));
+                    }
+                    rot = rotate_bits(&rot, n);
+                }
+            }
+        }
+        min_d
+    }
+
+    #[test]
+    fn correction_is_enabled_and_stays_unambiguous() {
+        for dict in [Dict::Dict4x4_50, Dict::Dict4x4_100, Dict::Dict5x5_100] {
+            let tau = min_inter_marker_distance(dict);
+            let cap = dict.max_correction();
+            // El propio tope del diccionario tiene que ser decodificación única.
+            assert!(2 * cap < tau, "{dict:?}: cap={cap} tau={tau}");
+            for (nombre, params) in [("normal", PARAMS_NORMAL), ("cyano", PARAMS_CYANO)] {
+                let allowed = allowed_correction(dict, params.error_correction_rate);
+                assert!(allowed >= 1, "{dict:?}/{nombre}: corrección desactivada");
+                assert!(allowed <= cap, "{dict:?}/{nombre}: allowed={allowed} > cap={cap}");
+                assert!(2 * allowed < tau, "{dict:?}/{nombre}: allowed={allowed} tau={tau}");
+            }
+            // Sin corrección pedida, sin corrección aplicada.
+            assert_eq!(allowed_correction(dict, 0.0), 0);
+            assert_eq!(allowed_correction(dict, -1.0), 0);
+            assert_eq!(allowed_correction(dict, f32::NAN), 0);
+            // Una tasa disparatada no puede pasar del radio del diccionario.
+            assert_eq!(allowed_correction(dict, 99.0), cap);
+        }
+    }
+
+    #[test]
+    fn detects_4x4_marker_with_one_flipped_bit() {
+        // Un bit comido por la pintura o la química. Los 4x4 corrigen uno, que
+        // es justo lo que la tasa por defecto desactivaba.
+        for id in [0usize, 7, 23, 41] {
+            let mut m = generate_marker(Dict::Dict4x4_50, id, 120);
+            flip_module(&mut m, 4, 1, 2);
+            let mut canvas = Gray::new(400, 400, 255);
+            place_marker(&mut canvas, &m, 140, 140);
+            let dets = detect_markers(&canvas, Dict::Dict4x4_50, &PARAMS_NORMAL);
+            let ids: Vec<usize> = dets.iter().map(|d| d.id).collect();
+            assert_eq!(ids, vec![id], "id {id} con un bit invertido");
+        }
+    }
 
     fn place_marker(canvas: &mut Gray, m: &Gray, x: usize, y: usize) {
         for j in 0..m.h {

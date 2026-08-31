@@ -17,22 +17,36 @@ import { run, recycleIdle } from './pool.js';
 // sea legible (los MOV de cámara: HEVC 10 bits, ProRes, DNxHD…). La detección
 // no va por extensión sino por lo que este navegador pueda decodificar.
 
+// El Input devuelto es del LLAMADOR: `track` cuelga de él y sigue haciendo
+// falta para decodificar, así que quien lo recibe tiene que llamar a
+// input.dispose() (cierra el lector del Blob y los decodificadores abiertos).
+// Si el sondeo falla no lo recibe nadie y se cierra aquí mismo.
 async function probeMediabunny(file) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
-  const track = await input.getPrimaryVideoTrack();
-  if (!track) throw new Error('The file has no video track (or the format is not supported).');
-  const duration = await input.computeDuration();
-  let fps = 0;
   try {
-    const stats = await track.computePacketStats(120);
-    fps = stats.averagePacketRate || 0;
-  } catch { /* algunos contenedores no lo informan */ }
-  return { input, track, duration, fps, width: track.displayWidth, height: track.displayHeight };
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error('The file has no video track (or the format is not supported).');
+    const duration = await input.computeDuration();
+    let fps = 0;
+    try {
+      const stats = await track.computePacketStats(120);
+      fps = stats.averagePacketRate || 0;
+    } catch { /* algunos contenedores no lo informan */ }
+    return { input, track, duration, fps, width: track.displayWidth, height: track.displayHeight };
+  } catch (e) {
+    input.dispose();
+    throw e;
+  }
 }
 
 export async function probeVideo(file) {
   try {
-    return await probeMediabunny(file);
+    const p = await probeMediabunny(file);
+    // sondeo y nada más: aquí no decodifica nadie, así que el Input se cierra
+    // ya y no se devuelve (ni `track`, que moriría con él). El formato
+    // coincide con el de probeFallback
+    p.input.dispose();
+    return { duration: p.duration, fps: p.fps, width: p.width, height: p.height };
   } catch (e) {
     // mediabunny no abre el contenedor: que lo intente ffmpeg.wasm; si
     // tampoco puede, el error original es el informativo
@@ -45,6 +59,20 @@ export async function probeVideo(file) {
   }
 }
 
+/** Un rango vacío o invertido tiene que fallar, no colarse: cada
+ *  decodificador lo recortaba a su manera (Start 10 con End 5 daba UN
+ *  fotograma, Start más allá del final daba cero) y la interfaz lo anunciaba
+ *  en verde como una extracción correcta. `duration` es opcional: se conoce
+ *  solo después de sondear. Mismo texto en extractFramesFallback (avi.js). */
+function assertRange(start, end, duration = null) {
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) return;
+  const n = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} s` : 'not a number');
+  const e = new Error(`Invalid time range: start (${n(start)}) must come before end (${n(end)}).`
+    + (duration ? ` This video lasts ${duration.toFixed(2)} s.` : ''));
+  e.badRange = true; // lo mira extractFrames para no taparlo (ver abajo)
+  throw e;
+}
+
 /**
  * Extrae fotogramas como PNG lossless a resolución nativa.
  * opts: {start, end, fps (null = todos), onFrame(blob, thumbCanvas, t, i), onProgress(i, est)}
@@ -55,92 +83,125 @@ export async function extractFrames(file, opts = {}) {
     const { extractFramesFallback } = await import('./avi.js');
     return extractFramesFallback(file, opts);
   };
+  // lo tecleado, antes de decodificar nada: este es el único camino hacia los
+  // tres decodificadores (los dos de mediabunny y el de ffmpeg.wasm)
+  if (opts.end != null) assertRange(Math.max(0, opts.start ?? 0), opts.end);
   let probe;
   try {
     probe = await probeMediabunny(file);
   } catch (e) {
     try {
       return await useFallback();
-    } catch {
+    } catch (e2) {
+      // el respaldo es el único que conoce la duración de lo que mediabunny
+      // no abre: si lo que rechaza es el rango, ESE es el error informativo
+      if (e2?.badRange) throw e2;
       throw e;
     }
   }
-  // contenedor legible pero códec fuera del alcance de WebCodecs en este
-  // navegador (MOV HEVC 10 bits de cámara, ProRes…): decodificar con ffmpeg
-  if (!(await probe.track.canDecode())) {
-    console.warn(`[video] ${file.name}: WebCodecs cannot decode this codec here; using the ffmpeg.wasm decoder (slower).`);
-    return useFallback();
-  }
-  const { track, duration, fps: nativeFps } = probe;
-  const start = Math.max(0, opts.start ?? 0);
-  const end = Math.min(duration, opts.end ?? duration);
-  const sink = new CanvasSink(track, { poolSize: 2 });
-  let count = 0;
-
-  let emitFailed = false; // distingue fallos del decodificador de fallos de la app
-  const emit = async (wrapped, index) => {
-    try {
-      const canvas = wrapped.canvas;
-      // PNG sin pérdida a resolución nativa
-      const blob = await canvasToBlob(canvas, 'image/png');
-      // miniatura para la interfaz / dedup / histograma
-      const tw = 256;
-      const th = Math.max(1, Math.round((canvas.height / canvas.width) * tw));
-      const thumb = new OffscreenCanvas(tw, th);
-      thumb.getContext('2d').drawImage(canvas, 0, 0, tw, th);
-      await opts.onFrame?.(blob, thumb, wrapped.timestamp, index, canvas.width, canvas.height);
-    } catch (e) {
-      emitFailed = true;
-      throw e;
-    }
-  };
-
+  // el Input del sondeo es nuestro a partir de aquí: sigue vivo mientras el
+  // CanvasSink decodifica y se cierra pase lo que pase al salir
   try {
-    if (opts.fps && opts.fps > 0) {
-      const times = [];
-      for (let t = start; t < end - 1e-9; t += 1 / opts.fps) times.push(t);
-      if (!times.length) times.push(start);
-      let i = 0;
-      for await (const wrapped of sink.canvasesAtTimestamps(times)) {
-        if (opts.cancelled?.()) break;
-        if (wrapped) {
-          // count, NO i: canvasesAtTimestamps devuelve null cuando no hay
-          // fotograma para ese instante (clip recortado, primer PTS > 0), y
-          // con i el primer fotograma se llamaba clip_000003.png, así que las
-          // etiquetas impresas dejaban de casar con la línea de tiempo.
-          await emit(wrapped, count);
-          count++;
-        }
-        i++;
-        opts.onProgress?.(i, times.length);
-      }
-    } else {
-      const est = nativeFps ? Math.round((end - start) * nativeFps) : null;
-      let i = 0;
-      for await (const wrapped of sink.canvases(start, end)) {
-        if (opts.cancelled?.()) break;
-        await emit(wrapped, count);
-        count++;
-        i++;
-        opts.onProgress?.(i, est);
-      }
-    }
-  } catch (e) {
-    // canDecode dijo que sí pero el decodificador falló antes de dar nada:
-    // último intento con ffmpeg.wasm. Un fallo DENTRO de emit (onFrame de la
-    // app, cuota de memoria) no es del decodificador: se propaga tal cual.
-    if (count === 0 && !emitFailed) {
-      console.warn('[video] WebCodecs decode failed, retrying with ffmpeg.wasm:', e);
+    // contenedor legible pero códec fuera del alcance de WebCodecs en este
+    // navegador (MOV HEVC 10 bits de cámara, ProRes…): decodificar con ffmpeg
+    if (!(await probe.track.canDecode())) {
+      console.warn(`[video] ${file.name}: WebCodecs cannot decode this codec here; using the ffmpeg.wasm decoder (slower).`);
       return useFallback();
     }
-    throw e;
+    const { track, duration, fps: nativeFps } = probe;
+    const start = Math.max(0, opts.start ?? 0);
+    const end = Math.min(duration, opts.end ?? duration);
+    // ya recortado a la duración real: cubre el inicio pasado el final
+    assertRange(start, end, duration);
+    const sink = new CanvasSink(track, { poolSize: 2 });
+    let count = 0;
+
+    let emitFailed = false; // distingue fallos del decodificador de fallos de la app
+    const emit = async (wrapped, index) => {
+      try {
+        const canvas = wrapped.canvas;
+        // PNG sin pérdida a resolución nativa
+        const blob = await canvasToBlob(canvas, 'image/png');
+        // miniatura para la interfaz / dedup / histograma
+        const tw = 256;
+        const th = Math.max(1, Math.round((canvas.height / canvas.width) * tw));
+        const thumb = new OffscreenCanvas(tw, th);
+        thumb.getContext('2d').drawImage(canvas, 0, 0, tw, th);
+        await opts.onFrame?.(blob, thumb, wrapped.timestamp, index, canvas.width, canvas.height);
+      } catch (e) {
+        emitFailed = true;
+        throw e;
+      }
+    };
+
+    try {
+      if (opts.fps && opts.fps > 0) {
+        const times = [];
+        for (let t = start; t < end - 1e-9; t += 1 / opts.fps) times.push(t);
+        if (!times.length) times.push(start);
+        let i = 0;
+        for await (const wrapped of sink.canvasesAtTimestamps(times)) {
+          if (opts.cancelled?.()) break;
+          if (wrapped) {
+            // count, NO i: canvasesAtTimestamps devuelve null cuando no hay
+            // fotograma para ese instante (clip recortado, primer PTS > 0), y
+            // con i el primer fotograma se llamaba clip_000003.png, así que las
+            // etiquetas impresas dejaban de casar con la línea de tiempo.
+            await emit(wrapped, count);
+            count++;
+          }
+          i++;
+          opts.onProgress?.(i, times.length);
+        }
+      } else {
+        const est = nativeFps ? Math.round((end - start) * nativeFps) : null;
+        let i = 0;
+        for await (const wrapped of sink.canvases(start, end)) {
+          if (opts.cancelled?.()) break;
+          await emit(wrapped, count);
+          count++;
+          i++;
+          opts.onProgress?.(i, est);
+        }
+      }
+    } catch (e) {
+      // canDecode dijo que sí pero el decodificador falló antes de dar nada:
+      // último intento con ffmpeg.wasm. Un fallo DENTRO de emit (onFrame de la
+      // app, cuota de memoria) no es del decodificador: se propaga tal cual.
+      if (count === 0 && !emitFailed) {
+        console.warn('[video] WebCodecs decode failed, retrying with ffmpeg.wasm:', e);
+        return useFallback();
+      }
+      throw e;
+    }
+    return { count, fps: opts.fps || nativeFps || 12, duration, origen: file.name };
+  } finally {
+    probe.input.dispose();
   }
-  return { count, fps: opts.fps || nativeFps || 12, duration, origen: file.name };
 }
 
 function canvasToBlob(canvas, type) {
   if (canvas.convertToBlob) return canvas.convertToBlob({ type });
   return new Promise((res) => canvas.toBlob(res, type));
+}
+
+/** Compone el alfa sobre BLANCO in situ (Uint8ClampedArray: redondea al
+ *  asignar). Blanco porque estos fotogramas acaban impresos en las hojas de
+ *  contacto, y en papel lo transparente es papel, no un fondo negro.
+ *  Hacen falta las dos cosas: el núcleo remuestrea el alfa sin premultiplicar
+ *  (resize_rgba_bytes solo admite imágenes opacas) y putImageData REEMPLAZA
+ *  el destino en vez de componer sobre él, así que sin aplanar el mismo
+ *  fotograma salía blanco por drawImage y negro por WASM. */
+function flattenOverWhite(data) {
+  for (let i = 3; i < data.length; i += 4) {
+    const a = data[i];
+    if (a === 255) continue;
+    const k = a / 255;
+    data[i - 3] = data[i - 3] * k + 255 * (1 - k);
+    data[i - 2] = data[i - 2] * k + 255 * (1 - k);
+    data[i - 1] = data[i - 1] * k + 255 * (1 - k);
+    data[i] = 255;
+  }
 }
 
 /** Encaja `bmp` centrado en w×h. El reescalado va por el núcleo WASM
@@ -162,6 +223,7 @@ async function drawFrameFitted(ctx, bmp, w, h) {
     const cx = c.getContext('2d', { willReadFrequently: true });
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, bmp.width, bmp.height);
+    flattenOverWhite(d.data);
     const rgba = new Uint8Array(d.data.buffer);
     const out = await run('resize_rgba', { rgba, w: bmp.width, h: bmp.height, outW: dw, outH: dh }, [rgba.buffer]);
     const img = new ImageData(new Uint8ClampedArray(out.buffer), dw, dh);
@@ -188,88 +250,117 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
   // dimensiones del primero, escaladas a la resolución pedida y normalizadas
   // a pares (requisito H.264)
   const first = await frameGetters[0]();
-  let fw = first.width;
-  let fh = first.height;
-  if (opts.targetH > 0) {
-    fw = fw * (opts.targetH / fh);
-    fh = opts.targetH;
-  }
-  const w = Math.max(2, Math.round(fw / 2) * 2);
-  const h = Math.max(2, Math.round(fh / 2) * 2);
+  // Todo lo que sigue va en try/finally: el ImageBitmap a resolución nativa y
+  // el VideoEncoder que vive dentro del Output son recursos del navegador, no
+  // basura recogible. Chrome tiene un tope de sesiones de codificación
+  // simultáneas, así que unas pocas exportaciones fallidas sin cerrar el
+  // encoder dejaban muertas TODAS las siguientes hasta recargar la página (y
+  // recargar se lleva por delante el proyecto, que no se persiste).
+  let openBmp = null; // fotograma en curso, aún sin cerrar
+  let output = null; // dueño del encoder y del muxer
+  try {
+    let fw = first.width;
+    let fh = first.height;
+    if (opts.targetH > 0) {
+      fw = fw * (opts.targetH / fh);
+      fh = opts.targetH;
+    }
+    const w = Math.max(2, Math.round(fw / 2) * 2);
+    const h = Math.max(2, Math.round(fh / 2) * 2);
 
-  const QUAL = {
-    very_high: QUALITY_VERY_HIGH, high: QUALITY_HIGH,
-    medium: QUALITY_MEDIUM, low: QUALITY_LOW,
-  };
-  let bitrate = QUAL[opts.quality] ?? QUALITY_HIGH;
-  if (opts.quality === 'custom' && opts.bitrateMbps > 0) {
-    // el max del input HTML no frena lo tecleado: tope real aquí
-    bitrate = Math.round(Math.min(500, opts.bitrateMbps) * 1e6);
-  } else if (opts.quality === 'max') {
-    // "visualmente sin pérdida": ~0.5 bits por píxel y frame, con tope.
-    // Los codificadores del navegador (WebCodecs) siguen siendo lossy; el
-    // modo verdaderamente sin pérdida es buildVideoLossless (PNG en MOV).
-    bitrate = Math.min(500e6, Math.max(20e6, Math.round(w * h * fps * 0.5)));
-  }
+    const QUAL = {
+      very_high: QUALITY_VERY_HIGH, high: QUALITY_HIGH,
+      medium: QUALITY_MEDIUM, low: QUALITY_LOW,
+    };
+    let bitrate = QUAL[opts.quality] ?? QUALITY_HIGH;
+    if (opts.quality === 'custom' && opts.bitrateMbps > 0) {
+      // el max del input HTML no frena lo tecleado: tope real aquí
+      bitrate = Math.round(Math.min(500, opts.bitrateMbps) * 1e6);
+    } else if (opts.quality === 'max') {
+      // "visualmente sin pérdida": ~0.5 bits por píxel y frame, con tope.
+      // Los codificadores del navegador (WebCodecs) siguen siendo lossy; el
+      // modo verdaderamente sin pérdida es buildVideoLossless (PNG en MOV).
+      bitrate = Math.min(500e6, Math.max(20e6, Math.round(w * h * fps * 0.5)));
+    }
 
-  let candidates = [
-    { codec: 'avc', format: () => new Mp4OutputFormat(), mime: 'video/mp4', ext: 'mp4' },
-    { codec: 'vp9', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
-    { codec: 'av1', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
-    { codec: 'vp8', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
-  ];
-  if (opts.format === 'mp4') candidates = candidates.slice(0, 1);
-  else if (opts.format === 'webm') candidates = candidates.slice(1);
-  let chosen = null;
-  for (const c of candidates) {
-    const ok = await getFirstEncodableVideoCodec([c.codec], { width: w, height: h });
-    if (ok) { chosen = c; break; }
-  }
-  if (!chosen) {
-    throw new Error(opts.format && opts.format !== 'auto'
-      ? `This browser cannot encode ${opts.format.toUpperCase()} at ${w}×${h}. Try "Automatic" format, a lower resolution, or the Lossless quality (it works at any resolution).`
-      : `This browser cannot encode video at ${w}×${h} (WebCodecs unavailable or resolution too high). Try a lower resolution, or the Lossless quality: it works at any resolution, including 8K.`);
-  }
+    let candidates = [
+      { codec: 'avc', format: () => new Mp4OutputFormat(), mime: 'video/mp4', ext: 'mp4' },
+      { codec: 'vp9', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
+      { codec: 'av1', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
+      { codec: 'vp8', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
+    ];
+    if (opts.format === 'mp4') candidates = candidates.slice(0, 1);
+    else if (opts.format === 'webm') candidates = candidates.slice(1);
+    let chosen = null;
+    for (const c of candidates) {
+      const ok = await getFirstEncodableVideoCodec([c.codec], { width: w, height: h });
+      if (ok) { chosen = c; break; }
+    }
+    if (!chosen) {
+      throw new Error(opts.format && opts.format !== 'auto'
+        ? `This browser cannot encode ${opts.format.toUpperCase()} at ${w}×${h}. Try "Automatic" format, a lower resolution, or the Lossless quality (it works at any resolution).`
+        : `This browser cannot encode video at ${w}×${h} (WebCodecs unavailable or resolution too high). Try a lower resolution, or the Lossless quality: it works at any resolution, including 8K.`);
+    }
 
-  const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext('2d');
-  const target = new BufferTarget();
-  const output = new Output({ format: chosen.format(), target });
-  const source = new CanvasSource(canvas, { codec: chosen.codec, bitrate });
-  output.addVideoTrack(source, { frameRate: fps });
-  await output.start();
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    const target = new BufferTarget();
+    output = new Output({ format: chosen.format(), target });
+    const source = new CanvasSource(canvas, { codec: chosen.codec, bitrate });
+    output.addVideoTrack(source, { frameRate: fps });
+    await output.start();
 
-  const dur = 1 / fps;
-  // caché de reescalados por getter: los dibujos deduplicados se repiten en
-  // la línea de tiempo (la fase ④ reusa el MISMO getter por dibujo) y volver
-  // a pasar cada repetición por Lanczos sería trabajo tirado. Presupuesto en
-  // bytes; al llenarse, las repeticiones restantes se reescalan de nuevo.
-  const scaled = new Map(); // getter → {img, dx, dy}
-  let scaledBytes = 0;
-  const SCALED_BUDGET = 300e6;
-  for (let i = 0; i < frameGetters.length; i++) {
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, w, h);
-    const hit = scaled.get(frameGetters[i]);
-    if (hit) {
-      ctx.putImageData(hit.img, hit.dx, hit.dy);
-    } else {
-      const bmp = i === 0 ? first : await frameGetters[i]();
-      // encaja conservando aspecto (los recortes pueden variar 1-2 px entre sí)
-      const res = await drawFrameFitted(ctx, bmp, w, h);
-      if (i !== 0) bmp.close?.();
-      if (res && scaledBytes + res.img.data.byteLength <= SCALED_BUDGET) {
-        scaled.set(frameGetters[i], res);
-        scaledBytes += res.img.data.byteLength;
+    const dur = 1 / fps;
+    // caché de reescalados por getter: los dibujos deduplicados se repiten en
+    // la línea de tiempo (la fase ④ reusa el MISMO getter por dibujo) y volver
+    // a pasar cada repetición por Lanczos sería trabajo tirado. Presupuesto en
+    // bytes; al llenarse, las repeticiones restantes se reescalan de nuevo.
+    const scaled = new Map(); // getter → {img, dx, dy}
+    let scaledBytes = 0;
+    const SCALED_BUDGET = 300e6;
+    for (let i = 0; i < frameGetters.length; i++) {
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, w, h);
+      const hit = scaled.get(frameGetters[i]);
+      if (hit) {
+        // img viene ya aplanado sobre blanco (opaco), así que reemplazar el
+        // destino equivale a componer sobre el lienzo blanco de arriba
+        ctx.putImageData(hit.img, hit.dx, hit.dy);
+      } else {
+        const bmp = i === 0 ? first : await frameGetters[i]();
+        openBmp = i === 0 ? null : bmp; // `first` lo cierra el finally
+        // encaja conservando aspecto (los recortes pueden variar 1-2 px entre sí)
+        const res = await drawFrameFitted(ctx, bmp, w, h);
+        if (i !== 0) bmp.close?.();
+        openBmp = null;
+        if (res && scaledBytes + res.img.data.byteLength <= SCALED_BUDGET) {
+          scaled.set(frameGetters[i], res);
+          scaledBytes += res.img.data.byteLength;
+        }
+      }
+      await source.add(i * dur, dur);
+      onProgress?.(i + 1, frameGetters.length);
+    }
+    first.close?.();
+    await output.finalize();
+    recycleIdle(); // el remuestreo de frames grandes infla la memoria WASM
+    return { bytes: new Uint8Array(target.buffer), mime: chosen.mime, ext: chosen.ext };
+  } finally {
+    // close() de un ImageBitmap ya cerrado no lanza (queda "detached"), así
+    // que el camino bueno pasa por aquí sin enterarse
+    openBmp?.close?.();
+    first.close?.();
+    // cancel() suelta encoder y muxer; sobre un Output ya finalizado solo
+    // dejaría un aviso en consola, por eso se mira el estado. Su propio fallo
+    // se registra y no se relanza: taparía el error de verdad
+    if (output && output.state !== 'finalized') {
+      try {
+        await output.cancel();
+      } catch (e) {
+        console.warn('[video] could not cancel the encoder cleanly:', e);
       }
     }
-    await source.add(i * dur, dur);
-    onProgress?.(i + 1, frameGetters.length);
   }
-  first.close?.();
-  await output.finalize();
-  recycleIdle(); // el remuestreo de frames grandes infla la memoria WASM
-  return { bytes: new Uint8Array(target.buffer), mime: chosen.mime, ext: chosen.ext };
 }
 
 /** ImageBitmap de un fotograma; TIFF va por el decodificador del núcleo

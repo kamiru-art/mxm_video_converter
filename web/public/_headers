@@ -1,0 +1,21 @@
+# Response headers for the static site on Cloudflare Workers.
+# Cloudflare reads this file from the assets directory; vite copies
+# everything in web/public/ into web/dist/, so it ships with the build.
+#
+# The Content-Security-Policy below is also applied by the end-to-end test
+# (e2e-run.mjs reads THIS file), so a policy that breaks the application
+# fails CI instead of reaching the site. Keep it as one line: the parser
+# there, and Cloudflare's, both read one header per line.
+#
+# Why each source is allowed:
+#   'wasm-unsafe-eval'  the Rust core is WebAssembly; without it nothing runs
+#   blob: in script/worker  ffmpeg.wasm loads its 32 MB core from a blob URL
+#   'unsafe-inline' in style  Google Fonts injects a stylesheet; note this
+#                       does NOT weaken script, which is where XSS lives
+#   data: in img        the favicon is an inline SVG data URI
+# There is no 'unsafe-inline' and no 'unsafe-eval' for scripts: the build
+# emits one external module and no inline script, so nothing needs them.
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data:
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff

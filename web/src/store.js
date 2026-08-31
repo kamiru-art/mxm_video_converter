@@ -11,11 +11,19 @@ function loadAll() {
   }
 }
 
+/** Escribe el almacén entero. LANZA si el navegador no lo acepta: todo vive
+ *  en UNA clave, así que un `setItem` fallido no guarda nada —ni lo nuevo ni
+ *  lo que ya había—, y quien llama tiene que enterarse o la interfaz canta un
+ *  “guardado” que no existe y el perfil se pierde al cerrar la pestaña. El
+ *  mensaje dice qué puede hacer el usuario, que es lo único que le queda. */
 function saveAll(data) {
   try {
     localStorage.setItem(KEY, JSON.stringify(data));
-  } catch {
-    /* almacenamiento lleno o bloqueado: la app sigue funcionando */
+  } catch (e) {
+    const blocked = e?.name === 'SecurityError' || e?.name === 'NotAllowedError';
+    throw new Error(blocked
+      ? 'This browser is blocking storage for this site, so nothing was saved. Allow site data for this page (private windows and strict cookie settings turn it off); meanwhile “Export everything” in Calibration keeps your profiles in a file.'
+      : 'The browser storage for this site is full, so nothing was saved. Use “Export everything” in Calibration to keep a copy, then delete the presets or profiles you no longer need and try again.');
   }
 }
 

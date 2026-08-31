@@ -13,7 +13,14 @@ function profileSaver(kind, getData) {
       const n = name.value.trim();
       const data = getData();
       if (!n || !data) { toast('Analyze first and give the profile a name.', 'err'); return; }
-      store.saveProfile(kind, n, data);
+      try {
+        store.saveProfile(kind, n, data);
+      } catch (e) {
+        // el perfil es el resultado de imprimir, exponer, secar y escanear:
+        // decir "guardado" cuando no lo está cuesta toda esa tarde otra vez
+        toast(`Profile “${n}” was NOT saved. ${e.message ?? e}`, 'err');
+        return;
+      }
       toast(`Profile “${n}” saved. You can now use it in phase ①.`, 'ok');
     },
   }, 'Save profile');
@@ -76,9 +83,14 @@ export function mountPhase3(root) {
     ),
     el('button', {
       class: 'btn ghost small', onclick: async () => {
-        const png = await run('printer_test_png', { paper: aPaper.value, dpi: parseInt(aDpi.value, 10) });
-        download(png, 'printer_test.png', 'image/png');
-        toast('Print the page at 100 % (no “fit to page”), scan it whole and drop it here.', 'ok');
+        try {
+          const png = await run('printer_test_png', { paper: aPaper.value, dpi: parseInt(aDpi.value, 10) });
+          download(png, 'printer_test.png', 'image/png');
+          toast('Print the page at 100 % (no “fit to page”), scan it whole and drop it here.', 'ok');
+        } catch (e) {
+          console.error(e);
+          toast(`Could not build the test page: ${e.message ?? e}`, 'err');
+        }
       },
     }, 'Download test page'),
     el('div', { style: 'margin-top:10px' }, dropzone({
@@ -125,12 +137,17 @@ export function mountPhase3(root) {
     el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
     el('button', {
       class: 'btn ghost small', onclick: async () => {
-        const png = await run('cyan_strip_png', {
-          paper: bPaper.value, dpi: parseInt(bDpi.value, 10), ink: bInk.value,
-          mirror: bMirror.input.checked, target: bTarget.value,
-        });
-        download(png, 'cyanotype_chart.png', 'image/png');
-        toast('Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).', 'ok');
+        try {
+          const png = await run('cyan_strip_png', {
+            paper: bPaper.value, dpi: parseInt(bDpi.value, 10), ink: bInk.value,
+            mirror: bMirror.input.checked, target: bTarget.value,
+          });
+          download(png, 'cyanotype_chart.png', 'image/png');
+          toast('Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).', 'ok');
+        } catch (e) {
+          console.error(e);
+          toast(`Could not build the chart: ${e.message ?? e}`, 'err');
+        }
       },
     }, 'Download chart (negative for film)'),
     el('div', { style: 'margin-top:10px' }, dropzone({
@@ -172,11 +189,16 @@ export function mountPhase3(root) {
     cMirror.label,
     el('button', {
       class: 'btn ghost small', onclick: async () => {
-        const png = await run('colorblocker_png', {
-          paper: cPaper.value, dpi: parseInt(cDpi.value, 10), mirror: cMirror.input.checked,
-        });
-        download(png, 'colorblocker.png', 'image/png');
-        toast('Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.', 'ok');
+        try {
+          const png = await run('colorblocker_png', {
+            paper: cPaper.value, dpi: parseInt(cDpi.value, 10), mirror: cMirror.input.checked,
+          });
+          download(png, 'colorblocker.png', 'image/png');
+          toast('Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.', 'ok');
+        } catch (e) {
+          console.error(e);
+          toast(`Could not build the ColorBlocker chart: ${e.message ?? e}`, 'err');
+        }
       },
     }, 'Download ColorBlocker chart'),
     el('div', { style: 'margin-top:10px' }, dropzone({

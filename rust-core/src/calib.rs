@@ -1,11 +1,14 @@
-//! Calibración de impresora y de proceso de cianotipia (port de la fase ③).
+//! Calibración de impresora y de proceso de cianotipia (fase ③).
 
 use crate::aruco::Dict;
 use crate::cyanotype as cyan;
 use crate::geometry::{find_homography_ransac, warp_rgb_fill, Pt};
 use crate::img::{DynImg, Rgb};
 use crate::qr;
-use crate::scanproc::{bbox_corners, detect_oriented, estimate_scale, refine_corners_fullres};
+use crate::scanproc::{
+    bbox_corners, detect_oriented, estimate_scale, fits_image_budget, refine_corners_fullres,
+    SCALE_MAX, SCALE_MIN,
+};
 use crate::sheet::{marker_bboxes, marker_layout, marker_patch_gray, mm_to_px, page_size_px};
 use crate::text::draw_text;
 use serde_json::{json, Value};
@@ -170,6 +173,13 @@ fn align_to_canonical(
         .collect::<serde_json::Map<String, Value>>());
     let s = estimate_scale(&refined, &bboxes_json)
         .ok_or_else(|| "Could not estimate the scan scale.".to_string())?;
+    // Mismo cepo que `detect_scan`: una escala fuera de rango no es un escaneo
+    // de esta página, y hacia arriba multiplica el lienzo hasta lo inasumible.
+    if !(SCALE_MIN..=SCALE_MAX).contains(&s) {
+        return Err(format!(
+            "The measured scan scale is impossible (×{s:.2}). Scan the whole calibration page, right side up, at between 150 and 600 dpi."
+        ));
+    }
     let mut src = Vec::new();
     let mut dst = Vec::new();
     for (mid, corners) in &refined {
@@ -186,6 +196,13 @@ fn align_to_canonical(
         .ok_or_else(|| "Could not align the scan (degenerate homography).".to_string())?;
     let out_w = (cal.page_w as f64 * s).round() as usize;
     let out_h = (cal.page_h as f64 * s).round() as usize;
+    // El área se comprueba en `fits_image_budget` (i128): en usize, que en
+    // wasm32 es de 32 bits, el producto daría la vuelta por debajo del tope.
+    if !fits_image_budget(out_w as u64, out_h as u64) {
+        return Err(format!(
+            "The rectified calibration page would be {out_w}×{out_h} px, too large to process. Rescan the page at a lower dpi."
+        ));
+    }
     let rgb8 = img.to_rgb8();
     let warp = warp_rgb_fill(&rgb8, &m, out_w, out_h, [255, 255, 255]);
     Ok((warp, s, refined))
@@ -961,6 +978,42 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_warp_rejects_an_absurd_calibration_page() {
+        // Un perfil de calibración con un lienzo disparatado: los marcadores
+        // siguen siendo los de la A4, así que la escala sale ≈1 y el
+        // enderezado pediría 65544×65544 px. Sin tope esto reservaba ~13 GB;
+        // con un tope en usize de 32 bits el área daría la vuelta a 1_048_640
+        // y también pasaría, así que se comprueba en i128.
+        let page = render_printer_test("A4", 150);
+        let mut cal = printer_test_geometry("A4", 150).cal;
+        cal.page_w = 65_544;
+        cal.page_h = 65_544;
+        let e = match align_to_canonical(DynImg::U8(page), &cal, "normal") {
+            Ok(_) => panic!("debería haberse rechazado"),
+            Err(e) => e,
+        };
+        assert!(e.contains("too large to process"), "{e}");
+    }
+
+    #[test]
+    fn canonical_warp_rejects_an_impossible_scale() {
+        // Marcadores 20 veces más juntos en el perfil que en el escaneo: la
+        // escala medida sale ×20, muy por encima de la que admite `detect_scan`.
+        let page = render_printer_test("A4", 150);
+        let mut cal = printer_test_geometry("A4", 150).cal;
+        for b in cal.marker_bboxes.values_mut() {
+            for v in b.iter_mut() {
+                *v /= 20;
+            }
+        }
+        let e = match align_to_canonical(DynImg::U8(page), &cal, "normal") {
+            Ok(_) => panic!("debería haberse rechazado"),
+            Err(e) => e,
+        };
+        assert!(e.contains("scale is impossible"), "{e}");
+    }
 
     #[test]
     fn qr_decode_after_canonical_warp() {

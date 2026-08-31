@@ -131,10 +131,10 @@ export function mountPhase4(root) {
   function availableMap() {
     const map = new Map();
     for (const [label, png] of project.processedFrames) {
-      map.set(sanitizeLabel(label), { kind: 'bytes', data: png });
+      map.set(sanitizeLabel(label), { data: png });
     }
     for (const [stemName, blob] of extraFrames) {
-      map.set(stemName, { kind: 'blob', data: blob });
+      map.set(stemName, { data: blob });
     }
     return map;
   }

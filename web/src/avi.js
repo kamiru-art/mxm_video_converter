@@ -8,17 +8,53 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 
 let ffPromise = null;
 
-async function loadCore() {
-  const base = `${location.origin}/ffmpeg`;
-  const manifest = await (await fetch(`${base}/manifest.json`)).json();
+// Un asset que falta NO responde 404: wrangler.jsonc trae
+// not_found_handling: "single-page-application", así que el servidor
+// devuelve index.html con 200. Mirar solo r.ok no puede detectarlo jamás y el
+// fallo salía como "Unexpected token '<'" de JSON.parse, o como un módulo que
+// no instancia. Se comprueba también el content-type y se nombra la causa.
+function coreMissing(res, what) {
+  return new Error(
+    `The video converter module is missing on the server: /ffmpeg/${what} came back as `
+    + `${res.headers.get('content-type') || 'an unknown type'} (HTTP ${res.status}). `
+    + 'Generate web/public/ffmpeg/ with "npm run build" or "npm run test:e2e"; "npm run dev" does not.');
+}
+
+// El .wasm de 32 MB se rearma en un Blob cuya URL se guarda para TODA la
+// página: release() termina la instancia en cuanto se vacía la cola, de modo
+// que loadCore() vuelve a correr en cada sesión y antes dejaba abandonado un
+// Blob de 32 MB por sesión. Revocarla tras el load tampoco valdría, porque la
+// sesión siguiente necesita rearmar el mismo módulo: se crea una vez y se
+// reutiliza (y de paso las sesiones posteriores arrancan sin volver a bajarlo).
+let wasmURLPromise = null;
+
+function coreWasmURL(base) {
+  // un fallo no se cachea: si el módulo aparece luego, el siguiente intento
+  // vuelve a probar en vez de quedarse con la promesa rechazada
+  if (!wasmURLPromise) wasmURLPromise = assembleCore(base).catch((e) => { wasmURLPromise = null; throw e; });
+  return wasmURLPromise;
+}
+
+async function assembleCore(base) {
+  const res = await fetch(`${base}/manifest.json`);
+  if (!res.ok || !/\bjson\b/i.test(res.headers.get('content-type') || '')) throw coreMissing(res, 'manifest.json');
+  const manifest = await res.json();
+  if (!(manifest.parts > 0)) throw new Error('The video converter manifest lists no parts; rebuild web/public/ffmpeg/ with "npm run build".');
   const parts = await Promise.all(
     Array.from({ length: manifest.parts }, (_, i) =>
       fetch(`${base}/ffmpeg-core.wasm.${i}`).then((r) => {
-        if (!r.ok) throw new Error('The video converter module is missing on the server.');
+        // el mismo fallback SPA: una parte que falte llegaría como HTML y el
+        // módulo moriría al instanciar sin decir por qué
+        if (!r.ok || /text\/html/i.test(r.headers.get('content-type') || '')) throw coreMissing(r, `ffmpeg-core.wasm.${i}`);
         return r.arrayBuffer();
       })),
   );
-  const wasmURL = URL.createObjectURL(new Blob(parts, { type: 'application/wasm' }));
+  return URL.createObjectURL(new Blob(parts, { type: 'application/wasm' }));
+}
+
+async function loadCore() {
+  const base = `${location.origin}/ffmpeg`;
+  const wasmURL = await coreWasmURL(base);
   const ff = new FFmpeg();
   await ff.load({ coreURL: `${base}/ffmpeg-core.js`, wasmURL });
   return ff;
@@ -125,6 +161,16 @@ export function extractFramesFallback(file, opts = {}) {
     const probe = await probeLoaded(ff, path);
     const start = Math.max(0, opts.start ?? 0);
     const end = Math.min(probe.duration, opts.end ?? probe.duration);
+    // duplica a propósito el assertRange de extractFrames (video.js): la
+    // duración solo se conoce aquí, y sin esto un rango vacío o invertido
+    // salía del bucle con count 0 y la interfaz lo daba por bueno en verde
+    if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) {
+      const n = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} s` : 'not a number');
+      const e = new Error(`Invalid time range: start (${n(start)}) must come before end (${n(end)}).`
+        + ` This video lasts ${probe.duration.toFixed(2)} s.`);
+      e.badRange = true; // extractFrames lo relanza en vez del error del contenedor
+      throw e;
+    }
     const fps = opts.fps || probe.fps || 12;
     const dt = 1 / fps;
     const est = Math.max(1, Math.round((end - start) * fps));

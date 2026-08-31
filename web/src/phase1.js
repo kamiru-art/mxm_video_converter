@@ -211,7 +211,15 @@ export function mountPhase1(root) {
       });
       project.videoMeta = { fps_extraccion: meta.fps, origen: meta.origen };
       toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
-      afterFramesChanged();
+      // sin await, un fallo del refresco escapaba del try y no se veía; y
+      // dentro del catch de abajo se anunciaría como "Extraction failed",
+      // que es justo lo contrario de lo que pasó
+      try {
+        await afterFramesChanged();
+      } catch (e) {
+        console.error(e);
+        toast(`The frames extracted, but the preview failed: ${e.message ?? e}`, 'err');
+      }
     } catch (e) {
       toast(`Extraction failed: ${e.message}`, 'err');
     } finally {
@@ -242,52 +250,86 @@ export function mountPhase1(root) {
           toast(e.message, 'err');
         }
       } else if (images.length) {
+        // una carpeta entra entera: si un archivo no se deja decodificar, el
+        // usuario tiene que enterarse de CUÁL y quedarse con el resto, no ver
+        // una carga a medias sin explicación
         clearFrames();
         images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        const rejected = [];
         for (const f of images) {
           const needsWasmDecode = /\.(tif|tiff)$/i.test(f.name);
           let w = 0, h = 0, hasAlpha = false;
-          if (!needsWasmDecode) {
-            try {
+          try {
+            if (!needsWasmDecode) {
               const bmp = await createImageBitmap(f);
               w = bmp.width; h = bmp.height; bmp.close();
               hasAlpha = /\.png$/i.test(f.name) || /\.webp$/i.test(f.name);
-            } catch { continue; }
-          } else {
-            const bytes = new Uint8Array(await f.arrayBuffer());
-            const r = await run('decode_image', { bytes }, [bytes.buffer]);
-            w = r.w; h = r.h; hasAlpha = r.had_alpha;
-          }
+            } else {
+              const bytes = new Uint8Array(await f.arrayBuffer());
+              const r = await run('decode_image', { bytes }, [bytes.buffer]);
+              w = r.w; h = r.h; hasAlpha = r.had_alpha;
+            }
+          } catch { rejected.push(f.name); continue; }
           project.frames.push({ name: f.name, blob: f, thumb: null, w, h, hasAlpha, needsWasmDecode });
         }
         project.videoMeta = { origen: 'images', fps_extraccion: 12 };
-        toast(`${project.frames.length} images loaded.`, 'ok');
-        afterFramesChanged();
+        if (rejected.length) {
+          toast(`${rejected.length} file(s) could not be read and were left out: ${rejected.slice(0, 8).join(', ')}${rejected.length > 8 ? '…' : ''}`, 'err');
+        }
+        // aunque no quede ninguno hay que refrescar: clearFrames ya vació el
+        // proyecto y las miniaturas en pantalla serían de otro
+        toast(project.frames.length
+          ? `${project.frames.length} images loaded.`
+          : 'None of those files could be read as an image.',
+          project.frames.length ? 'ok' : 'err');
+        try {
+          await afterFramesChanged();
+        } catch (e) {
+          console.error(e);
+          toast(`The frames loaded, but the preview failed: ${e.message ?? e}`, 'err');
+        }
       }
     },
   });
 
   // ---------- selección, nombres, dedup ----------
+  // Refrescar la tira decodifica fotogramas, así que puede fallar (un archivo
+  // ilegible, el núcleo sin memoria). Estos manejadores no los espera nadie:
+  // sin catch, el cambio se quedaba a medias y en silencio.
+  const reportRefreshFailure = (e) => {
+    console.error(e);
+    toast(`Could not refresh the frames: ${e.message ?? e}`, 'err');
+  };
+  const refreshFrames = () => afterFramesChanged().catch(reportRefreshFailure);
+
   const includeIn = el('input', { type: 'text', placeholder: 'e.g. 1, 3-5 (empty = all)' });
   const excludeIn = el('input', { type: 'text', placeholder: 'e.g. 8, 12' });
-  includeIn.addEventListener('change', () => { ph1.include = includeIn.value; afterFramesChanged(); });
-  excludeIn.addEventListener('change', () => { ph1.exclude = excludeIn.value; afterFramesChanged(); });
+  includeIn.addEventListener('change', () => { ph1.include = includeIn.value; refreshFrames(); });
+  excludeIn.addEventListener('change', () => { ph1.exclude = excludeIn.value; refreshFrames(); });
 
   const namingSel = select([['auto', 'Auto-increment (abc_001…)'], ['original', 'Original file name']], ph1.naming);
   const numberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
   const pageNumberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
   // los tres cambian las etiquetas visibles: refrescar también las miniaturas
-  namingSel.addEventListener('change', async () => { ph1.naming = namingSel.value; await renderThumbs(); refreshPreview(); });
-  numberingSel.addEventListener('change', async () => { ph1.numbering = numberingSel.value; await renderThumbs(); refreshPreview(); });
+  const relabel = () => renderThumbs().then(() => refreshPreview()).catch(reportRefreshFailure);
+  namingSel.addEventListener('change', () => { ph1.naming = namingSel.value; relabel(); });
+  numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value; relabel(); });
   pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value; refreshPreview(); });
 
   const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
   const dedupStatus = el('div', { class: 'hint' });
   dedupCheck.input.addEventListener('change', async () => {
     ph1.dedupOn = dedupCheck.input.checked;
-    if (ph1.dedupOn) await computeDedup(dedupStatus);
-    else dedupStatus.textContent = '';
-    refreshPreview(); renderThumbs();
+    try {
+      if (ph1.dedupOn) await computeDedup(dedupStatus);
+      else dedupStatus.textContent = '';
+      refreshPreview();
+      await renderThumbs();
+    } catch (e) {
+      console.error(e);
+      dedupStatus.textContent = ''; // no dejar colgado el "analyzing…"
+      toast(`Could not analyze the repeated drawings: ${e.message ?? e}`, 'err');
+    }
   });
 
   // ---------- ajustes de hoja (enlace genérico) ----------
@@ -326,7 +368,20 @@ export function mountPhase1(root) {
     binds.push(() => { input.value = s[key] ?? '#000000'; });
     return input;
   }
-  function persist() { store.saveSettings(s); }
+  // Los ajustes se guardan por comodidad entre sesiones, así que un
+  // almacenamiento lleno o bloqueado no puede cortar el manejador que lo
+  // llamó (se quedaría sin refrescar la vista previa). Se avisa UNA vez: por
+  // aquí pasa cada cambio de cada control.
+  let persistWarned = false;
+  function persist() {
+    try {
+      store.saveSettings(s);
+    } catch (e) {
+      if (persistWarned) return;
+      persistWarned = true;
+      toast(`Your settings will not be remembered for the next session. ${e.message ?? e}`, 'err');
+    }
+  }
 
   const customRow = el('div', { class: 'row' },
     field('Width (mm)', bindNum('custom_w_mm', numberInput(210, { min: 30 }))),
@@ -434,7 +489,14 @@ export function mountPhase1(root) {
       }, 'Load'),
       el('button', {
         class: 'btn danger small', onclick: () => {
-          if (presetSel.value) { store.deleteProfile('presets', presetSel.value); refreshPresetList(); }
+          if (!presetSel.value) return;
+          try {
+            store.deleteProfile('presets', presetSel.value);
+          } catch (e) {
+            toast(`Preset “${presetSel.value}” was NOT deleted. ${e.message ?? e}`, 'err');
+            return;
+          }
+          refreshPresetList();
         },
       }, 'Delete'),
     ),
@@ -444,10 +506,15 @@ export function mountPhase1(root) {
         class: 'btn ghost small', onclick: () => {
           const name = presetName.value.trim();
           if (!name) return;
-          store.saveProfile('presets', name, {
-            settings: s,
-            fase: { naming: ph1.naming, numbering: ph1.numbering, pageNumbering: ph1.pageNumbering, dedupOn: ph1.dedupOn },
-          });
+          try {
+            store.saveProfile('presets', name, {
+              settings: s,
+              fase: { naming: ph1.naming, numbering: ph1.numbering, pageNumbering: ph1.pageNumbering, dedupOn: ph1.dedupOn },
+            });
+          } catch (e) {
+            toast(`Preset “${name}” was NOT saved. ${e.message ?? e}`, 'err');
+            return;
+          }
           refreshPresetList();
           toast(`Preset “${name}” saved.`, 'ok');
         },
@@ -801,8 +868,6 @@ export function mountPhase1(root) {
 
   root.append(el('div', { class: 'workbench' }, paper, bench));
 
-  // corrige el tipo de marker_count (select da string)
-  const mcSel = paper.querySelectorAll('select');
   ph1._refreshPreview = refreshPreview;
   ph1._afterFramesChanged = afterFramesChanged;
 }

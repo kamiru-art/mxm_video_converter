@@ -77,15 +77,11 @@ browser refuses a file.
 
 ## 5) Known Architectural Risks
 
-- **The pool has no timeout.** `web/src/pool.js` settles a promise only when a
-  message comes back. Work that never finishes holds one of at most four
-  slots for the rest of the session, and there is no `onmessageerror`
-  handler. Unbounded work in the core is therefore more damaging than a panic,
-  which is caught and recycled.
-- **The shared state is not fully reset.** `clearFrames()` in
-  `web/src/project.js` clears the frames but leaves `layoutJson`,
-  `sheetImages`, `processedFrames` and `lastReport`, so state from an earlier
-  project can survive into a new one.
+- **A stuck worker is recovered by replacement, not by interruption.**
+  `web/src/pool.js` watches each worker and, after ten minutes of silence,
+  terminates and respawns it, because a synchronous WebAssembly call cannot be
+  cancelled any other way. The timeout is deliberately generous: a false kill
+  also destroys the work queued behind it, so the cost is asymmetric.
 - **`layout.json` is a trust boundary that is not marked as one.** The file is
   meant to be shared between users, so `rust-core/src/scanproc.rs` and
   `rust-core/src/sheet.rs` receive attacker-shaped input, but the validation

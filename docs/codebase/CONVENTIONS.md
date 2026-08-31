@@ -62,8 +62,11 @@ loading. Do not rename them.
 - **`pool.js`** turns a failed result into a rejected promise, and also rejects
   every pending promise if the worker script itself fails to load.
 - **The interface** reports with `toast(message, 'err')` from `web/src/ui.js`.
-  Most handlers follow this; `web/src/phase3.js` has four `onclick: async`
-  handlers with no `try`/`catch`, which is the exception, not the rule.
+  Every `async` handler ends in a `catch` that toasts: a rejection that only
+  reaches the console is invisible to the user, who sees the button do
+  nothing. The deliberate exception is `refreshPreview()` in
+  `web/src/phase1.js`, which runs on every control change and only logs: a
+  toast on each keystroke would be worse than the silence.
 - `console.*` is used for diagnostics only, never as the way the user is told
   something.
 - There is no telemetry, no analytics and no remote logging. Nothing leaves the

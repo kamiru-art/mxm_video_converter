@@ -1,5 +1,5 @@
 //! Lectura del layout.json (v2, con conversión desde v1 de la app antigua).
-//! Port de layoutfile.py: los proyectos viejos se siguen pudiendo procesar.
+//! Los proyectos viejos se siguen pudiendo procesar sin convertirlos a mano.
 
 use serde_json::{json, Value};
 

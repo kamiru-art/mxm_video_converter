@@ -152,9 +152,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn per_page(&self) -> usize {
-        ((self.cols * self.rows) as usize).max(1)
-    }
     pub fn is_cyanotype(&self) -> bool {
         // "cyanotype" (actual) y "cianotipia" (proyectos y presets antiguos)
         let m = self.mode.trim().to_lowercase();
@@ -192,7 +189,7 @@ impl Settings {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Posiciones de los marcadores (port de markers.py)
+// Posiciones de los marcadores
 // ────────────────────────────────────────────────────────────────
 
 pub fn normalized_marker_count(count: u32) -> u32 {
@@ -429,7 +426,10 @@ fn patch_strip_geometry(s: &Settings, l: &Layout) -> Option<Vec<([i64; 4], u8)>>
     let n = PATCH_LEVELS.len() as i64;
     let total_h = n * side + (n - 1) * gap;
     let y_free_top = l.marker_margin + l.marker_patch + gap * 2;
-    let y_free_bot = if s.marker_count >= 8 {
+    // El conteo crudo y el normalizado difieren en 7: ahí la hoja lleva ya los
+    // 8 marcadores, con uno a media altura del borde izquierdo, y la tira de
+    // grises (que ocupa ese mismo borde) bajaba hasta taparlo.
+    let y_free_bot = if normalized_marker_count(s.marker_count) >= 8 {
         (l.page_h - side) / 2 - gap * 2
     } else {
         l.page_h - l.marker_margin - l.marker_patch - gap * 2
@@ -497,6 +497,14 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
              gutter or halo, or increase the sheet size/DPI."
                 .into(),
         );
+    }
+
+    // El payload más corto que puede llevar esta hoja: si ni ese cabe en un QR,
+    // no cabrá ninguno. Se comprueba aquí porque build_layout corre antes de
+    // dibujar nada y su error sí llega a la interfaz.
+    if s.registration_on && s.qr_on {
+        let project = if s.project_name.is_empty() { &s.out_name } else { &s.project_name };
+        qr::check_payload_fits(&qr::qr_payload(project, 1, 0, ""))?;
     }
 
     let mut l = Layout {
@@ -820,6 +828,10 @@ fn unique_key(usadas: &mut HashSet<String>, base: &str) -> String {
 pub struct PageResult {
     pub image: Option<Rgb>,
     pub record: Option<Value>,
+    /// Motivo por el que la hoja no se pudo componer (mensaje para el usuario).
+    /// Cuando está puesto, `image` y `record` vienen vacíos: media hoja con un
+    /// QR ilegible es peor que ninguna.
+    pub error: Option<String>,
 }
 
 /// Dibuja (o solo mide) UNA hoja. `frames` y `labels` son los de esta hoja.
@@ -914,6 +926,11 @@ pub fn render_page(
         if l.qr_px > 0 && record.is_some() {
             let project = if s.project_name.is_empty() { &s.out_name } else { &s.project_name };
             let payload = qr::qr_payload(project, sheet_num, cell_idx as i64, &text_str);
+            // Se comprueba también cuando solo se mide: una etiqueta que no cabe
+            // debe detenerse antes de imprimir, no al escanear.
+            if let Err(e) = qr::check_payload_fits(&payload) {
+                return PageResult { image: None, record: None, error: Some(e) };
+            }
             let fila = meta_row_geometry(s, l, &text_str, cell_x, meta_top);
             if let Some(canvas) = canvas.as_mut() {
                 if saving {
@@ -924,7 +941,10 @@ pub fn render_page(
                         l.halo_px,
                     );
                 }
-                let qr_gray = qr::qr_image(&payload, fila.qr_px as usize, false);
+                let qr_gray = match qr::try_qr_image(&payload, fila.qr_px as usize, false) {
+                    Ok(g) => g,
+                    Err(e) => return PageResult { image: None, record: None, error: Some(e) },
+                };
                 let qr_rgb = if s.is_cyanotype() {
                     cyan::colorize_gray_patch(&qr_gray, &s.cyan_ink, stops.as_deref())
                 } else {
@@ -1011,7 +1031,7 @@ pub fn render_page(
         }
     }
 
-    PageResult { image: canvas, record }
+    PageResult { image: canvas, record, error: None }
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1112,7 +1132,7 @@ pub fn build_layout_json(
         },
         "marcadores": {
             "dict": s.marker_dict,
-            "cantidad": s.marker_count,
+            "cantidad": normalized_marker_count(s.marker_count),
             "lado_px": l.marker_side,
             "bboxes": marker_bb,
             "bboxes_pos": bboxes_pos,
@@ -1210,6 +1230,63 @@ mod tests {
         s.rows = 3;
         s.project_name = "test".into();
         s
+    }
+
+    fn rects_overlap(a: [i64; 4], b: [i64; 4]) -> bool {
+        a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+    }
+
+    #[test]
+    fn over_long_qr_payload_stops_the_sheet() {
+        // Antes el QR se sustituía por uno de "?" y la hoja salía impecable:
+        // el fallo solo aparecía al escanear lo ya impreso.
+        let mut s = base_settings();
+        s.project_name = "p".repeat(1400);
+        match build_layout(&s, (16.0, 9.0)) {
+            Ok(_) => panic!("un nombre de proyecto de 1400 bytes no cabe en el QR"),
+            Err(e) => assert!(e.contains("too long"), "{e}"),
+        }
+        // Con el proyecto corto pasa el preflight, y es la etiqueta la que se
+        // para dentro de la hoja.
+        let s = base_settings();
+        let l = build_layout(&s, (16.0, 9.0)).unwrap();
+        let frames = vec![test_frame(160, 90, [10, 20, 30])];
+        let labels = vec!["x".repeat(1400)];
+        let res = render_page(&s, &l, &frames, &labels, 1, true);
+        assert!(res.image.is_none() && res.record.is_none());
+        assert!(res.error.unwrap_or_default().contains("too long"));
+    }
+
+    #[test]
+    fn gray_patch_strip_never_covers_a_marker() {
+        // El conteo crudo y el normalizado solo difieren en 7, que se redondea
+        // a 8: la hoja lleva marcador a media altura del borde izquierdo y la
+        // tira de grises ocupa ese mismo borde.
+        for count in [4u32, 6, 7, 8, 12] {
+            for modo in ["normal", "cianotipia"] {
+                let mut s = base_settings();
+                s.mode = modo.into();
+                s.gray_patch_on = true;
+                s.marker_count = count;
+                let l = build_layout(&s, (16.0, 9.0)).unwrap();
+                let strip = match &l.patch_strip {
+                    Some(st) => st,
+                    None => continue,
+                };
+                let posiciones = l.marker_positions.as_ref().unwrap();
+                for &(bbox, _) in strip {
+                    for (id, &(mx, my)) in posiciones {
+                        // Se compara con el parche entero: pisar la zona de
+                        // silencio ya estropea la detección.
+                        let patch = [mx, my, mx + l.marker_patch, my + l.marker_patch];
+                        assert!(
+                            !rects_overlap(bbox, patch),
+                            "count={count} ({modo}): la tira {bbox:?} pisa el marcador {id} {patch:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

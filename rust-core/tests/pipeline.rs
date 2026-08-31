@@ -354,3 +354,43 @@ fn manual_sheet_assignment_when_the_qr_is_unreadable() {
         "debe avisar del número inválido: {adv:?}"
     );
 }
+
+/// La costura del alfa, que ningún test cubría. El núcleo decodifica los TIFF
+/// y los PNG de 16 bits CONSERVANDO el canal alfa (codecs::decode_rgba8), y es
+/// la composición de la hoja la que lo aplana con el color que eligió el
+/// usuario. Antes se aplanaba sobre blanco al decodificar, así que el ajuste
+/// "alpha over colour" no hacía nada justo para los formatos que decodifica el
+/// núcleo, mientras que el mismo dibujo en PNG normal sí lo respetaba.
+#[test]
+fn transparent_frames_take_the_chosen_alpha_colour() {
+    // RGBA a cero: del todo transparente, que es lo que decode_rgba8 entrega
+    // ahora para una zona sin pintar de un TIFF
+    let transparent = |w: usize, h: usize| FrameInput {
+        w,
+        h,
+        rgba: Some(vec![0u8; w * h * 4]),
+        has_alpha: true,
+        orig_name: "f.tif".into(),
+        orig_file: None,
+    };
+    let count = |img: &Rgb, c: [u8; 3]| {
+        img.data.chunks_exact(3).filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2]).count()
+    };
+    let labels: Vec<String> = (1..=4).map(|i| format!("demo_{i:03}")).collect();
+    let sheet_with = |mode: &str| {
+        let mut s = base_settings();
+        s.alpha_mode = mode.into();
+        s.alpha_bg_color = "#0000FF".into();
+        let l = build_layout(&s, (16.0, 9.0)).unwrap();
+        let frames: Vec<FrameInput> = (0..4).map(|_| transparent(320, 180)).collect();
+        render_page(&s, &l, &frames, &labels, 1, true).image.unwrap()
+    };
+
+    let blue = count(&sheet_with("color"), [0, 0, 255]);
+    assert!(blue > 10_000, "el color elegido tiene que llegar a la hoja (azules: {blue})");
+
+    // y con el ajuste por defecto lo transparente sigue siendo papel
+    let white = sheet_with("none");
+    assert_eq!(count(&white, [0, 0, 255]), 0, "sin el ajuste no debe aparecer azul");
+    assert!(count(&white, [255, 255, 255]) > 10_000, "lo transparente debe quedar blanco");
+}

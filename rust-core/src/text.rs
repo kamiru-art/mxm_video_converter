@@ -1,6 +1,6 @@
 //! Texto sobre el lienzo: DejaVu Sans incrustada (rasterizado con fontdue).
-//! Reemplaza a las fuentes del sistema de la app de escritorio: mismas
-//! etiquetas en cualquier navegador, con acentos y ñ.
+//! Incrustada y no del sistema para que las etiquetas salgan iguales en
+//! cualquier navegador, con acentos y ñ.
 
 use crate::img::Rgb;
 use fontdue::{Font, FontSettings};

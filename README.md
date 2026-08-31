@@ -171,6 +171,13 @@ npm run build                           # production build, into web/dist
 npx wrangler@4 deploy                   # publish the site
 ```
 
+A local deploy needs the Cloudflare account id in the environment, because
+the repository does not contain it:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=<your account id>
+```
+
 `npm run dev` does not make the `ffmpeg.wasm` files. Only `npm run build` and
 `npm run test:e2e` make them. Thus the AVI files and the camera MOV files do
 not open in the development server until you do one of those two commands one

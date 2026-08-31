@@ -1,6 +1,11 @@
 {
   "name": "mxm-studio",
-  "account_id": "7fb88446c5fea807d454495d271fb9a0",
+  // The account id is deliberately NOT committed. This repository is
+  // public, and an account identifier in a public file is a free target
+  // for anyone phishing Cloudflare credentials. It is not a secret and it
+  // is useless without the API token, but it costs nothing to omit it.
+  // CI supplies it as the CLOUDFLARE_ACCOUNT_ID secret; for a local
+  // deploy, export CLOUDFLARE_ACCOUNT_ID before running wrangler.
   "compatibility_date": "2026-08-01",
   "assets": {
     "directory": "./dist",
