@@ -382,6 +382,12 @@ export function mountPhase2(root) {
   // una sola cuando se le asigna la hoja a mano.
   const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Assign', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
   const reportTable = el('table', { class: 'report' }, reportHeader);
+  // La tabla se desplaza DENTRO de su caja. Son ocho columnas y cuatro de
+  // ellas las ensancha el rótulo de la cabecera, no el dato, así que en un
+  // móvil no caben por mucho que se estrechen: sin este envoltorio su ancho
+  // mínimo estiraba la página entera —cabecera y pie incluidos— a 760 px en
+  // una pantalla de 430.
+  const reportScroll = el('div', { class: 'table-scroll' }, reportTable);
   const missingSlot = el('div');
   const assignSlot = el('div');
   const conflictSlot = el('div');
@@ -626,7 +632,7 @@ export function mountPhase2(root) {
       class: 'btn ghost-light small', onclick: () => clearReport(),
     }, 'Clear results'),
   );
-  resultsBox.append(assignSlot, conflictSlot, missingSlot, reportTable, downloadRow);
+  resultsBox.append(assignSlot, conflictSlot, missingSlot, reportScroll, downloadRow);
   renderSummary();
 
   function buildInforme() {

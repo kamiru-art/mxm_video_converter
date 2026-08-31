@@ -40,7 +40,12 @@ body {
 
 /* ── Cabecera compacta: marca y navegación en una sola fila ── */
 .masthead { display: flex; align-items: center; gap: 24px; padding-top: 14px; flex-wrap: wrap; }
-.wordmark { position: relative; display: inline-block; padding: 6px 18px 8px 14px; flex: 0 0 auto; }
+/* `flex: 0 0 auto` la dimensiona a su contenido y no la deja encoger nunca, y
+   su contenido es un lema de una sola línea de 62 caracteres: en un móvil la
+   marca medía 514 px y era ella, no la tabla, quien seguía desplazando la
+   página de lado. El tope del 100 % la obliga a caber en la fila y el lema
+   pasa a dos líneas; en escritorio el 100 % no llega a morder y nada cambia. */
+.wordmark { position: relative; display: inline-block; padding: 6px 18px 8px 14px; flex: 0 0 auto; max-width: 100%; }
 .wordmark h1 {
   font-family: var(--font-display);
   font-variation-settings: "wdth" 118;
@@ -114,6 +119,13 @@ body {
 
 .workbench { display: grid; grid-template-columns: minmax(360px, 520px) 1fr; gap: 20px; align-items: start; }
 @media (max-width: 900px) { .workbench { grid-template-columns: 1fr; } }
+/* Un item de rejilla no baja de su ancho mínimo de contenido mientras su
+   `min-width` sea `auto`, y eso volvía inútil cualquier caja de scroll de
+   dentro: la tabla del informe estiraba su columna, la columna estiraba la
+   página, y el desplazamiento lateral se lo comía el documento entero en vez
+   de la tabla. Con el mínimo a cero se desborda quien sabe hacerlo. En
+   escritorio no cambia nada: el suelo de 360 px lo pone la pista, no el item. */
+.workbench > * { min-width: 0; }
 
 /* En pantallas con altura: cada panel gestiona su propio scroll y la página
    entera cabe en una sola vista, sin scroll global. */
@@ -357,6 +369,11 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 @media (max-width: 640px) { .lb-nav { width: 38px; height: 60px; font-size: 24px; } }
 
 /* tablas de informe */
+/* Una caja de scroll aporta 0 al ancho mínimo de quien la contiene, que es
+   lo que deja encoger la rejilla del banco: la tabla se desborda aquí dentro
+   en vez de empujar la página. `contain` evita que, al llegar al final del
+   recorrido lateral, el gesto siga arrastrando la página por detrás. */
+.table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
 table.report { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
 table.report th, table.report td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--prusia-700); vertical-align: top; }
 table.report th { font-family: var(--font-display); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--cian-300); }
