@@ -281,7 +281,7 @@ export function mountPhase4(root) {
 
   const bench = el('div', { class: 'bench' },
     el('h2', {}, 'Result'),
-    el('div', { class: 'hint', style: 'color:var(--cian-300)' },
+    el('div', { class: 'hint' },
       'The video is built in your browser: H.264 MP4 or WebM (VP9/AV1) for the lossy qualities, lossless PNG-in-MOV for editors, or ProRes 4444 for QuickTime and editing. Resolutions the browser encoder rejects (some machines refuse 5K/8K H.264) still work with the MOV qualities.'),
     preview,
   );

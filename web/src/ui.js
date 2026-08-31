@@ -123,7 +123,7 @@ async function collectEntries(entries) {
  *  las zonas de varios archivos, también elegidas desde el diálogo del
  *  sistema (`webkitdirectory`). Donde el navegador no tenga esas dos cosas,
  *  la zona se comporta como siempre: archivos sueltos. */
-export function dropzone({ label, sublabel = '', accept = '', multiple = false, dark = false, onFiles }) {
+export function dropzone({ label, sublabel = '', accept = '', multiple = false, dark = false, describedBy = '', onFiles }) {
   const input = el('input', { type: 'file', accept, ...(multiple ? { multiple: '' } : {}) });
   input.addEventListener('change', () => {
     if (input.files.length) onFiles([...input.files]);
@@ -165,7 +165,12 @@ export function dropzone({ label, sublabel = '', accept = '', multiple = false, 
 
   const zone = el(
     'div',
-    { class: `dropzone${dark ? ' dark' : ''}`, tabindex: '0', role: 'button' },
+    {
+      class: `dropzone${dark ? ' dark' : ''}`, tabindex: '0', role: 'button',
+      // el rótulo que la acompaña no es un <label>: sin esto no llegaría a
+      // un lector de pantalla (ver la cuarta tarjeta de calibración)
+      ...(describedBy ? { 'aria-describedby': describedBy } : {}),
+    },
     el('div', {}, el('strong', {}, label)),
     sublabel ? el('div', { class: 'hint', style: 'margin:4px 0 0' }, sublabel) : null,
     folderBtn,

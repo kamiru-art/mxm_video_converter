@@ -6,6 +6,19 @@ import * as store from './store.js';
 
 const PAPERS = ['A4', 'A3', 'A5', 'Letter'];
 
+/** Tarjeta de calibración: cabecera, entradilla y cuerpo, siempre en ese
+ *  orden y siempre tres bloques. Las cuatro comparten las filas de la rejilla
+ *  (ver .calib-card), y por eso el primer control de cada una arranca a la
+ *  altura de sus vecinas aunque las entradillas ocupen distinto número de
+ *  líneas al estrechar la ventana. */
+function calibCard(title, intro, ...body) {
+  return el('div', { class: 'paper calib-card' },
+    el('h2', {}, title),
+    el('div', { class: 'hint' }, intro),
+    el('div', { class: 'calib-body' }, ...body),
+  );
+}
+
 function profileSaver(kind, getData) {
   const name = el('input', { type: 'text', placeholder: 'profile name' });
   const btn = el('button', {
@@ -74,9 +87,9 @@ export function mountPhase3(root) {
   const aScanDpi = numberInput(300, { min: 0 });
   let aResult = null;
   const aOut = el('div');
-  const cardA = el('div', { class: 'paper' },
-    el('h2', {}, 'Printer profile'),
-    el('div', { class: 'hint' }, 'Measures your printer’s real scale, its tonal response and the minimum reliable marker/QR sizes.'),
+  const cardA = calibCard('Printer profile',
+    'Measures your printer’s real scale, its tonal response and the smallest marker and QR it still prints readably. '
+    + 'Print the page at 100 %, scan it whole and drop it back here. Start with this one: phase ① uses it to compensate the paper.',
     el('div', { class: 'row' },
       field('Paper', aPaper), field('DPI', aDpi),
       field('Scan DPI', aScanDpi, 'The DPI you scanned at.'),
@@ -105,12 +118,12 @@ export function mountPhase3(root) {
           }, [bytes.buffer]);
           aResult = JSON.parse(res);
           aOut.replaceChildren(
-            el('div', { class: 'allok-box', style: 'color:inherit' },
+            el('div', { class: 'allok-box' },
               el('div', {}, `Measured scale: ${(aResult.scale_x * 100).toFixed(2)} % × ${(aResult.scale_y * 100).toFixed(2)} %`),
               el('div', {}, `Smallest detected marker: ${aResult.marker_min_mm ?? '—'} mm → use ≥ ${aResult.marker_recomendado_mm} mm`),
               el('div', {}, `Smallest readable QR: ${aResult.qr_min_mm ?? '—'} mm → use ≥ ${aResult.qr_recomendado_mm} mm`),
             ),
-            aResult.notas?.length ? el('ul', { class: 'warnlist', style: 'color:#8a6d3b' }, aResult.notas.map((n) => el('li', {}, n))) : '',
+            aResult.notas?.length ? el('ul', { class: 'warnlist' }, aResult.notas.map((n) => el('li', {}, n))) : '',
           );
         } catch (e) { toast(String(e.message ?? e), 'err'); }
       },
@@ -129,9 +142,9 @@ export function mountPhase3(root) {
   const bOut = el('div');
   const bCanvas = el('canvas', { class: 'curveplot', width: 360, height: 240, style: 'width:100%; max-width:380px; margin-top:8px' });
   bCanvas.style.display = 'none';
-  const cardB = el('div', { class: 'paper' },
-    el('h2', {}, 'Cyanotype curve'),
-    el('div', { class: 'hint' }, 'Measures the real response of YOUR process (printer + film + chemistry + sun) and builds the compensation curve (Easy Digital Negatives method built in).'),
+  const cardB = calibCard('Cyanotype curve',
+    'Measures the real response of YOUR process (printer + film + chemistry + sun) and builds the compensation curve '
+    + '(Easy Digital Negatives method built in). Expose the chart the way you expose your work, or the curve measures a different process.',
     el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
     field('Chart', bTarget),
     el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
@@ -165,9 +178,9 @@ export function mountPhase3(root) {
           bCanvas.style.display = '';
           drawCurve(bCanvas, { respuesta: bResult.respuesta, lut: bResult.lut });
           bOut.replaceChildren(
-            el('div', { class: 'allok-box', style: 'color:inherit' },
+            el('div', { class: 'allok-box' },
               `Measured dynamic range: ${(bResult.rango_dinamico * 100).toFixed(0)} % · 256-point curve built.`),
-            bResult.notas?.length ? el('ul', { class: 'warnlist', style: 'color:#8a6d3b' }, bResult.notas.map((n) => el('li', {}, n))) : '',
+            bResult.notas?.length ? el('ul', { class: 'warnlist' }, bResult.notas.map((n) => el('li', {}, n))) : '',
           );
         } catch (e) { toast(String(e.message ?? e), 'err'); }
       },
@@ -182,9 +195,9 @@ export function mountPhase3(root) {
   const cMirror = check('Mirrored', true);
   let cResult = null;
   const cOut = el('div');
-  const cardC = el('div', { class: 'paper' },
-    el('h2', {}, 'EDN ColorBlocker'),
-    el('div', { class: 'hint' }, '36 hues × 21 variants: find which ink color blocks UV best on YOUR printer (black doesn’t always win) and build a 3-stop gradient.'),
+  const cardC = calibCard('EDN ColorBlocker',
+    '36 hues × 21 variants: finds which ink color blocks UV best on YOUR printer (black doesn’t always win) and builds a 3-stop gradient. '
+    + 'Print it at maximum quality; this chart is the one that suffers most from a draft setting.',
     el('div', { class: 'row' }, field('Paper', cPaper), field('DPI', cDpi)),
     cMirror.label,
     el('button', {
@@ -216,12 +229,12 @@ export function mountPhase3(root) {
             title: hex,
           });
           cOut.replaceChildren(
-            el('div', { class: 'allok-box', style: 'color:inherit' },
+            el('div', { class: 'allok-box' },
               el('div', {}, 'Best UV blocker: ', sw(cResult.mejor_color), el('code', {}, cResult.mejor_color)),
               el('div', { style: 'margin-top:4px' }, 'Gradient (shadows → highlights): ',
                 ...(cResult.stops ?? []).map((s) => sw(s[1]))),
             ),
-            cResult.notas?.length ? el('ul', { class: 'warnlist', style: 'color:#8a6d3b' }, cResult.notas.map((n) => el('li', {}, n))) : '',
+            cResult.notas?.length ? el('ul', { class: 'warnlist' }, cResult.notas.map((n) => el('li', {}, n))) : '',
           );
         } catch (e) { toast(String(e.message ?? e), 'err'); }
       },
@@ -231,25 +244,33 @@ export function mountPhase3(root) {
   );
 
   // ── exportar/importar perfiles ────────────────────────────
-  const cardD = el('div', { class: 'paper' },
-    el('h2', {}, 'Your profiles & presets'),
-    el('div', { class: 'hint' }, 'They live in this browser. Export a JSON to move them to another machine or keep them with the project.'),
+  const cardD = calibCard('Your profiles & presets',
+    'They live in this browser, not in a server, so clearing site data takes them with it. Export a JSON to move them to '
+    + 'another machine, to keep them beside the project, or simply to have a copy of an afternoon you cannot repeat.',
+    // rotuladas como los campos de las otras tarjetas: así las cuatro
+    // arrancan su primer control a la misma altura
     el('div', { class: 'row' },
-      el('button', {
-        class: 'btn ghost small', onclick: () => {
-          download(new TextEncoder().encode(store.exportAll()), 'mxm_profiles.json', 'application/json');
-        },
-      }, 'Export everything'),
-      dropzone({
-        label: 'Import profiles (JSON)', accept: '.json',
-        onFiles: async ([f]) => {
-          try { store.importAll(await f.text()); toast('Profiles imported.', 'ok'); }
-          catch (e) { toast(`Import failed: ${e.message}`, 'err'); }
-        },
-      }),
+      // aria-describedby y no <label>: envolver un botón en una etiqueta le
+      // reenviaría el clic. Sin esto el rótulo sería texto suelto y la
+      // distinción que lleva no llegaría a un lector de pantalla.
+      el('div', { class: 'field' }, el('span', { id: 'calib-export-cap' }, 'Save a copy'),
+        el('button', {
+          class: 'btn ghost small', style: 'width:100%', 'aria-describedby': 'calib-export-cap',
+          onclick: () => {
+            download(new TextEncoder().encode(store.exportAll()), 'mxm_profiles.json', 'application/json');
+          },
+        }, 'Export everything')),
+      el('div', { class: 'field' }, el('span', { id: 'calib-import-cap' }, 'Bring some back'),
+        dropzone({
+          label: 'Import profiles (JSON)', accept: '.json',
+          describedBy: 'calib-import-cap',
+          onFiles: async ([f]) => {
+            try { store.importAll(await f.text()); toast('Profiles imported.', 'ok'); }
+            catch (e) { toast(`Import failed: ${e.message}`, 'err'); }
+          },
+        })),
     ),
   );
 
-  root.append(el('div', { style: 'display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px' },
-    cardA, cardB, cardC, cardD));
+  root.append(el('div', { class: 'calib-grid' }, cardA, cardB, cardC, cardD));
 }

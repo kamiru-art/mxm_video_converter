@@ -437,10 +437,14 @@ export function mountPhase1(root) {
     field('Compensation curve (cyanotype profile)', curveSel,
       'Calibrated in the Calibration tab. Without a curve, density = original brightness.'),
     el('div', { class: 'row' },
-      field('Curve strength (%)', bindNum('cyan_curve_strength', numberInput(100, { min: 0, max: 100 }))),
-      field('Content adaptation (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 }))),
-      field('Micro-contrast (%)', bindNum('cyan_clarity', numberInput(0, { min: 0, max: 100 }))),
+      field('Curve strength (%)', bindNum('cyan_curve_strength', numberInput(100, { min: 0, max: 100 })),
+        'How much of the calibrated curve to apply. 0 = none.'),
+      field('Micro-contrast (%)', bindNum('cyan_clarity', numberInput(0, { min: 0, max: 100 })),
+        'Local contrast. Brings out pencil lines.'),
     ),
+    field('Content adaptation (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 })),
+      'Spends the ink range on the tones the drawings actually use instead of on the whole scale. Useful when '
+      + 'everything sits in the mid-greys; leave it at 0 to print the curve exactly as calibrated.'),
     field('Negative background', bindSel('cyan_bg', select([['saving', 'INK-SAVING (inked halos only)'], ['full', 'Full (entire background inked)']], s.cyan_bg))),
     el('div', { class: 'row' },
       field('Inked halo (mm)', bindNum('cyan_halo_mm', numberInput(5, { min: 0, step: 0.5 }))),
@@ -767,7 +771,11 @@ export function mountPhase1(root) {
       field('Digits', bindNum('leading_zeros', numberInput(3, { min: 1, max: 8 }), { integer: true })),
       field('From', bindNum('start_index', numberInput(1, { min: 0 }), { integer: true })),
     ),
-    field('Label numbering', numberingSel),
+    field('Label numbering', numberingSel,
+      'Only in use when Labels is set to auto-increment. Sequential numbers the frames by their place in the '
+      + 'selection; Original by their place in the whole video, so Include and Exclude move the two apart and '
+      + 'selecting everything makes them agree. Either way the number belongs to the frame, so repeated drawings '
+      + 'printed once leave their numbers unused.'),
     dedupCheck.label, dedupStatus,
 
     el('h3', {}, 'Sheet & grid'),
@@ -793,7 +801,10 @@ export function mountPhase1(root) {
       field('Prefix', bindText('page_num_prefix', el('input', { type: 'text' }))),
       field('From', bindNum('page_num_start', numberInput(1, { min: 0 }), { integer: true })),
     ),
-    field('Sheet numbering', pageNumberingSel),
+    field('Sheet numbering', pageNumberingSel,
+      'Both start counting at “From”. Sequential numbers the sheets in the order they come out. Original takes each '
+      + 'number from where that sheet’s first frame falls in the whole project, so leaving frames out does not '
+      + 'renumber the sheets that follow.'),
 
     el('h3', {}, 'Registration (to scan back)'),
     bindCheck('registration_on', check('ArUco markers with per-sheet identity (required for phase ②)', s.registration_on)),

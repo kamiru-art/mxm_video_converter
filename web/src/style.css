@@ -141,7 +141,29 @@ body {
   margin: 20px 0 8px; color: var(--tinta-suave);
   border-bottom: 1px solid var(--papel-sombra); padding-bottom: 4px;
 }
-.paper .hint { font-size: 12.5px; color: var(--tinta-suave); margin: 2px 0 10px; }
+/* Letra pequeña de apoyo. La regla base vale en TODA la aplicación: sin ella
+   un .hint fuera del panel de papel no tenía ni cuerpo ni color propios, así
+   que heredaba los del texto normal (15 px, color de la página) y la misma
+   clase se veía de dos tamaños según dónde cayera. Cada superficie solo
+   cambia el color. */
+.hint {
+  font-size: 12.5px; font-weight: 400; line-height: 1.45;
+  color: var(--cian-300); margin: 2px 0 10px;
+}
+.paper .hint { color: var(--tinta-suave); }
+/* dentro de una zona de soltar manda el color de la zona: la misma pista cae
+   sobre papel o sobre fondo oscuro según dónde esté montada. Sin opacidad:
+   rebajarla le quitaba contraste justo en el panel claro. */
+.dropzone .hint { color: inherit; }
+.hint.warn { color: #D8B04C; }
+.paper .hint.warn { color: #8a6d3b; }
+.hint.err { color: #E98C77; }
+.paper .hint.err { color: var(--quimico-error); }
+/* Dentro de una celda del informe no hay bloques que separar y una celda no
+   deja escapar el margen inferior: los 10 px de abajo estiraban la fila
+   entera por cada aviso. */
+table.report .hint { margin: 0; }
+table.report .hint + .hint { margin-top: 3px; }
 
 /* zona oscura de previsualización */
 .bench {
@@ -167,7 +189,10 @@ body {
 .preview-corner.c4 { bottom: -5px; right: -5px; border-bottom: 2px solid var(--cian-300); border-right: 2px solid var(--cian-300); }
 
 /* ── Formularios ──────────────────────────────────────────── */
-label.field { display: block; margin: 8px 0; font-size: 13.5px; font-weight: 500; }
+/* No exige <label>: una fila de acciones necesita la misma geometría
+   (rótulo encima del control) sin envolver un botón en un <label>, que le
+   reenviaría el clic del rótulo. */
+.field { display: block; margin: 8px 0; font-size: 13.5px; font-weight: 500; }
 .field > span { display: block; margin-bottom: 3px; }
 input[type="text"], input[type="number"], select {
   width: 100%; padding: 7px 9px;
@@ -181,6 +206,31 @@ input:disabled, select:disabled { opacity: .45; background: #ECE8DC; cursor: not
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
 .row.tight { align-items: flex-end; }
+/* Una fila de campos reparte SUS PROPIAS filas entre los campos: etiqueta,
+   control y pista quedan cada uno a su altura común. Sin esto, una etiqueta
+   de dos líneas empujaba hacia abajo solo su control y la fila salía
+   escalonada; y una fila que mezcla un campo con pista y otro sin ella
+   cuadraba arriba y se descuadraba abajo.
+   Solo entra donde TODOS los hijos son campos. Eso deja fuera las filas de
+   botones y zonas de soltar, salvo que se envuelvan en .field a propósito
+   para alinearlas (la cuarta tarjeta de calibración lo hace). Donde no haya
+   subgrid, o no haya :has(), la fila se queda como estaba. */
+@supports (grid-template-rows: subgrid) and selector(:has(*)) {
+  .row:not(.tight):not(:has(> :not(.field))) {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    /* el hueco de la fila separa columnas, NO la etiqueta de su control: en
+       rejilla, `gap` vale también entre filas y el campo se abría 10 px más
+       que uno suelto */
+    row-gap: 0;
+  }
+  .row:not(.tight):not(:has(> :not(.field))) > .field {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 3; /* etiqueta · control · pista (vacía si no la hay) */
+  }
+}
 /* botones dentro de una fila de campos: alineados con el borde inferior del
    input, sin estirarse a todo el ancho */
 .row.tight > .btn { flex: 0 0 auto; margin: 8px 0; height: 38px; white-space: nowrap; }
@@ -216,6 +266,9 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .dropzone {
   border: 2px dashed var(--prusia-500); border-radius: var(--radius);
   padding: 26px 16px; text-align: center; color: var(--tinta-suave);
+  /* propio, no heredado: dentro de un .field salía un 10 % más pequeña que
+     las zonas idénticas de las tarjetas vecinas */
+  font-size: 15px;
   background: rgba(46,84,144,0.06);
   cursor: pointer; transition: background .15s, border-color .15s;
 }
@@ -237,7 +290,20 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 /* miniaturas de fotogramas */
 .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin-top: 12px; max-height: 300px; overflow-y: auto; padding: 2px; }
 .thumb { position: relative; border-radius: 4px; overflow: hidden; background: var(--prusia-950); aspect-ratio: 16/10; }
-.thumb img, .thumb canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* `position:absolute` NO es decorativo y `height:100%` tampoco sobra: las
+   dos se necesitan. WebKit no considera definida la altura que sale de
+   `aspect-ratio`, así que con la imagen en flujo normal ese 100 % caía a la
+   altura natural del recorte (70×1131 px dentro de una caja de 70×44) y
+   `overflow:hidden` dejaba a la vista solo la franja vacía del letterbox: en
+   Safari el informe salía con las etiquetas y sin dibujos. Posicionada, el
+   porcentaje se resuelve contra el bloque contenedor, que sí es definido.
+   (`inset:0` por sí solo no basta: con ancho y alto puestos, su `right` y su
+   `bottom` no pintan nada.) */
+.thumb img, .thumb canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain; display: block;
+}
 .thumb .tag {
   position: absolute; left: 0; bottom: 0; right: 0;
   font-family: var(--font-mono); font-size: 9.5px; padding: 1px 4px;
@@ -297,9 +363,13 @@ table.report th { font-family: var(--font-display); font-size: 12px; text-transf
 table.report td.ok { color: var(--quimico-ok); }
 table.report td.bad { color: #E98C77; }
 table.report .mono { font-family: var(--font-mono); font-size: 12px; }
-.warnlist { font-size: 12.5px; color: #D8B04C; margin: 4px 0; padding-left: 18px; }
+.warnlist { font-size: 12.5px; line-height: 1.45; color: #D8B04C; margin: 4px 0; padding-left: 18px; }
+.paper .warnlist { color: #8a6d3b; }
 .missing-box { background: rgba(196,83,58,.12); border: 1px solid rgba(196,83,58,.4); padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px; }
 .allok-box { background: rgba(63,158,110,.12); border: 1px solid rgba(63,158,110,.4); padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px; }
+/* sobre papel el texto de estas cajas es la tinta del panel, no el color
+   claro de la mesa oscura donde nacieron */
+.paper .missing-box, .paper .allok-box { color: var(--tinta); }
 
 /* decir a mano qué hoja es un escaneo que nadie pudo identificar */
 .assign-box {
@@ -307,7 +377,7 @@ table.report .mono { font-family: var(--font-mono); font-size: 12px; }
   padding: 12px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px;
 }
 .assign-box > strong { color: var(--sol); }
-.assign-hint { font-size: 12.5px; color: var(--cian-300); margin: 6px 0 10px; line-height: 1.45; }
+.assign-hint { margin: 6px 0 10px; }
 .assign-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .assign-row .mono { font-family: var(--font-mono); font-size: 12px; flex: 1 1 180px; word-break: break-all; }
 /* Este desplegable cae sobre la mesa oscura del informe, no sobre el papel:
@@ -406,5 +476,20 @@ table.report td.assign-cell .assign-sel { width: 200px; }
 .pagenav { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-family: var(--font-mono); font-size: 13px; color: var(--cian-200); }
 .pagenav button { background: var(--prusia-800); border: 1px solid var(--prusia-700); border-radius: 6px; color: var(--cian-200); cursor: pointer; padding: 4px 12px; font-size: 14px; }
 .pagenav button:hover { background: var(--prusia-700); }
+/* ── Calibración: cuatro tarjetas hermanas ───────────────── */
+.calib-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
+/* Cada tarjeta son tres bloques (cabecera · entradilla · cuerpo) y las tres
+   filas las pone la rejilla de fuera, no la tarjeta: así la entradilla mide
+   lo mismo en las cuatro y el primer control de cada una arranca a la misma
+   altura, sin depender de cuántas líneas ocupe cada texto al estrechar la
+   ventana. Antes, una entradilla de dos líneas subía sus campos una línea
+   entera respecto a la tarjeta de al lado. */
+@supports (grid-template-rows: subgrid) {
+  /* el hueco de 20 px separa tarjetas; dentro de una tarjeta las tres filas
+     van pegadas, así que la rejilla no lo pone entre filas y cada tarjeta
+     recupera abajo la separación de la línea siguiente */
+  .calib-grid { row-gap: 0; }
+  .calib-card { display: grid; grid-template-rows: subgrid; grid-row: span 3; margin-bottom: 20px; }
+}
 details.adv { margin: 10px 0; }
 details.adv > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--prusia-500); }

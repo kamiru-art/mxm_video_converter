@@ -478,8 +478,8 @@ export function mountPhase2(root) {
       el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
       el('td', {}, String(frames?.length ?? 0)),
       el('td', {}, [
-        ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint', style: 'color:#D8B04C' }, a)),
-        r.error ? el('div', { style: 'color:#E98C77' }, r.error) : null,
+        ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint warn' }, a)),
+        r.error ? el('div', { class: 'hint err' }, r.error) : null,
       ]),
     ), el('tr', {}, el('td', {}), el('td', { colspan: '7' }, thumbs))];
     entry.rows = rows;
@@ -550,7 +550,7 @@ export function mountPhase2(root) {
     if (!ph2.layout || !pending.length) return;
     assignSlot.append(el('div', { class: 'assign-box' },
       el('strong', {}, `${pending.length} scan${pending.length > 1 ? 's' : ''} with no sheet identified`),
-      el('div', { class: 'assign-hint' },
+      el('div', { class: 'hint assign-hint' },
         'The markers straightened the sheet, but nothing said WHICH sheet it is: the QR is painted over, '
         + 'unreadable, or the project identifies sheets by QR only. '
         + `${whereTheSheetNumberIs()}, or recognise the drawings in the thumbnails below, and pick the sheet here. `
