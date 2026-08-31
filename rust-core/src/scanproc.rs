@@ -16,7 +16,10 @@ pub const PROXY_SIDES: [usize; 2] = [2400, 1200];
 pub const RESIDUAL_OUTLIER_MM: f64 = 2.5;
 pub const RESIDUAL_WARN_MM: f64 = 1.0;
 pub const FINE_ALIGN_MIN_MM: f64 = 0.15;
-pub const MAX_IMAGE_PIXELS: usize = 250_000_000;
+/// Tope de píxeles de un lienzo, derivado del techo de memoria real de
+/// wasm32 (ver codecs::MAX_CORE_BYTES). Un número de píxeles a secas no
+/// dice nada por sí solo: el mismo escaneo en 16 bits pesa el doble.
+pub const MAX_IMAGE_PIXELS: usize = crate::codecs::MAX_CORE_PIXELS as usize;
 /// Escala medida admisible (px de escaneo por px de layout). Fuera de este
 /// rango la medida es basura, y por arriba el enderezado deja de caber en
 /// memoria por mucho que el lienzo sea razonable.
@@ -29,6 +32,15 @@ pub const SCALE_MAX: f64 = 12.0;
 /// y colaría por debajo del tope. Mismo patrón que en `sheet.rs`.
 pub fn fits_image_budget(w: u64, h: u64) -> bool {
     w > 0 && h > 0 && (w as i128) * (h as i128) <= MAX_IMAGE_PIXELS as i128
+}
+
+/// Bytes que necesita el enderezado de un lienzo de `w`×`h`. Son DOS copias
+/// vivas a la vez, el escaneo de origen y el resultado, y por eso un tope en
+/// píxeles no dice nada: el mismo escaneo en 16 bits pesa el doble que en 8, y
+/// 16 bits es justo lo que pide el trabajo profesional.
+pub fn rectify_bytes(w: u64, h: u64, sixteen: bool) -> u64 {
+    let bpp: u64 = if sixteen { 6 } else { 3 };
+    w.saturating_mul(h).saturating_mul(bpp).saturating_mul(2)
 }
 
 #[derive(Clone)]
@@ -1049,6 +1061,24 @@ pub fn detect_scan(
     if !fits_image_budget(out_w as u64, out_h as u64) {
         fail!("The requested rectification is disproportionate ({out_w}×{out_h} px); check the layout.");
     }
+    // El enderezado tiene DOS copias vivas a la vez, el escaneo de origen y el
+    // resultado, así que el tope en píxeles no basta: 16 bits pesan el doble
+    // que 8, y 16 bits es justo lo que usa el trabajo profesional. Medirlo en
+    // bytes es lo que deja entrar un A4 a 1200 dpi en 16 bits, y lo que hace
+    // que un A3 a 1200 dpi lo diga claro en vez de abortar la instancia sin
+    // ningún mensaje, que es como fallaba antes.
+    let sixteen = matches!(img, DynImg::U16(_));
+    let needed = rectify_bytes(out_w as u64, out_h as u64, sixteen);
+    if needed > crate::codecs::MAX_CORE_BYTES {
+        let mb = |b: u64| b / (1024 * 1024);
+        fail!(
+            "Straightening this scan needs about {} MB at {} bits per channel, and the browser can \
+             address at most {} MB. Scan at 8 bits per channel, or at a lower dpi.",
+            mb(needed),
+            if sixteen { 16 } else { 8 },
+            mb(crate::codecs::MAX_CORE_BYTES)
+        );
+    }
     Ok(DetectData { m, s, flipped: det.flipped, out_w, out_h, refined, local })
 }
 
@@ -1427,6 +1457,23 @@ mod tests {
         // un lienzo degenerado (todo el tope de ancho, la escala máxima de
         // alto) tampoco entra
         assert!(!fits_image_budget(MAX_IMAGE_PIXELS as u64, SCALE_MAX as u64));
+    }
+
+    #[test]
+    fn professional_scan_sizes_are_accepted_or_refused_on_memory() {
+        use crate::codecs::MAX_CORE_BYTES;
+        let gib = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
+        // El requisito: A4 a 1200 dpi en 16 bits tiene que entrar.
+        let a4_1200 = rectify_bytes(9921, 14031, true);
+        assert!(a4_1200 <= MAX_CORE_BYTES, "A4@1200 16 bits pide {:.2} GiB", gib(a4_1200));
+        // A3 a 600 dpi en 16 bits también.
+        assert!(rectify_bytes(7016, 9921, true) <= MAX_CORE_BYTES);
+        // A3 a 1200 dpi en 16 bits NO cabe: dos copias son más de lo que
+        // wasm32 puede direccionar. Se rechaza con mensaje, no abortando.
+        assert!(rectify_bytes(14031, 19843, true) > MAX_CORE_BYTES);
+        // pero el mismo A3 a 1200 dpi en 8 bits sí, que es justo la salida que
+        // ofrece el mensaje de error.
+        assert!(rectify_bytes(14031, 19843, false) <= MAX_CORE_BYTES);
     }
 
     #[test]

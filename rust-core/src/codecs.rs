@@ -5,19 +5,47 @@
 use crate::img::{DynImg, Rgb, Rgb16};
 use image::{DynamicImage, ImageFormat};
 
-pub const MAX_DECODE_PIXELS: u64 = 250_000_000;
+pub const MAX_DECODE_PIXELS: u64 = MAX_CORE_PIXELS;
 
-/// Tope de MEMORIA del decodificado. El de píxeles no basta: el aplanado del
-/// alfa llega a 22 bytes por píxel en el pico (imagen ya decodificada + RGBA
-/// intermedio + salida RGB), así que 250 Mpx pedirían más de 5 GB. En wasm32 el
-/// montón es de 32 bits y la instancia aborta sin mensaje mucho antes; el pool
-/// ya recicla un worker por encima de 700 MB (web/src/pool.js).
-pub const MAX_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
+/// Techo de memoria del núcleo, y el motivo de que exista: `wasm32` direcciona
+/// 4 GiB COMO MÁXIMO, tenga la máquina la RAM que tenga, y el navegador falla
+/// bastante antes de llegar al tope. Todo se mide contra esto y no contra un
+/// número de píxeles, porque lo que agota la memoria es la profundidad de bits
+/// tanto como el tamaño: el mismo escaneo en 16 bits pesa el doble.
+pub const MAX_CORE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 
-/// Bytes vivos en el pico del decodificado: la imagen ya decodificada sigue en
-/// memoria mientras se construyen el RGBA intermedio y la salida RGB.
-fn decode_peak_bytes(w: u64, h: u64, src_bytes_per_px: u64, sixteen: bool) -> u64 {
-    let per_px = src_bytes_per_px + if sixteen { 8 + 6 } else { 4 + 3 };
+/// Tope de píxeles, derivado del de bytes: el caso más barato que el núcleo
+/// procesa entero son 8 bits (3 B/px) y el enderezado necesita dos copias
+/// vivas a la vez, así que 3 GiB / 6 B/px es el mayor lienzo que puede
+/// recorrer el pipeline completo.
+pub const MAX_CORE_PIXELS: u64 = MAX_CORE_BYTES / 6;
+
+/// Tope del pico de decodificado. Es el mismo techo: decodificar es la primera
+/// mitad, y la comprobación del enderezado (scanproc) cubre la segunda.
+pub const MAX_DECODE_BYTES: u64 = MAX_CORE_BYTES;
+
+/// Bytes vivos en el pico del decodificado. Depende del camino, y esa es toda
+/// la diferencia entre aceptar un escaneo profesional y rechazarlo:
+/// sin alfa y ya en RGB, `into_rgb*` se LLEVA el búfer y no se paga nada;
+/// sin alfa pero con conversión (gris, paleta), origen y destino conviven;
+/// con alfa hay que aplanar, y eso sí cuesta un RGBA intermedio más la salida
+/// mientras el original sigue vivo.
+fn decode_peak_bytes(
+    w: u64,
+    h: u64,
+    src_bytes_per_px: u64,
+    out_bytes_per_px: u64,
+    has_alpha: bool,
+    already_rgb: bool,
+) -> u64 {
+    let per_px = if has_alpha {
+        let rgba = if out_bytes_per_px == 6 { 8 } else { 4 };
+        src_bytes_per_px + rgba + out_bytes_per_px
+    } else if already_rgb {
+        src_bytes_per_px
+    } else {
+        src_bytes_per_px + out_bytes_per_px
+    };
     w.saturating_mul(h).saturating_mul(per_px)
 }
 
@@ -50,15 +78,19 @@ fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
     if w * h > MAX_DECODE_PIXELS {
         return Err(format!("Image too large ({w}×{h})."));
     }
-    let has_alpha = img.color().has_alpha();
-    let sixteen = img.color().bits_per_pixel() / img.color().channel_count() as u16 > 8;
-    let peak = decode_peak_bytes(w, h, img.color().bytes_per_pixel() as u64, sixteen);
+    let color = img.color();
+    let has_alpha = color.has_alpha();
+    let sixteen = color.bits_per_pixel() / color.channel_count() as u16 > 8;
+    let already_rgb = matches!(color, image::ColorType::Rgb8 | image::ColorType::Rgb16);
+    let peak =
+        decode_peak_bytes(w, h, color.bytes_per_pixel() as u64, if sixteen { 6 } else { 3 }, has_alpha, already_rgb);
     if peak > MAX_DECODE_BYTES {
         return Err(format!(
-            "Image too heavy to decode ({w}×{h} at {} bits per channel needs about {} MB). \
-             Scan it at a lower dpi, or at 8 bits per channel.",
+            "Image too heavy to decode ({w}×{h} at {} bits per channel needs about {} MB, and the \
+             browser can address at most {} MB). Scan it at a lower dpi, or at 8 bits per channel.",
             if sixteen { 16 } else { 8 },
-            peak / (1024 * 1024)
+            peak / (1024 * 1024),
+            MAX_CORE_BYTES / (1024 * 1024)
         ));
     }
     Ok(Decoded { img, sixteen, has_alpha })
@@ -70,6 +102,28 @@ fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
 /// trae es ruido del formato, así que blanco (el papel) es la respuesta.
 pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
     let Decoded { img, sixteen, has_alpha } = decode_checked(bytes)?;
+
+    // Camino rápido, y es el de TODOS los escaneos: sin alfa no hay nada que
+    // aplanar, así que into_rgb16/into_rgb8 se LLEVA el búfer en vez de
+    // copiarlo. Antes se construía un RGBA intermedio siempre: dos copias
+    // enteras de más, y en 16 bits eso es la diferencia entre pedir 20 bytes
+    // por píxel y pedir 6. Un A3 de 16 bits a 600 dpi necesitaba 1,39 GB para
+    // entregar 0,42 GB, y por eso un escaneo profesional no cabía.
+    if !has_alpha {
+        return Ok((
+            if sixteen {
+                let b = img.into_rgb16();
+                let (w, h) = (b.width() as usize, b.height() as usize);
+                DynImg::U16(Rgb16 { w, h, data: b.into_raw() })
+            } else {
+                let b = img.into_rgb8();
+                let (w, h) = (b.width() as usize, b.height() as usize);
+                DynImg::U8(Rgb { w, h, data: b.into_raw() })
+            },
+            false,
+        ));
+    }
+
     let bg = [255u8, 255, 255];
     if sixteen {
         // el fondo llega en 8 bits: 0..255 → 0..65535
@@ -108,7 +162,9 @@ pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
 /// Devuelve (rgba, w, h, era_de_16_bits, tenía_alfa).
 pub fn decode_rgba8(bytes: &[u8]) -> Result<(Vec<u8>, usize, usize, bool, bool), String> {
     let Decoded { img, sixteen, has_alpha } = decode_checked(bytes)?;
-    let rgba = img.to_rgba8();
+    // into_ y no to_: la imagen es nuestra, así que un RGBA8 de origen se
+    // mueve en vez de duplicarse
+    let rgba = img.into_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
     Ok((rgba.into_raw(), w, h, sixteen, has_alpha))
 }
@@ -265,15 +321,29 @@ mod tests {
     }
 
     #[test]
-    fn decode_budget_counts_bytes_not_only_pixels() {
-        // A3 a 600 dpi en 16 bits: cabe de sobra en el tope de píxeles y aun
-        // así pide ~1,4 GB, que en un montón de 32 bits aborta la instancia.
-        let (w, h) = (7016u64, 9921u64);
-        assert!(w * h < MAX_DECODE_PIXELS, "el tope de píxeles no lo detiene");
-        assert!(decode_peak_bytes(w, h, 6, true) > MAX_DECODE_BYTES);
-        // lo que sí tiene que seguir entrando: A4 a 600 dpi en 16 bits y A3 a
-        // 600 dpi en 8 bits
-        assert!(decode_peak_bytes(4960, 7016, 6, true) <= MAX_DECODE_BYTES);
-        assert!(decode_peak_bytes(w, h, 3, false) <= MAX_DECODE_BYTES);
+    fn professional_scans_fit_and_the_budget_is_measured_in_bytes() {
+        // El requisito: A4 a 1200 dpi en 16 bits, que es donde trabaja el
+        // encargo profesional. Sin alfa y ya en RGB, into_rgb16 se lleva el
+        // búfer, así que el pico es UNA copia y no tres.
+        let (w, h) = (9921u64, 14031u64);
+        let una_copia = w * h * 6;
+        assert_eq!(decode_peak_bytes(w, h, 6, 6, false, true), una_copia);
+        assert!(decode_peak_bytes(w, h, 6, 6, false, true) <= MAX_DECODE_BYTES, "A4@1200 16 bits tiene que entrar");
+        // Y así es como se rechazaba antes: el cálculo viejo suponía un RGBA
+        // intermedio SIEMPRE (20 B/px en 16 bits) contra un tope de 1 GiB.
+        const TOPE_VIEJO: u64 = 1024 * 1024 * 1024;
+        assert!(w * h * 20 > TOPE_VIEJO, "2,59 GiB pedidos contra 1 GiB de tope");
+        assert!(una_copia <= TOPE_VIEJO, "y solo hacían falta 0,78 GiB");
+
+        // A3 a 600 dpi en 16 bits, que también se rechazaba, ahora entra
+        assert!(decode_peak_bytes(7016, 9921, 6, 6, false, true) <= MAX_DECODE_BYTES);
+
+        // el alfa sí paga el aplanado: original + RGBA + salida
+        assert_eq!(decode_peak_bytes(10, 10, 8, 6, true, false), 100 * (8 + 8 + 6));
+        // y una conversión sin alfa paga origen + destino, no más
+        assert_eq!(decode_peak_bytes(10, 10, 2, 6, false, false), 100 * (2 + 6));
+
+        // lo que sigue sin caber, porque wasm32 no lo puede direccionar
+        assert!(decode_peak_bytes(23386, 33071, 6, 6, false, true) > MAX_DECODE_BYTES, "A3@2000 16 bits no cabe");
     }
 }

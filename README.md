@@ -84,6 +84,13 @@ Between phase 1 and phase 2, you do the manual work:
 - If the application does not find sufficient markers, it lets you point at
   them.
 - The full sequence keeps 16 bits for each color channel.
+- The application accepts large scans. An A4 sheet at 1200 dots per inch in 16
+  bits is possible, and so is an A3 sheet at 600 dots per inch.
+- A browser gives the application a limited quantity of memory, and the
+  application holds two copies of a scan while it makes the scan straight.
+  Thus there is a maximum size. If a scan is too large, the application tells
+  you how much memory it needs. Then scan again at 8 bits for each channel, or
+  at a lower resolution.
 - The application makes a report with thumbnails.
 - The application makes rescue sheets. A rescue sheet contains only the
   frames that failed, thus you print again only what is necessary.
