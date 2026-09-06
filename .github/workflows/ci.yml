@@ -3,7 +3,9 @@
 # Every push to main or to a feat/** branch, and every pull request, runs
 # the full test pyramid:
 #   1. rust  — native tests of the core (includes synthetic end-to-end
-#              roundtrips: sheet → simulated scan → recovered frames).
+#              roundtrips: sheet → simulated scan → recovered frames), then
+#              clippy with warnings as errors, natively and for wasm32 (the
+#              only target that compiles api.rs, the WebAssembly boundary).
 #   2. web   — compiles the core to WebAssembly, type-checks the TypeScript
 #              (tsc, strict, three projects), builds the site, runs the
 #              browser end-to-end test (real Chrome, workers + WASM) and
@@ -56,9 +58,19 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The Rust version lives in rust-toolchain.toml, so that CI and every
+      # developer machine run the same compiler and the same clippy. The
+      # action defaults to `stable`, which would install a second toolchain
+      # and lint with whichever clippy that happens to be, so the channel is
+      # read from the file and handed to it.
+      - name: Read the pinned Rust version
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           components: clippy
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust-core
@@ -66,16 +78,17 @@ jobs:
         run: cargo test --release
         working-directory: rust-core
 
-      # Clippy warnings are NOT fatal: the core carries a backlog of them,
-      # mostly indexed-loop lints in the pixel kernels where the index is the
-      # point. What must stay fatal is clippy failing to run at all — a real
-      # compile error. Without `pipefail` the pipe to `tail` returns tail's
-      # exit status, which is always 0, so the step could not fail either way.
-      - name: Clippy (warnings informational, errors fatal)
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --release --all-targets 2>&1 | tail -5
+      # Warnings are errors. The backlog that used to make this step
+      # informational has been cleared; the two lints the code disagrees with
+      # are allowed, with the reason, in the [lints] table of Cargo.toml.
+      # `--all-targets` covers the unit and integration tests too.
+      - name: Clippy (native, warnings are errors)
+        run: cargo clippy --release --all-targets -- -D warnings
+        working-directory: rust-core
+      # api.rs is `#![cfg(target_arch = "wasm32")]`: the native run above
+      # never compiles it, so the WebAssembly boundary gets its own pass.
+      - name: Clippy (wasm32, warnings are errors)
+        run: cargo clippy --release --target wasm32-unknown-unknown -- -D warnings
         working-directory: rust-core
 
   web:
@@ -89,8 +102,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read the pinned Rust version
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
@@ -117,9 +134,9 @@ jobs:
       - name: Compile core to WebAssembly
         run: wasm-pack build --release --target web --out-dir ../web/src/wasm
         working-directory: rust-core
-      # Node 24: los scripts de la web (prepare-ffmpeg.mts, e2e-run.mts) son
-      # TypeScript que Node ejecuta directamente por borrado de tipos, que
-      # está activado sin bandera desde 22.18 y sin aviso desde 24.
+      # Node 24: the web scripts (prepare-ffmpeg.mts, e2e-run.mts) are
+      # TypeScript that Node runs directly by stripping the types, which is
+      # on without a flag since 22.18 and without a warning since 24.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -128,10 +145,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
         working-directory: web
-      # Los tipos se comprueban ANTES de construir nada: Vite solo borra las
-      # anotaciones, no las verifica, así que sin este paso un error de tipos
-      # llegaría al bundle. `npm run build` lo repite por si se construye a
-      # mano; aquí va aparte para que el fallo se lea como lo que es.
+      # Types are checked BEFORE anything is built: Vite only strips the
+      # annotations, it never verifies them, so without this step a type
+      # error would reach the bundle. `npm run build` repeats it for manual
+      # builds; here it stands alone so a failure reads as what it is.
       - name: Type check (tsc)
         run: npm run typecheck
         working-directory: web

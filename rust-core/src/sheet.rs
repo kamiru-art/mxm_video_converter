@@ -744,7 +744,6 @@ struct MetaRow {
     texto: String,
     font_px: f32,
     tw: i64,
-    th: i64,
     tx: i64,
     ty: i64,
     total_w: i64,
@@ -774,7 +773,6 @@ fn meta_row_geometry(s: &Settings, l: &Layout, text_str: &str, cell_x: f64, meta
         texto,
         font_px,
         tw,
-        th,
         tx: qx + qr_px + gap,
         ty: (meta_top + ((l.meta_h - th) as f64) / 2.0).round() as i64,
         total_w,
@@ -800,7 +798,7 @@ pub struct FrameInput {
 
 fn flatten_rgba(rgba: &[u8], w: usize, h: usize, base: [u8; 3]) -> Rgb {
     let mut data = Vec::with_capacity(w * h * 3);
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         let a = p[3] as u32;
         for c in 0..3 {
             data.push((((p[c] as u32) * a + (base[c] as u32) * (255 - a)) / 255) as u8);
@@ -1223,13 +1221,14 @@ mod tests {
     }
 
     fn base_settings() -> Settings {
-        let mut s = Settings::default();
-        s.registration_on = true;
-        s.dpi = 150;
-        s.cols = 3;
-        s.rows = 3;
-        s.project_name = "test".into();
-        s
+        Settings {
+            registration_on: true,
+            dpi: 150,
+            cols: 3,
+            rows: 3,
+            project_name: "test".into(),
+            ..Default::default()
+        }
     }
 
     fn rects_overlap(a: [i64; 4], b: [i64; 4]) -> bool {
@@ -1374,9 +1373,7 @@ mod tests {
             assert!(sets.insert(ids), "hoja {n} repite IDs");
         }
         // con QR (legado) los IDs son la posición
-        let mut s = Settings::default();
-        s.qr_on = true;
-        s.marker_count = 8;
+        let s = Settings { qr_on: true, marker_count: 8, ..Default::default() };
         assert_eq!(marker_ids_for_sheet(&s, 5), (0..8).collect::<Vec<u32>>());
     }
 

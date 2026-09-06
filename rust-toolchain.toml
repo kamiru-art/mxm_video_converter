@@ -1,0 +1,11 @@
+# Toolchain fijado para que CI y la máquina de cada persona compilen y linteen
+# con el mismo compilador. Clippy es bloqueante en CI (`-D warnings`) y cada
+# versión de Rust estrena lints; sin este pin, una release nueva de Rust
+# rompería CI sin que nadie hubiera tocado el repositorio. Para subir de
+# versión: cambiar `channel`, correr `cargo clippy --all-targets` en
+# `rust-core/` (también con `--target wasm32-unknown-unknown`, que es el único
+# que compila `api.rs`), arreglar lo que salga, y subirlo en el mismo commit.
+[toolchain]
+channel = "1.98"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

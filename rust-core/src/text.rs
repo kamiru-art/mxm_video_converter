@@ -74,7 +74,7 @@ mod tests {
         assert!(w > 40 && h > 15, "w={w} h={h}");
         let mut c = Rgb::new(200, 40, [255, 255, 255]);
         draw_text(&mut c, "ñandú_01", 4, 4, 24.0, [0, 0, 0]);
-        let dark = c.data.chunks_exact(3).filter(|p| p[0] < 100).count();
+        let dark = c.data.as_chunks::<3>().0.iter().filter(|p| p[0] < 100).count();
         assert!(dark > 50, "se dibujaron {dark} píxeles oscuros");
     }
 }

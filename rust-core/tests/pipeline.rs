@@ -26,16 +26,18 @@ fn synth_frame(w: usize, h: usize, base: [u8; 3]) -> (FrameInput, [u8; 3]) {
 }
 
 fn base_settings() -> Settings {
-    let mut s = Settings::default();
-    s.registration_on = true;
-    s.dpi = 150;
-    s.cols = 2;
-    s.rows = 2;
-    s.marker_count = 8;
-    s.project_name = "demo".into();
-    s.out_name = "demo".into();
-    (s.marker_size_mm, s.qr_size_mm) = (10.0, 14.0);
-    s
+    Settings {
+        registration_on: true,
+        dpi: 150,
+        cols: 2,
+        rows: 2,
+        marker_count: 8,
+        project_name: "demo".into(),
+        out_name: "demo".into(),
+        marker_size_mm: 10.0,
+        qr_size_mm: 14.0,
+        ..Default::default()
+    }
 }
 
 /// Simula el escaneo: pega la hoja sobre un fondo mayor, aplica una
@@ -86,7 +88,7 @@ fn simulate_scan(sheet_img: &Rgb, scale: f64, seed: u64) -> Rgb {
 
 fn mean_rgb(img: &Rgb) -> [f64; 3] {
     let mut acc = [0.0f64; 3];
-    for p in img.data.chunks_exact(3) {
+    for p in img.data.as_chunks::<3>().0 {
         for c in 0..3 {
             acc[c] += p[c] as f64;
         }
@@ -243,8 +245,7 @@ fn cyanotype_full_roundtrip() {
     let azul = cyanotype::simulate_print(&copia_derecha, None, Some(&s.cyan_ink), None);
 
     let scan = simulate_scan(&azul, 1.3, 42);
-    let mut opts = ScanOptions::default();
-    opts.mode = "auto".into(); // el layout dice "cianotipia"
+    let opts = ScanOptions { mode: "auto".into(), ..Default::default() }; // el layout dice "cianotipia"
     let out = process_scan(DynImg::U8(scan), "cyan1.png", &layout, &opts, &HashMap::new());
     assert_eq!(out.result["ok"], json!(true), "resultado: {}", out.result);
     assert_eq!(out.frames.len(), 2, "{}", out.result);
@@ -374,7 +375,7 @@ fn transparent_frames_take_the_chosen_alpha_colour() {
         orig_file: None,
     };
     let count = |img: &Rgb, c: [u8; 3]| {
-        img.data.chunks_exact(3).filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2]).count()
+        img.data.as_chunks::<3>().0.iter().filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2]).count()
     };
     let labels: Vec<String> = (1..=4).map(|i| format!("demo_{i:03}")).collect();
     let sheet_with = |mode: &str| {

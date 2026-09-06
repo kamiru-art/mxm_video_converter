@@ -142,7 +142,7 @@ pub fn detect_markers_multi(
     };
     for (prof_mode, escalated) in profiles {
         let params = params_for_mode(prof_mode);
-        let mut detect_on = |name: &str, g: &Gray, inverted: bool, best: &mut MultiDetect| -> bool {
+        let detect_on = |name: &str, g: &Gray, inverted: bool, best: &mut MultiDetect| -> bool {
             let dets = detect_markers(g, dict, &params);
             let mut found: HashMap<u32, [Pt; 4]> = HashMap::new();
             for d in dets {
@@ -861,21 +861,21 @@ macro_rules! warn_res {
 
 /// Fase de detección: marcadores, escala, homografía y corrector local.
 /// Muta `res` (informe) y voltea `img` en el sitio si llegó espejado.
-/// Err(()) = fallo; el error ya quedó escrito en `res`.
+/// `None` = fallo; el error ya quedó escrito en `res`.
 pub fn detect_scan(
     img: &mut DynImg,
     layout: &Value,
     opts: &ScanOptions,
     markers: &LayoutMarkers,
     res: &mut Value,
-) -> Result<DetectData, ()> {
+) -> Option<DetectData> {
     macro_rules! warn {
         ($($arg:tt)*) => { warn_res!(res, $($arg)*) };
     }
     macro_rules! fail {
         ($($arg:tt)*) => {{
             res["error"] = json!(format!($($arg)*));
-            return Err(());
+            return None;
         }};
     }
 
@@ -1079,7 +1079,7 @@ pub fn detect_scan(
             mb(crate::codecs::MAX_CORE_BYTES)
         );
     }
-    Ok(DetectData { m, s, flipped: det.flipped, out_w, out_h, refined, local })
+    Some(DetectData { m, s, flipped: det.flipped, out_w, out_h, refined, local })
 }
 
 /// Entrada mínima de la fase final (serializable a través del puente JS).
@@ -1273,8 +1273,8 @@ pub fn process_scan(
     let markers = resolve_markers(layout);
     let mut res = base_report(scan_name);
     let det = match detect_scan(&mut img, layout, opts, &markers, &mut res) {
-        Ok(d) => d,
-        Err(()) => {
+        Some(d) => d,
+        None => {
             return ScanOutput { result: res, frames: Vec::new(), unidentified: Vec::new(), overlay: None }
         }
     };
@@ -1318,7 +1318,7 @@ fn normalize_with_patches(
         let mut n = 0.0;
         match &crop {
             DynImg::U8(i) => {
-                for p in i.data.chunks_exact(3) {
+                for p in i.data.as_chunks::<3>().0 {
                     for c in 0..3 {
                         acc[c] += p[c] as f64;
                     }
@@ -1326,7 +1326,7 @@ fn normalize_with_patches(
                 }
             }
             DynImg::U16(i) => {
-                for p in i.data.chunks_exact(3) {
+                for p in i.data.as_chunks::<3>().0 {
                     for c in 0..3 {
                         acc[c] += p[c] as f64;
                     }
@@ -1356,7 +1356,7 @@ fn normalize_with_patches(
     }
     match warp {
         DynImg::U8(i) => {
-            for p in i.data.chunks_exact_mut(3) {
+            for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
                     let v = (p[c] as f64 - black[c]) * ((white_t - black_t) / (white[c] - black[c])) + black_t;
                     p[c] = v.round().clamp(0.0, 255.0) as u8;
@@ -1364,7 +1364,7 @@ fn normalize_with_patches(
             }
         }
         DynImg::U16(i) => {
-            for p in i.data.chunks_exact_mut(3) {
+            for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
                     let v = (p[c] as f64 - black[c]) * ((white_t - black_t) / (white[c] - black[c])) + black_t;
                     p[c] = v.round().clamp(0.0, 65535.0) as u16;
@@ -1414,7 +1414,7 @@ fn build_overlay(
     if let Some(obj) = layout_bboxes.as_object() {
         for (mid, bb) in obj {
             if let Some(b) = layoutfile::bbox_of(bb) {
-                let ok = mid.parse::<u32>().ok().map_or(false, |id| refined_ids.contains(&id));
+                let ok = mid.parse::<u32>().ok().is_some_and(|id| refined_ids.contains(&id));
                 rect(b, if ok { [0, 200, 0] } else { [230, 0, 0] }, if ok { t } else { t * 2 }, false);
             }
         }

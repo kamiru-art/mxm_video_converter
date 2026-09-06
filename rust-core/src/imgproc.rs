@@ -97,8 +97,8 @@ pub fn clahe(src: &Gray, clip_limit: f32, tiles: usize) -> Gray {
     if w < tiles || h < tiles {
         return src.clone();
     }
-    let tw = (w + tiles - 1) / tiles;
-    let th = (h + tiles - 1) / tiles;
+    let tw = w.div_ceil(tiles);
+    let th = h.div_ceil(tiles);
     // LUT por tile
     let mut luts = vec![[0u8; 256]; tiles * tiles];
     for ty in 0..tiles {
@@ -422,7 +422,7 @@ mod tests {
             g.data[i] = 220;
         }
         let t = otsu_threshold(&g);
-        assert!(t >= 20 && t < 220);
+        assert!((20..220).contains(&t));
     }
 
     #[test]

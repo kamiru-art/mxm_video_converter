@@ -217,7 +217,7 @@ impl Rgb {
     pub fn to_gray(&self) -> Gray {
         // Luminancia entera estándar (igual que OpenCV/PIL "L").
         let mut data = Vec::with_capacity(self.w * self.h);
-        for p in self.data.chunks_exact(3) {
+        for p in self.data.as_chunks::<3>().0 {
             let v = (299 * p[0] as u32 + 587 * p[1] as u32 + 114 * p[2] as u32 + 500) / 1000;
             data.push(v as u8);
         }
@@ -225,7 +225,7 @@ impl Rgb {
     }
     /// Canal rojo (clave en cianotipia: el azul de Prusia es casi negro ahí).
     pub fn red_channel(&self) -> Gray {
-        let data = self.data.chunks_exact(3).map(|p| p[0]).collect();
+        let data = self.data.as_chunks::<3>().0.iter().map(|p| p[0]).collect();
         Gray { w: self.w, h: self.h, data }
     }
     pub fn flip_horizontal(&self) -> Rgb {
@@ -371,9 +371,7 @@ fn resize_channels(src: &[u8], sw: usize, sh: usize, ch: usize, dw: usize, dh: u
                 }
             }
             let o = (y * dw + d) * ch;
-            for c in 0..ch {
-                tmp[o + c] = acc[c];
-            }
+            tmp[o..o + ch].copy_from_slice(&acc[..ch]);
         }
     }
     let mut out = vec![0u8; dw * dh * ch];
@@ -477,12 +475,12 @@ mod tests {
 
     #[test]
     fn resize_rgba_flat_and_opaque() {
-        let src: Vec<u8> = std::iter::repeat([9u8, 120, 240, 255]).take(40 * 30).flatten().collect();
+        let src: Vec<u8> = std::iter::repeat_n([9u8, 120, 240, 255], 40 * 30).flatten().collect();
         for (dw, dh) in [(80usize, 60usize), (13, 9)] {
             let out = resize_rgba_bytes(&src, 40, 30, dw, dh);
             assert_eq!(out.len(), dw * dh * 4);
             assert_eq!(&out[..4], &[9, 120, 240, 255]);
-            assert!(out.chunks_exact(4).all(|p| p == [9, 120, 240, 255]));
+            assert!(out.as_chunks::<4>().0.iter().all(|p| *p == [9, 120, 240, 255]));
         }
     }
 

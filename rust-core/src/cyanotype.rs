@@ -169,7 +169,7 @@ pub fn make_negative(
         }
     }
     let ramp = ink_ramp(ink_color, stops);
-    let has_lut = lut.map_or(false, |l| l.len() == 256);
+    let has_lut = lut.is_some_and(|l| l.len() == 256);
     let lut_arr: Vec<f64> = if has_lut {
         lut.unwrap().to_vec()
     } else {
@@ -227,7 +227,7 @@ fn density_from_pixels(neg: &Rgb, ink_color: Option<&str>, stops: Option<&[InkSt
         }
     }
     let mut out = Vec::with_capacity(neg.w * neg.h);
-    for p in neg.data.chunks_exact(3) {
+    for p in neg.data.as_chunks::<3>().0 {
         let t = ((p[0] as f64 - r0[0]) * eje[0]
             + (p[1] as f64 - r0[1]) * eje[1]
             + (p[2] as f64 - r0[2]) * eje[2])
@@ -389,7 +389,7 @@ mod tests {
         assert!(effective_lut(None, 100.0, 0.0, None).is_none());
         let lut: Vec<f64> = (0..256).map(|i| i as f64).collect();
         assert!(effective_lut(Some(&lut), 100.0, 0.0, None).is_none());
-        let lut2: Vec<f64> = (0..256).map(|i| (i as f64 * 0.5)).collect();
+        let lut2: Vec<f64> = (0..256).map(|i| i as f64 * 0.5).collect();
         assert!(effective_lut(Some(&lut2), 100.0, 0.0, None).is_some());
         // fuerza 0 anula la curva
         assert!(effective_lut(Some(&lut2), 0.0, 0.0, None).is_none());

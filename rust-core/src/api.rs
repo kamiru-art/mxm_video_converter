@@ -194,7 +194,7 @@ pub fn dedup_hashes(meta_json: &str, pixels: &[u8]) -> Result<String, JsValue> {
         let rgba = f.rgba.ok_or_else(|| err("Frame without pixels"))?;
         // aplanar sobre blanco (lo que ve la impresión)
         let mut rgb = Vec::with_capacity(f.w * f.h * 3);
-        for p in rgba.chunks_exact(4) {
+        for p in rgba.as_chunks::<4>().0 {
             let a = p[3] as u32;
             for c in 0..3 {
                 rgb.push(((p[c] as u32 * a + 255 * (255 - a)) / 255) as u8);
@@ -232,7 +232,7 @@ pub fn content_histogram(meta_json: &str, pixels: &[u8]) -> Result<String, JsVal
     for f in frames {
         if let Some(rgba) = f.rgba {
             let mut rgb = Vec::with_capacity(f.w * f.h * 3);
-            for p in rgba.chunks_exact(4) {
+            for p in rgba.as_chunks::<4>().0 {
                 let a = p[3] as u32;
                 for c in 0..3 {
                     rgb.push(((p[c] as u32 * a + 255 * (255 - a)) / 255) as u8);
@@ -341,7 +341,7 @@ fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> Result<Rgb, JsValue> {
         return Err(err("RGBA buffer does not match the given dimensions"));
     }
     let mut data = Vec::with_capacity(w * h * 3);
-    for p in rgba.chunks_exact(4).take(w * h) {
+    for p in rgba.as_chunks::<4>().0.iter().take(w * h) {
         data.extend_from_slice(&p[..3]);
     }
     Ok(Rgb { w, h, data })
@@ -387,7 +387,7 @@ pub fn scan_detect(
     let mut img = DynImg::U8(rgba_to_rgb(rgba, w, h)?);
     let mut res = base_report(scan_name);
     match detect_scan(&mut img, &layout, &opts, &markers, &mut res) {
-        Ok(d) => {
+        Some(d) => {
             let ids: Vec<u32> = d.refined.keys().cloned().collect();
             Ok(json!({
                 "ok": true,
@@ -402,7 +402,7 @@ pub fn scan_detect(
             })
             .to_string())
         }
-        Err(()) => Ok(json!({ "ok": false, "res": res }).to_string()),
+        None => Ok(json!({ "ok": false, "res": res }).to_string()),
     }
 }
 
@@ -429,7 +429,7 @@ pub fn scan_finish(
     // el informe debe ser un objeto con "advertencias" (array): un estado
     // malformado no debe poder hacer panic aguas abajo
     let res = match state.get("res") {
-        Some(r) if r.is_object() && r.get("advertencias").map_or(false, |a| a.is_array()) => r.clone(),
+        Some(r) if r.is_object() && r.get("advertencias").is_some_and(|a| a.is_array()) => r.clone(),
         _ => base_report(scan_name),
     };
     let s = state.get("s").and_then(|v| v.as_f64()).ok_or_else(|| err("state without scale"))?;

@@ -54,10 +54,13 @@ fn cal_frame(paper: &str, dpi: u32, landscape: bool) -> CalGeometry {
 // Página de prueba de impresora
 // ────────────────────────────────────────────────────────────────
 
+/// Un cuadrado de la prueba de tamaño: (id, mm, pos, lado, quiet).
+pub type SizeTestSquare = (u32, f64, (i64, i64), i64, i64);
+
 pub struct PrinterTestGeometry {
     pub cal: CalGeometry,
     pub ramp: Vec<([i64; 4], u8)>,
-    pub size_test: Vec<(u32, f64, (i64, i64), i64, i64)>, // id, mm, pos, lado, quiet
+    pub size_test: Vec<SizeTestSquare>,
     pub qr_test: Vec<(f64, [i64; 4], String)>,
 }
 
@@ -149,13 +152,11 @@ pub fn render_printer_test(paper: &str, dpi: u32) -> Rgb {
     canvas
 }
 
+/// Resultado de `align_to_canonical`: (warp RGB8, escala, esquinas refinadas por id).
+type Aligned = (Rgb, f64, HashMap<u32, [Pt; 4]>);
+
 /// Alinea el escaneo de una carta al lienzo canónico (con espejo automático).
-/// Devuelve (warp RGB8, escala, esquinas refinadas por id).
-fn align_to_canonical(
-    mut img: DynImg,
-    cal: &CalGeometry,
-    mode: &str,
-) -> Result<(Rgb, f64, HashMap<u32, [Pt; 4]>), String> {
+fn align_to_canonical(mut img: DynImg, cal: &CalGeometry, mode: &str) -> Result<Aligned, String> {
     let expected: Vec<u32> = cal.marker_bboxes.keys().cloned().collect();
     let det = detect_oriented(&mut img, Dict::Dict4x4_50, &expected, mode, expected.len());
     if det.found.len() < 3 {
@@ -888,8 +889,8 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
     }
 
     // análisis por matiz
-    let mut monotona = vec![true; CB_COLS];
-    let mut escalones = vec![0usize; CB_COLS];
+    let mut monotona = [true; CB_COLS];
+    let mut escalones = [0usize; CB_COLS];
     let mut suavidad = vec![0.0f64; CB_COLS];
     for k in 0..CB_COLS {
         let colv = &v[k];
@@ -902,7 +903,7 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
                 escalones[k] += 1;
             }
         }
-        let mut sorted = colv.clone();
+        let mut sorted = *colv;
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let ideal = (sorted[CB_ROWS - 1] - sorted[0]) / (CB_ROWS - 1) as f64;
         let mut acc = 0.0;

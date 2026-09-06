@@ -230,11 +230,10 @@ fn identify(cells: &[f64], dict: Dict, params: &DetectorParams) -> Option<(usize
     let border_total = modules * modules - n * n;
     for r in 0..modules {
         for c in 0..modules {
-            if r == 0 || c == 0 || r == modules - 1 || c == modules - 1 {
-                if bin[r * modules + c] == 1 {
+            if (r == 0 || c == 0 || r == modules - 1 || c == modules - 1)
+                && bin[r * modules + c] == 1 {
                     bad_border += 1;
                 }
-            }
         }
     }
     if bad_border as f32 > params.max_bad_border_rate * border_total as f32 {
@@ -254,7 +253,7 @@ fn identify(cells: &[f64], dict: Dict, params: &DetectorParams) -> Option<(usize
         for (id, _) in dict.markers().iter().enumerate() {
             let mb = marker_bits(dict, id);
             let d = hamming(&rot_bits, &mb);
-            if d <= allowed && best.map_or(true, |b| d < b.2) {
+            if d <= allowed && best.is_none_or(|b| d < b.2) {
                 best = Some((id, rot, d));
             }
         }
