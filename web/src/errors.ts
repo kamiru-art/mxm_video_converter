@@ -4,7 +4,8 @@
  *  DOMException. Lo que antes era `e.message ?? e` repetido en cada catch. */
 export function errMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object' && 'message' in e && typeof e.message === 'string') return e.message;
+  if (e && typeof e === 'object' && 'message' in e && typeof e.message === 'string')
+    return e.message;
   return String(e);
 }
 

@@ -27,7 +27,9 @@ async function initDevice(): Promise<GPUDevice | null> {
         maxTextureDimension2D: want('maxTextureDimension2D', 16384),
       },
     });
-    device.lost.then(() => { devicePromise = null; });
+    device.lost.then(() => {
+      devicePromise = null;
+    });
     return device;
   } catch {
     return null;
@@ -125,13 +127,21 @@ function getPipeline(device: GPUDevice): GPUComputePipeline {
 
 function invert3x3(m: number[]): number[] | null {
   const [a, b, c, d, e, f, g, h, i] = m;
-  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const A = e * i - f * h,
+    B = -(d * i - f * g),
+    C = d * h - e * g;
   const det = a * A + b * B + c * C;
   if (!det || !Number.isFinite(det)) return null;
   return [
-    A / det, -(b * i - c * h) / det, (b * f - c * e) / det,
-    B / det, (a * i - c * g) / det, -(a * f - c * d) / det,
-    C / det, -(a * h - b * g) / det, (a * e - b * d) / det,
+    A / det,
+    -(b * i - c * h) / det,
+    (b * f - c * e) / det,
+    B / det,
+    (a * i - c * g) / det,
+    -(a * f - c * d) / det,
+    C / det,
+    -(a * h - b * g) / det,
+    (a * e - b * d) / det,
   ];
 }
 
@@ -144,12 +154,19 @@ export type WarpSource = ImageBitmap | OffscreenCanvas;
  * `flipped`: el escaneo llegó espejado (la homografía se calculó sobre la
  * imagen volteada). Devuelve RGBA (Uint8Array) o null si la GPU no puede.
  */
-export async function gpuWarpPerspective(source: WarpSource, m: number[], flipped: boolean, outW: number, outH: number): Promise<Bytes | null> {
+export async function gpuWarpPerspective(
+  source: WarpSource,
+  m: number[],
+  flipped: boolean,
+  outW: number,
+  outH: number,
+): Promise<Bytes | null> {
   const device = await getGpuDevice();
   if (!device) return null;
   const minv = invert3x3(m);
   if (!minv) return null;
-  const srcW = source.width, srcH = source.height;
+  const srcW = source.width,
+    srcH = source.height;
   const outBytes = outW * outH * 4;
   const lim = device.limits;
   if (srcW > lim.maxTextureDimension2D || srcH > lim.maxTextureDimension2D) return null;
@@ -163,11 +180,17 @@ export async function gpuWarpPerspective(source: WarpSource, m: number[], flippe
     tex = device.createTexture({
       size: [srcW, srcH],
       format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
     });
     device.queue.copyExternalImageToTexture({ source }, { texture: tex }, [srcW, srcH]);
 
-    outBuf = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    outBuf = device.createBuffer({
+      size: outBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
     const params = new ArrayBuffer(80);
     const f32 = new Float32Array(params);
     const u32 = new Uint32Array(params);
@@ -175,7 +198,10 @@ export async function gpuWarpPerspective(source: WarpSource, m: number[], flippe
     f32.set([minv[3], minv[4], minv[5], 0], 4);
     f32.set([minv[6], minv[7], minv[8], 0], 8);
     u32.set([srcW, srcH, outW, outH, flipped ? 1 : 0, 0, 0, 0], 12);
-    uni = device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    uni = device.createBuffer({
+      size: 80,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
     device.queue.writeBuffer(uni, 0, params);
 
     const pipeline = getPipeline(device);
@@ -187,7 +213,10 @@ export async function gpuWarpPerspective(source: WarpSource, m: number[], flippe
         { binding: 2, resource: { buffer: uni } },
       ],
     });
-    readBuf = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    readBuf = device.createBuffer({
+      size: outBytes,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
 
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();

@@ -6,11 +6,11 @@
 // erasable TypeScript syntax is allowed here, which tsconfig.node.json
 // enforces with `erasableSyntaxOnly`.
 
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
-import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
@@ -21,39 +21,60 @@ const DIST = fileURLToPath(new URL('./dist', import.meta.url));
 // skips the video section gracefully if the file is absent.
 const sample = join(DIST, 'e2e_sample.mp4');
 if (!existsSync(sample)) {
-  const gen = spawnSync('ffmpeg', [
-    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=3',
-    '-pix_fmt', 'yuv420p', '-y', sample,
-  ], { stdio: 'ignore' });
-  console.log(gen.status === 0
-    ? 'Generated e2e_sample.mp4 for the WebCodecs test.'
-    : 'ffmpeg not available: the video section will be skipped.');
+  const gen = spawnSync(
+    'ffmpeg',
+    [
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=size=320x180:rate=12:duration=3',
+      '-pix_fmt',
+      'yuv420p',
+      '-y',
+      sample,
+    ],
+    { stdio: 'ignore' },
+  );
+  console.log(
+    gen.status === 0
+      ? 'Generated e2e_sample.mp4 for the WebCodecs test.'
+      : 'ffmpeg not available: the video section will be skipped.',
+  );
 }
 // AVI con códec MPEG-4 ASP: WebCodecs no lo decodifica, así que ejercita el
 // camino de respaldo con ffmpeg.wasm.
 const avi = join(DIST, 'e2e_sample.avi');
 if (!existsSync(avi)) {
-  spawnSync('ffmpeg', [
-    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2',
-    '-c:v', 'mpeg4', '-y', avi,
-  ], { stdio: 'ignore' });
+  spawnSync(
+    'ffmpeg',
+    ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2', '-c:v', 'mpeg4', '-y', avi],
+    { stdio: 'ignore' },
+  );
 }
 // MOV con ProRes: contenedor legible por mediabunny pero códec que WebCodecs
 // no decodifica, como los MOV HEVC 10 bits de las cámaras. Ejercita el
 // desvío por canDecode() hacia ffmpeg.wasm.
 const mov = join(DIST, 'e2e_sample_prores.mov');
 if (!existsSync(mov)) {
-  spawnSync('ffmpeg', [
-    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2',
-    '-c:v', 'prores', '-y', mov,
-  ], { stdio: 'ignore' });
+  spawnSync(
+    'ffmpeg',
+    ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2', '-c:v', 'prores', '-y', mov],
+    { stdio: 'ignore' },
+  );
 }
 const MIME: Record<string, string> = {
-  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
-  '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml',
-  '.mp4': 'video/mp4', '.json': 'application/json',
-  '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon',
-  '.avi': 'video/x-msvideo', '.mov': 'video/quicktime',
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.wasm': 'application/wasm',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.ico': 'image/x-icon',
+  '.avi': 'video/x-msvideo',
+  '.mov': 'video/quicktime',
 };
 
 // La CSP se lee de web/public/_headers, el mismo archivo que Cloudflare
@@ -62,7 +83,8 @@ const MIME: Record<string, string> = {
 // CSP mal puesta se descubre tarde y sin señal: el navegador bloquea en
 // silencio y la página aparece simplemente vacía.
 const CSP = (await readFile(new URL('./public/_headers', import.meta.url), 'utf8'))
-  .match(/^[ \t]+Content-Security-Policy:[ \t]*(.+)$/m)?.[1]?.trim();
+  .match(/^[ \t]+Content-Security-Policy:[ \t]*(.+)$/m)?.[1]
+  ?.trim();
 if (!CSP) throw new Error('No Content-Security-Policy in web/public/_headers');
 
 const server = createServer(async (req, res) => {
@@ -83,7 +105,8 @@ const server = createServer(async (req, res) => {
 });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const address = server.address();
-if (!address || typeof address === 'string') throw new Error('The test server did not bind a TCP port.');
+if (!address || typeof address === 'string')
+  throw new Error('The test server did not bind a TCP port.');
 const port = address.port;
 
 const chromeCandidates = [

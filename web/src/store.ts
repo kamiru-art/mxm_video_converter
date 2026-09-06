@@ -1,7 +1,13 @@
 // Presets y perfiles de calibración: viven en el navegador (localStorage)
 // y se pueden exportar/importar como JSON para compartirlos entre máquinas.
 
-import type { ColorProfile, CyanProfile, PresetProfile, PrinterProfile, Settings } from './types.ts';
+import type {
+  ColorProfile,
+  CyanProfile,
+  PresetProfile,
+  PrinterProfile,
+  Settings,
+} from './types.ts';
 
 const KEY = 'mxm-studio-v1';
 
@@ -49,13 +55,18 @@ function saveAll(data: StoreData): void {
   } catch (e) {
     const name = e instanceof DOMException ? e.name : '';
     const blocked = name === 'SecurityError' || name === 'NotAllowedError';
-    throw new Error(blocked
-      ? 'This browser is blocking storage for this site, so nothing was saved. Allow site data for this page (private windows and strict cookie settings turn it off); meanwhile “Export everything” in Calibration keeps your profiles in a file.'
-      : 'The browser storage for this site is full, so nothing was saved. Use “Export everything” in Calibration to keep a copy, then delete the presets or profiles you no longer need and try again.');
+    throw new Error(
+      blocked
+        ? 'This browser is blocking storage for this site, so nothing was saved. Allow site data for this page (private windows and strict cookie settings turn it off); meanwhile “Export everything” in Calibration keeps your profiles in a file.'
+        : 'The browser storage for this site is full, so nothing was saved. Use “Export everything” in Calibration to keep a copy, then delete the presets or profiles you no longer need and try again.',
+    );
   }
 }
 
-function kindMap<K extends ProfileKind>(all: StoreData, kind: K): Record<string, Stored<ProfileMap[K]>> {
+function kindMap<K extends ProfileKind>(
+  all: StoreData,
+  kind: K,
+): Record<string, Stored<ProfileMap[K]>> {
   const existing = all[kind] as Record<string, Stored<ProfileMap[K]>> | undefined;
   if (existing) return existing;
   const created: Record<string, Stored<ProfileMap[K]>> = {};
@@ -74,7 +85,11 @@ export function loadProfile<K extends ProfileKind>(kind: K, name: string): Profi
   return map?.[name] ?? null;
 }
 
-export function saveProfile<K extends ProfileKind>(kind: K, name: string, data: ProfileMap[K]): void {
+export function saveProfile<K extends ProfileKind>(
+  kind: K,
+  name: string,
+  data: ProfileMap[K],
+): void {
   const all = loadAll();
   kindMap(all, kind)[name] = { ...data, guardado: new Date().toISOString() };
   saveAll(all);

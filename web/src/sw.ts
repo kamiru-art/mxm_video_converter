@@ -14,32 +14,44 @@
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
 const VERSION = 'mxm-v1';
-const SHELL = `${VERSION}-shell`;   // documento de entrada
+const SHELL = `${VERSION}-shell`; // documento de entrada
 const ASSETS = `${VERSION}-assets`; // JS, CSS, WASM, imágenes propias
-const FONTS = `${VERSION}-fonts`;   // Google Fonts (respuestas opacas)
+const FONTS = `${VERSION}-fonts`; // Google Fonts (respuestas opacas)
 
 const FONT_HOSTS = ['https://fonts.googleapis.com', 'https://fonts.gstatic.com'];
 
 sw.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.add('/')).catch(() => {}));
+  e.waitUntil(
+    caches
+      .open(SHELL)
+      .then((c) => c.add('/'))
+      .catch(() => {}),
+  );
   // sin skipWaiting: una versión nueva toma el relevo en la siguiente
   // visita, no a mitad de un proyecto abierto (los módulos ya cargados
   // seguirían pidiendo los archivos de la versión anterior)
 });
 
 sw.addEventListener('activate', (e) => {
-  e.waitUntil((async () => {
-    const keep = new Set([SHELL, ASSETS, FONTS]);
-    for (const k of await caches.keys()) if (!keep.has(k)) await caches.delete(k);
-    await sw.clients.claim();
-  })());
+  e.waitUntil(
+    (async () => {
+      const keep = new Set([SHELL, ASSETS, FONTS]);
+      for (const k of await caches.keys()) if (!keep.has(k)) await caches.delete(k);
+      await sw.clients.claim();
+    })(),
+  );
 });
 
 /** Guarda una copia de la respuesta si sirve para volver a servirla.
  *  `copy` tiene que venir clonada por quien llama, ANTES de devolver la
  *  original: para cuando esta función llega a usarla, el navegador ya puede
  *  estar leyendo el cuerpo y clonar entonces lanzaría. */
-async function put(cacheName: string, request: RequestInfo, copy: Response | null, usable: boolean): Promise<void> {
+async function put(
+  cacheName: string,
+  request: RequestInfo,
+  copy: Response | null,
+  usable: boolean,
+): Promise<void> {
   if (!copy || !usable) return;
   try {
     const cache = await caches.open(cacheName);
@@ -73,45 +85,50 @@ sw.addEventListener('fetch', (e) => {
 
   // Documentos: red primero (para recoger versiones nuevas), caché si no hay.
   if (req.mode === 'navigate') {
-    e.respondWith((async () => {
-      try {
-        const net = await fetch(req);
-        const ok = isUsable(SHELL, net);
-        void put(SHELL, '/', ok ? net.clone() : null, ok);
-        return net;
-      } catch {
-        return (await caches.match('/')) ?? (await caches.match(req)) ?? Response.error();
-      }
-    })());
+    e.respondWith(
+      (async () => {
+        try {
+          const net = await fetch(req);
+          const ok = isUsable(SHELL, net);
+          void put(SHELL, '/', ok ? net.clone() : null, ok);
+          return net;
+        } catch {
+          return (await caches.match('/')) ?? (await caches.match(req)) ?? Response.error();
+        }
+      })(),
+    );
     return;
   }
 
   // Todo lo demás: caché primero, y red solo si hace falta.
-  e.respondWith((async () => {
-    const cacheName = isFont ? FONTS : ASSETS;
-    const hit = await caches.match(req);
-    // Lo que vive en /assets/ lleva hash en el nombre: esa URL no va a
-    // cambiar nunca, así que un acierto en caché es la respuesta y no hay
-    // nada que refrescar. Refrescar "por si acaso" costaba una petición al
-    // origen por cada worker que el pool creaba. El resto (manifest, iconos,
-    // trozos de ffmpeg, tipografías) no lleva hash y sí se refresca en
-    // segundo plano.
-    const hashed = sameOrigin && url.pathname.startsWith('/assets/');
-    if (hit && hashed) return hit;
-    const network = fetch(req)
-      .then((res) => {
-        const ok = isUsable(cacheName, res);
-        void put(cacheName, req, ok ? res.clone() : null, ok);
-        // Un asset con hash que llega como HTML es el index.html que el
-        // sitio devuelve en lugar de un 404: el archivo es de una versión
-        // anterior y ya no existe. Se contesta 404, que es la verdad, en
-        // vez de entregar HTML a un `new Worker()` o a un import.
-        if (hashed && !ok && res.ok) return new Response(null, { status: 404, statusText: 'Not Found' });
-        return res;
-      })
-      .catch(() => null);
-    if (hit) return hit;
-    const net = await network;
-    return net ?? Response.error();
-  })());
+  e.respondWith(
+    (async () => {
+      const cacheName = isFont ? FONTS : ASSETS;
+      const hit = await caches.match(req);
+      // Lo que vive en /assets/ lleva hash en el nombre: esa URL no va a
+      // cambiar nunca, así que un acierto en caché es la respuesta y no hay
+      // nada que refrescar. Refrescar "por si acaso" costaba una petición al
+      // origen por cada worker que el pool creaba. El resto (manifest, iconos,
+      // trozos de ffmpeg, tipografías) no lleva hash y sí se refresca en
+      // segundo plano.
+      const hashed = sameOrigin && url.pathname.startsWith('/assets/');
+      if (hit && hashed) return hit;
+      const network = fetch(req)
+        .then((res) => {
+          const ok = isUsable(cacheName, res);
+          void put(cacheName, req, ok ? res.clone() : null, ok);
+          // Un asset con hash que llega como HTML es el index.html que el
+          // sitio devuelve en lugar de un 404: el archivo es de una versión
+          // anterior y ya no existe. Se contesta 404, que es la verdad, en
+          // vez de entregar HTML a un `new Worker()` o a un import.
+          if (hashed && !ok && res.ok)
+            return new Response(null, { status: 404, statusText: 'Not Found' });
+          return res;
+        })
+        .catch(() => null);
+      if (hit) return hit;
+      const net = await network;
+      return net ?? Response.error();
+    })(),
+  );
 });

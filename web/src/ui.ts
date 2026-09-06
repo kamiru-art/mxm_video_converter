@@ -14,13 +14,18 @@ export type Attrs = Record<string, string | number | boolean | EventListener | n
 function appendChildren(node: HTMLElement, children: Child[]): void {
   for (const c of children) {
     if (c == null || c === false) continue;
-    if (Array.isArray(c)) { appendChildren(node, c); continue; }
+    if (Array.isArray(c)) {
+      appendChildren(node, c);
+      continue;
+    }
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
 }
 
 export function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, attrs: Attrs = {}, ...children: Child[]
+  tag: K,
+  attrs: Attrs = {},
+  ...children: Child[]
 ): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -37,7 +42,10 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 /** Contexto 2D de un OffscreenCanvas, o un error claro: `getContext` puede
  *  devolver null (sin memoria de GPU, lienzo demasiado grande) y sin esto el
  *  fallo saldría como un TypeError sin explicación en la siguiente línea. */
-export function context2d(c: OffscreenCanvas, opts?: CanvasRenderingContext2DSettings): OffscreenCanvasRenderingContext2D {
+export function context2d(
+  c: OffscreenCanvas,
+  opts?: CanvasRenderingContext2DSettings,
+): OffscreenCanvasRenderingContext2D {
   const ctx = c.getContext('2d', opts);
   if (!ctx) throw new Error('Could not create a 2D canvas context.');
   return ctx;
@@ -51,7 +59,11 @@ export function toast(msg: string, kind: ToastKind = ''): void {
   setTimeout(() => t.remove(), kind === 'err' ? 9000 : 5000);
 }
 
-export function download(bytes: Bytes | Blob, filename: string, mime = 'application/octet-stream'): void {
+export function download(
+  bytes: Bytes | Blob,
+  filename: string,
+  mime = 'application/octet-stream',
+): void {
   const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = el('a', { href: url, download: filename });
@@ -79,8 +91,12 @@ export function progressBar(): ProgressBar {
       bar.style.width = `${Math.round(frac * 100)}%`;
       note.textContent = text;
     },
-    hide() { root.style.display = 'none'; },
-    show() { root.style.display = ''; },
+    hide() {
+      root.style.display = 'none';
+    },
+    show() {
+      root.style.display = '';
+    },
   };
 }
 
@@ -99,7 +115,10 @@ const isHidden = (name: string): boolean => name.startsWith('.');
 const MAX_DEPTH = 8;
 
 function acceptParts(accept: string): string[] {
-  return String(accept || '').split(',').map((p) => p.trim().toLowerCase()).filter(Boolean);
+  return String(accept || '')
+    .split(',')
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function acceptsFile(parts: string[], file: File): boolean {
@@ -127,11 +146,15 @@ function comparePaths(a: string, b: string): number {
 function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
   return new Promise((resolve, reject) => {
     const all: FileSystemEntry[] = [];
-    const next = (): void => reader.readEntries((batch) => {
-      if (!batch.length) { resolve(all); return; }
-      all.push(...batch);
-      next();
-    }, reject);
+    const next = (): void =>
+      reader.readEntries((batch) => {
+        if (!batch.length) {
+          resolve(all);
+          return;
+        }
+        all.push(...batch);
+        next();
+      }, reject);
     next();
   });
 }
@@ -142,7 +165,12 @@ interface Collected {
 }
 
 /** Recorre una entrada soltada (archivo o carpeta) acumulando {file, path}. */
-async function walkEntry(entry: FileSystemEntry | null, prefix: string, out: Collected[], depth: number): Promise<void> {
+async function walkEntry(
+  entry: FileSystemEntry | null,
+  prefix: string,
+  out: Collected[],
+  depth: number,
+): Promise<void> {
   if (!entry || depth > MAX_DEPTH) return;
   if (depth > 0 && isHidden(entry.name)) return; // basura del sistema, y .git enteros
   if (entry.isFile) {
@@ -177,7 +205,15 @@ export interface DropzoneOptions {
  *  las zonas de varios archivos, también elegidas desde el diálogo del
  *  sistema (`webkitdirectory`). Donde el navegador no tenga esas dos cosas,
  *  la zona se comporta como siempre: archivos sueltos. */
-export function dropzone({ label, sublabel = '', accept = '', multiple = false, dark = false, describedBy = '', onFiles }: DropzoneOptions): HTMLDivElement {
+export function dropzone({
+  label,
+  sublabel = '',
+  accept = '',
+  multiple = false,
+  dark = false,
+  describedBy = '',
+  onFiles,
+}: DropzoneOptions): HTMLDivElement {
   const input = el('input', { type: 'file', accept, ...(multiple ? { multiple: '' } : {}) });
   input.addEventListener('change', () => {
     if (input.files?.length) onFiles([...input.files]);
@@ -188,7 +224,9 @@ export function dropzone({ label, sublabel = '', accept = '', multiple = false, 
   function deliverFromFolder(collected: Collected[]): void {
     const parts = acceptParts(accept);
     const kept = collected
-      .filter(({ file, path }) => !isHidden(path.split('/').pop() ?? '') && acceptsFile(parts, file))
+      .filter(
+        ({ file, path }) => !isHidden(path.split('/').pop() ?? '') && acceptsFile(parts, file),
+      )
       .sort((a, b) => comparePaths(a.path, b.path));
     if (!kept.length) {
       toast('That folder has no files this step can use.', 'err');
@@ -200,27 +238,39 @@ export function dropzone({ label, sublabel = '', accept = '', multiple = false, 
   // `webkitdirectory` solo selecciona directorios, así que necesita su propio
   // input: el del clic en la zona sigue siendo el de archivos sueltos.
   const canPickFolder = multiple && 'webkitdirectory' in input;
-  const dirInput = canPickFolder ? el('input', { type: 'file', webkitdirectory: '', multiple: '' }) : null;
+  const dirInput = canPickFolder
+    ? el('input', { type: 'file', webkitdirectory: '', multiple: '' })
+    : null;
   if (dirInput) {
     dirInput.addEventListener('change', () => {
-      const picked = [...(dirInput.files ?? [])].map((f) => ({ file: f, path: f.webkitRelativePath || f.name }));
+      const picked = [...(dirInput.files ?? [])].map((f) => ({
+        file: f,
+        path: f.webkitRelativePath || f.name,
+      }));
       dirInput.value = '';
       if (picked.length) deliverFromFolder(picked);
     });
   }
   const folderBtn = dirInput
-    ? el('button', {
-        type: 'button',
-        style: 'display:block; margin:6px auto 0; background:none; border:0; padding:0;'
-          + ' font:inherit; font-size:12.5px; color:inherit; opacity:.85;'
-          + ' text-decoration:underline; cursor:pointer',
-      }, 'or choose a folder…')
+    ? el(
+        'button',
+        {
+          type: 'button',
+          style:
+            'display:block; margin:6px auto 0; background:none; border:0; padding:0;' +
+            ' font:inherit; font-size:12.5px; color:inherit; opacity:.85;' +
+            ' text-decoration:underline; cursor:pointer',
+        },
+        'or choose a folder…',
+      )
     : null;
 
   const zone = el(
     'div',
     {
-      class: `dropzone${dark ? ' dark' : ''}`, tabindex: '0', role: 'button',
+      class: `dropzone${dark ? ' dark' : ''}`,
+      tabindex: '0',
+      role: 'button',
       // el rótulo que la acompaña no es un <label>: sin esto no llegaría a
       // un lector de pantalla (ver la cuarta tarjeta de calibración)
       ...(describedBy ? { 'aria-describedby': describedBy } : {}),
@@ -234,14 +284,20 @@ export function dropzone({ label, sublabel = '', accept = '', multiple = false, 
   // el botón de carpeta vive DENTRO de la zona: sin esto, su clic burbujearía
   // y abriría además el diálogo de archivos
   if (folderBtn && dirInput) {
-    folderBtn.addEventListener('click', (e) => { e.stopPropagation(); dirInput.click(); });
+    folderBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dirInput.click();
+    });
   }
   zone.addEventListener('click', () => input.click());
   zone.addEventListener('keydown', (e) => {
     if (e.target !== zone) return; // Enter sobre el botón de carpeta ya es lo suyo
     if (e.key === 'Enter' || e.key === ' ') input.click();
   });
-  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('over');
+  });
   zone.addEventListener('dragleave', () => zone.classList.remove('over'));
   zone.addEventListener('drop', (e) => {
     e.preventDefault();
@@ -252,7 +308,8 @@ export function dropzone({ label, sublabel = '', accept = '', multiple = false, 
     const entries: (FileSystemEntry | null)[] = [];
     for (let i = 0; items && i < items.length; i++) {
       const it = items[i];
-      if (it.kind === 'file' && typeof it.webkitGetAsEntry === 'function') entries.push(it.webkitGetAsEntry());
+      if (it.kind === 'file' && typeof it.webkitGetAsEntry === 'function')
+        entries.push(it.webkitGetAsEntry());
     }
     const plain = [...(e.dataTransfer?.files ?? [])];
     if (entries.some((en) => en?.isDirectory)) {
@@ -279,10 +336,16 @@ export interface NumberInputOptions {
   width?: string;
 }
 
-export function numberInput(value: number | string, { min, max, step = 1, width }: NumberInputOptions = {}): HTMLInputElement {
+export function numberInput(
+  value: number | string,
+  { min, max, step = 1, width }: NumberInputOptions = {},
+): HTMLInputElement {
   return el('input', {
-    type: 'number', value, ...(min !== undefined ? { min } : {}),
-    ...(max !== undefined ? { max } : {}), step,
+    type: 'number',
+    value,
+    ...(min !== undefined ? { min } : {}),
+    ...(max !== undefined ? { max } : {}),
+    step,
     ...(width ? { style: `width:${width}` } : {}),
   });
 }
@@ -292,18 +355,24 @@ export function numberInput(value: number | string, { min, max, step = 1, width 
 export type SelectOption = string | [string, string];
 
 export function select(options: SelectOption[], value: string): HTMLSelectElement {
-  return el('select', {}, options.map((o) => {
-    const [v, label] = Array.isArray(o) ? o : [o, o];
-    return el('option', { value: v, ...(v === value ? { selected: '' } : {}) }, label);
-  }));
+  return el(
+    'select',
+    {},
+    options.map((o) => {
+      const [v, label] = Array.isArray(o) ? o : [o, o];
+      return el('option', { value: v, ...(v === value ? { selected: '' } : {}) }, label);
+    }),
+  );
 }
 
 /** Rehace las opciones de un desplegable ya montado (listas de perfiles). */
 export function setOptions(sel: HTMLSelectElement, options: SelectOption[]): void {
-  sel.replaceChildren(...options.map((o) => {
-    const [v, label] = Array.isArray(o) ? o : [o, o];
-    return el('option', { value: v }, label);
-  }));
+  sel.replaceChildren(
+    ...options.map((o) => {
+      const [v, label] = Array.isArray(o) ? o : [o, o];
+      return el('option', { value: v }, label);
+    }),
+  );
 }
 
 export interface Check {
@@ -327,7 +396,8 @@ export function parseRanges(text: string, maxN: number | null = null): Set<numbe
     if (!tok) continue;
     const m = tok.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
     if (m) {
-      let a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+      let a = parseInt(m[1], 10),
+        b = parseInt(m[2], 10);
       if (a > b) [a, b] = [b, a];
       for (let n = a; n <= b; n++) if (n >= 1 && (maxN === null || n <= maxN)) out.add(n);
     } else {
@@ -361,14 +431,20 @@ export function uniquifyLabels(labels: string[]): string[] {
   for (let lab of labels) {
     lab = String(lab);
     if (!ocupadas.has(lab)) {
-      out.push(lab); ocupadas.add(lab); vistas.set(lab, 1);
+      out.push(lab);
+      ocupadas.add(lab);
+      vistas.set(lab, 1);
       continue;
     }
     let n = vistas.get(lab) ?? 1;
     let cand: string;
-    do { n += 1; cand = `${lab}_${n}`; } while (ocupadas.has(cand));
+    do {
+      n += 1;
+      cand = `${lab}_${n}`;
+    } while (ocupadas.has(cand));
     vistas.set(lab, n);
-    out.push(cand); ocupadas.add(cand);
+    out.push(cand);
+    ocupadas.add(cand);
   }
   return out;
 }
@@ -398,7 +474,11 @@ export interface Gallery {
  *  ← → (y los botones laterales) recorren el lote sin cerrar el visor: en un
  *  informe de 100+ fotogramas, revisarlos uno a uno de otro modo es abrir y
  *  cerrar 100 veces. */
-export function lightbox(data: Blob | string, caption = '', gallery: Gallery | null = null): () => void {
+export function lightbox(
+  data: Blob | string,
+  caption = '',
+  gallery: Gallery | null = null,
+): () => void {
   const items: GalleryItem[] = gallery?.items?.length ? gallery.items : [{ data, caption }];
   let idx = Math.min(Math.max(gallery?.index ?? 0, 0), items.length - 1);
   let url: string | null = null;
@@ -434,12 +514,23 @@ export function lightbox(data: Blob | string, caption = '', gallery: Gallery | n
   };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') close();
-    else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+    else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      step(1);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      step(-1);
+    }
   };
-  const nav: [HTMLButtonElement, number][] = [[prevBtn, -1], [nextBtn, 1]];
+  const nav: [HTMLButtonElement, number][] = [
+    [prevBtn, -1],
+    [nextBtn, 1],
+  ];
   for (const [btn, d] of nav) {
-    btn.addEventListener('click', (e) => { e.stopPropagation(); step(d); });
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      step(d);
+    });
   }
   box.addEventListener('click', close);
   document.addEventListener('keydown', onKey);

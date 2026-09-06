@@ -3,7 +3,10 @@
 import { el } from './ui.ts';
 
 export function mountHelp(root: HTMLElement): void {
-  root.append(el('div', { class: 'prose', html: `
+  root.append(
+    el('div', {
+      class: 'prose',
+      html: `
 <h2>How it works</h2>
 <ol class="steps">
   <li><span class="step-num">01</span><strong>Video in</strong><span>a video or a folder of images</span></li>
@@ -146,5 +149,7 @@ apply with one click.</p>
 
 </div>
 </div>
-` }));
+`,
+    }),
+  );
 }

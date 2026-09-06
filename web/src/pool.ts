@@ -4,7 +4,13 @@
 // WebAssembly nunca se encoge, así que tras procesar escaneos grandes la
 // única forma de devolverla al sistema es terminar el worker y crear otro.
 
-import type { CommandArgs, CommandName, CommandResult, WorkerRequest, WorkerResponse } from './commands.ts';
+import type {
+  CommandArgs,
+  CommandName,
+  CommandResult,
+  WorkerRequest,
+  WorkerResponse,
+} from './commands.ts';
 import { errMsg } from './errors.ts';
 
 const N = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
@@ -33,7 +39,8 @@ const STALL_MS = 10 * 60e3;
 // seguidas, y después una vez por minuto como mucho.
 const MAX_BOOT_FAILURES = 3;
 const BOOT_RETRY_MS = 60e3;
-const BOOT_FAILED_MSG = 'The processing engine could not start. Reload the page: this usually happens when the site was updated while this tab was open.';
+const BOOT_FAILED_MSG =
+  'The processing engine could not start. Reload the page: this usually happens when the site was updated while this tab was open.';
 
 interface Pending {
   resolve: (value: unknown) => void;
@@ -92,7 +99,10 @@ class WasmWorker {
     };
     // un resultado que el navegador no puede deserializar no llega nunca a
     // onmessage: sin esto, su promesa se queda pendiente y su plaza ocupada
-    worker.onmessageerror = () => this.fail('A result from the processing worker could not be read. Try again with a smaller image.');
+    worker.onmessageerror = () =>
+      this.fail(
+        'A result from the processing worker could not be read. Try again with a smaller image.',
+      );
   }
 
   /** Reloj de "no contesta": UNO por worker, no por llamada. Los comandos se
@@ -102,7 +112,13 @@ class WasmWorker {
   private armStall(): void {
     if (this.stall) clearTimeout(this.stall);
     this.stall = this.pending.size
-      ? setTimeout(() => this.fail('The processing step stopped responding and was restarted. Try again; if it keeps happening, use a smaller scan or fewer sheets at a time.'), STALL_MS)
+      ? setTimeout(
+          () =>
+            this.fail(
+              'The processing step stopped responding and was restarted. Try again; if it keeps happening, use a smaller scan or fewer sheets at a time.',
+            ),
+          STALL_MS,
+        )
       : null;
   }
 
@@ -134,11 +150,17 @@ class WasmWorker {
     this.poisoned = false;
   }
 
-  run<K extends CommandName>(cmd: K, args: CommandArgs<K>, transfer: Transferable[] = []): Promise<CommandResult<K>> {
+  run<K extends CommandName>(
+    cmd: K,
+    args: CommandArgs<K>,
+    transfer: Transferable[] = [],
+  ): Promise<CommandResult<K>> {
     if (!this.worker) {
       // plaza vacía por un fallo: se vuelve a intentar, pero no sin freno
-      if (this.bootFailures >= MAX_BOOT_FAILURES
-          && Date.now() - this.lastBootFailure < BOOT_RETRY_MS) {
+      if (
+        this.bootFailures >= MAX_BOOT_FAILURES &&
+        Date.now() - this.lastBootFailure < BOOT_RETRY_MS
+      ) {
         return Promise.reject(new Error(BOOT_FAILED_MSG));
       }
       this.spawn();
@@ -154,7 +176,9 @@ class WasmWorker {
         const msg: WorkerRequest = { id, cmd, args };
         worker.postMessage(msg, transfer);
       } catch (e) {
-        reject(new Error(`Could not send the “${cmd}” command to the processing worker: ${errMsg(e)}`));
+        reject(
+          new Error(`Could not send the “${cmd}” command to the processing worker: ${errMsg(e)}`),
+        );
         return;
       }
       this.busy++;
@@ -198,12 +222,20 @@ function leastBusy(): WasmWorker {
 }
 
 /** Ejecuta un comando en cualquier worker libre. */
-export function run<K extends CommandName>(cmd: K, args: CommandArgs<K>, transfer: Transferable[] = []): Promise<CommandResult<K>> {
+export function run<K extends CommandName>(
+  cmd: K,
+  args: CommandArgs<K>,
+  transfer: Transferable[] = [],
+): Promise<CommandResult<K>> {
   return leastBusy().run(cmd, args, transfer);
 }
 
 /** Ejecuta un comando en el worker 0 (para secuencias con estado: PDF). */
-export function run0<K extends CommandName>(cmd: K, args: CommandArgs<K>, transfer: Transferable[] = []): Promise<CommandResult<K>> {
+export function run0<K extends CommandName>(
+  cmd: K,
+  args: CommandArgs<K>,
+  transfer: Transferable[] = [],
+): Promise<CommandResult<K>> {
   return workers[0].run(cmd, args, transfer);
 }
 

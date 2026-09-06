@@ -1,12 +1,12 @@
 // Prueba de punta a punta EN EL NAVEGADOR: hoja → "escaneo" girado →
 // procesado → frames recuperados. Verifica el núcleo WASM + workers + glue.
 
-import { run } from './pool.ts';
-import { generateSheets, packImageData, settingsForCore } from './gen.ts';
-import type { GenFrame } from './gen.ts';
-import { defaultSettings } from './settings.ts';
 import { errMsg } from './errors.ts';
+import type { GenFrame } from './gen.ts';
+import { generateSheets, packImageData, settingsForCore } from './gen.ts';
+import { run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
+import { defaultSettings } from './settings.ts';
 import type { DetectOutput, Layout, PrinterProfile, ScanResult, Settings } from './types.ts';
 import { context2d } from './ui.ts';
 
@@ -44,20 +44,41 @@ async function main(): Promise<void> {
 
     // fase ①: generar una hoja con 4 frames sintéticos (SIN QR: la identidad
     // va en los IDs de los marcadores — el camino por defecto actual)
-    const s: Settings = { ...defaultSettings(), dpi: 150, cols: 2, rows: 2, project_name: 'e2e', out_name: 'e2e', marker_size_mm: 10, fmt_tiff: true };
-    const colors: [number, number, number][] = [[200, 60, 60], [60, 180, 60], [60, 60, 200], [180, 160, 40]];
+    const s: Settings = {
+      ...defaultSettings(),
+      dpi: 150,
+      cols: 2,
+      rows: 2,
+      project_name: 'e2e',
+      out_name: 'e2e',
+      marker_size_mm: 10,
+      fmt_tiff: true,
+    };
+    const colors: [number, number, number][] = [
+      [200, 60, 60],
+      [60, 180, 60],
+      [60, 60, 200],
+      [180, 160, 40],
+    ];
     const frames: GenFrame[] = colors.map((c, i) => {
       const fd = synthFrame(320, 180, c);
       return {
-        name: `f${i}.png`, w: 320, h: 180, hasAlpha: false, blob: null,
+        name: `f${i}.png`,
+        w: 320,
+        h: 180,
+        hasAlpha: false,
+        blob: null,
         getImageData: async () => fd,
       };
     });
     const labels = ['e2e_001', 'e2e_002', 'e2e_003', 'e2e_004'];
     const out = await generateSheets({
-      settings: s, frames, labels,
+      settings: s,
+      frames,
+      labels,
       timeline: labels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
-      videoMeta: { fps_extraccion: 4 }, keepOriginals: false,
+      videoMeta: { fps_extraccion: 4 },
+      keepOriginals: false,
     });
     const sheetBlob = out.files.get('e2e_p1.png');
     if (!sheetBlob || !(sheetBlob instanceof Blob)) throw new Error('sheet was not generated');
@@ -67,8 +88,11 @@ async function main(): Promise<void> {
     if (!out.layoutJson) throw new Error('layout was not generated');
     const layoutJson = out.layoutJson;
     const layoutObj = JSON.parse(layoutJson) as Layout;
-    if (!layoutObj.marcadores?.ids_por_hoja) throw new Error('layout without ids_por_hoja (no-QR identity)');
-    log(`hoja generada (${sheetPng.length} bytes), PDF: ${out.files.has('e2e.pdf')}, TIFF ok, layout: ids_por_hoja ✓`);
+    if (!layoutObj.marcadores?.ids_por_hoja)
+      throw new Error('layout without ids_por_hoja (no-QR identity)');
+    log(
+      `hoja generada (${sheetPng.length} bytes), PDF: ${out.files.has('e2e.pdf')}, TIFF ok, layout: ids_por_hoja ✓`,
+    );
 
     // "escanear": dibujar la hoja rotada 2° sobre un lienzo mayor
     const bmp = await createImageBitmap(sheetBlob);
@@ -85,14 +109,24 @@ async function main(): Promise<void> {
     log(`escaneo simulado ${sc.width}×${sc.height}`);
 
     // fase ②: procesar (camino todo-en-WASM)
-    const res = await run('scan_process', {
-      bytes: scanBytes, name: 'scan1.png', layout: layoutJson,
-      opts: '{}', claims: '{}',
-    }, [scanBytes.buffer]);
+    const res = await run(
+      'scan_process',
+      {
+        bytes: scanBytes,
+        name: 'scan1.png',
+        layout: layoutJson,
+        opts: '{}',
+        claims: '{}',
+      },
+      [scanBytes.buffer],
+    );
     const result = JSON.parse(res.result) as ScanResult;
-    log(`scan ok=${result.ok} hoja=${result.hoja_numero} via=${result.via} marcadores=${result.marcadores}/${result.marcadores_total} escala=${result.escala} frames=${res.frames.length}`);
+    log(
+      `scan ok=${result.ok} hoja=${result.hoja_numero} via=${result.via} marcadores=${result.marcadores}/${result.marcadores_total} escala=${result.escala} frames=${res.frames.length}`,
+    );
     if (!result.ok || res.frames.length !== 4) throw new Error(`fase ② falló: ${res.result}`);
-    if (!String(result.via ?? '').startsWith('marker')) throw new Error(`expected marker-ID identification, got via=${result.via}`);
+    if (!String(result.via ?? '').startsWith('marker'))
+      throw new Error(`expected marker-ID identification, got via=${result.via}`);
 
     // fase ② por WebGPU (si el navegador tiene GPU): detect → warp GPU → finish
     try {
@@ -104,21 +138,48 @@ async function main(): Promise<void> {
         const cctx0 = context2d(cnv, { willReadFrequently: true });
         cctx0.drawImage(sbmp, 0, 0);
         const rgba = new Uint8Array(cctx0.getImageData(0, 0, sbmp.width, sbmp.height).data.buffer);
-        const det = JSON.parse(await run('scan_detect', {
-          rgba, w: sbmp.width, h: sbmp.height, name: 'scan1gpu.png', layout: layoutJson, opts: '{}',
-        }, [rgba.buffer])) as DetectOutput;
+        const det = JSON.parse(
+          await run(
+            'scan_detect',
+            {
+              rgba,
+              w: sbmp.width,
+              h: sbmp.height,
+              name: 'scan1gpu.png',
+              layout: layoutJson,
+              opts: '{}',
+            },
+            [rgba.buffer],
+          ),
+        ) as DetectOutput;
         if (!det.ok) throw new Error(`scan_detect failed: ${JSON.stringify(det.res)}`);
         const warped = await gpuWarpPerspective(sbmp, det.m, det.flipped, det.out_w, det.out_h);
         sbmp.close();
         if (!warped) throw new Error('gpuWarpPerspective returned null');
-        const state = JSON.stringify({ res: det.res, s: det.s, refined_ids: det.refined_ids, local: det.local });
-        const gres = await run('scan_finish', {
-          rgba: warped, w: det.out_w, h: det.out_h, name: 'scan1gpu.png',
-          layout: layoutJson, opts: '{}', claims: '{}', state,
-        }, [warped.buffer]);
+        const state = JSON.stringify({
+          res: det.res,
+          s: det.s,
+          refined_ids: det.refined_ids,
+          local: det.local,
+        });
+        const gres = await run(
+          'scan_finish',
+          {
+            rgba: warped,
+            w: det.out_w,
+            h: det.out_h,
+            name: 'scan1gpu.png',
+            layout: layoutJson,
+            opts: '{}',
+            claims: '{}',
+            state,
+          },
+          [warped.buffer],
+        );
         const gresult = JSON.parse(gres.result) as ScanResult;
         log(`scan GPU ok=${gresult.ok} hoja=${gresult.hoja_numero} frames=${gres.frames.length}`);
-        if (!gresult.ok || gres.frames.length !== 4) throw new Error(`GPU path failed: ${gres.result}`);
+        if (!gresult.ok || gres.frames.length !== 4)
+          throw new Error(`GPU path failed: ${gres.result}`);
       } else {
         log('· (no WebGPU in this browser: GPU path skipped, WASM fallback already tested)');
       }
@@ -129,31 +190,75 @@ async function main(): Promise<void> {
     // fase ③: página de prueba de impresora + autoanálisis
     const test = await run('printer_test_png', { paper: 'A4', dpi: 150 });
     const testCopy = new Uint8Array(test);
-    const prof = JSON.parse(await run('analyze_printer_test', { bytes: testCopy, paper: 'A4', dpi: 150, scanDpi: 150 }, [testCopy.buffer])) as PrinterProfile;
-    log(`calibración: escala ${prof.scale_x}×${prof.scale_y}, marcador mín ${prof.marker_min_mm} mm, QR mín ${prof.qr_min_mm} mm`);
+    const prof = JSON.parse(
+      await run('analyze_printer_test', { bytes: testCopy, paper: 'A4', dpi: 150, scanDpi: 150 }, [
+        testCopy.buffer,
+      ]),
+    ) as PrinterProfile;
+    log(
+      `calibración: escala ${prof.scale_x}×${prof.scale_y}, marcador mín ${prof.marker_min_mm} mm, QR mín ${prof.qr_min_mm} mm`,
+    );
     if (Math.abs(prof.scale_x - 1) > 0.01) throw new Error('escala de impresora incorrecta');
 
     // ☀️ cianotipia: negativo → copia azul simulada → escaneo → procesado
     // (con QR activado: ejercita el camino LEGADO de identificación por QR)
-    const sc2: Settings = { ...s, mode: 'cyanotype', cyan_mirror: true, cyan_bg: 'saving', out_name: 'cy', project_name: 'cy', marker_size_mm: 12, qr_on: true, qr_size_mm: 16, fmt_tiff: false };
+    const sc2: Settings = {
+      ...s,
+      mode: 'cyanotype',
+      cyan_mirror: true,
+      cyan_bg: 'saving',
+      out_name: 'cy',
+      project_name: 'cy',
+      marker_size_mm: 12,
+      qr_on: true,
+      qr_size_mm: 16,
+      fmt_tiff: false,
+    };
     const cyFrames = [synthFrame(320, 180, [200, 60, 60]), synthFrame(320, 180, [40, 40, 40])];
     const cyLabels = ['cy_001', 'cy_002'];
     const cyGen = await generateSheets({
       settings: sc2,
-      frames: cyFrames.map((fd, i): GenFrame => ({ name: `c${i}.png`, w: 320, h: 180, hasAlpha: false, blob: null, getImageData: async () => fd })),
+      frames: cyFrames.map(
+        (fd, i): GenFrame => ({
+          name: `c${i}.png`,
+          w: 320,
+          h: 180,
+          hasAlpha: false,
+          blob: null,
+          getImageData: async () => fd,
+        }),
+      ),
       labels: cyLabels,
       timeline: cyLabels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
-      videoMeta: {}, keepOriginals: false,
+      videoMeta: {},
+      keepOriginals: false,
     });
     if (!cyGen.layoutJson) throw new Error('cyanotype layout was not generated');
     const cyLayoutJson = cyGen.layoutJson;
     // la copia azul física: render con finish='simulate' (misma geometría)
-    const items = cyFrames.map((fd, i) => ({ data: fd.data, w: fd.w, h: fd.h, hasAlpha: false, origName: `c${i}.png` }));
+    const items = cyFrames.map((fd, i) => ({
+      data: fd.data,
+      w: fd.w,
+      h: fd.h,
+      hasAlpha: false,
+      origName: `c${i}.png`,
+    }));
     const { meta, pixels } = packImageData(items);
-    const sim = await run('render_sheet', {
-      settings: settingsForCore(sc2), firstW: 320, firstH: 180, meta, pixels,
-      labels: JSON.stringify(cyLabels), sheetNum: 1, render: true, finish: 'simulate',
-    }, [pixels.buffer]);
+    const sim = await run(
+      'render_sheet',
+      {
+        settings: settingsForCore(sc2),
+        firstW: 320,
+        firstH: 180,
+        meta,
+        pixels,
+        labels: JSON.stringify(cyLabels),
+        sheetNum: 1,
+        render: true,
+        finish: 'simulate',
+      },
+      [pixels.buffer],
+    );
     if (!sim.png) throw new Error('simulated blue print was not rendered');
     const cyBmp = await createImageBitmap(new Blob([sim.png], { type: 'image/png' }));
     const cc = new OffscreenCanvas(Math.round(cyBmp.width * 1.25), Math.round(cyBmp.height * 1.2));
@@ -164,13 +269,26 @@ async function main(): Promise<void> {
     cctx.rotate((-1.5 * Math.PI) / 180);
     cctx.scale(1.1, 1.1);
     cctx.drawImage(cyBmp, -cyBmp.width / 2, -cyBmp.height / 2);
-    const cyScan = new Uint8Array(await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer());
-    const cyRes = await run('scan_process', {
-      bytes: cyScan, name: 'cyan1.png', layout: cyLayoutJson, opts: '{}', claims: '{}',
-    }, [cyScan.buffer]);
+    const cyScan = new Uint8Array(
+      await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer(),
+    );
+    const cyRes = await run(
+      'scan_process',
+      {
+        bytes: cyScan,
+        name: 'cyan1.png',
+        layout: cyLayoutJson,
+        opts: '{}',
+        claims: '{}',
+      },
+      [cyScan.buffer],
+    );
     const cyResult = JSON.parse(cyRes.result) as ScanResult;
-    log(`cianotipia: ok=${cyResult.ok} marcadores=${cyResult.marcadores}/${cyResult.marcadores_total} frames=${cyRes.frames.length} estrategia=${cyResult.estrategia}`);
-    if (!cyResult.ok || cyRes.frames.length !== 2) throw new Error(`cianotipia falló: ${cyRes.result}`);
+    log(
+      `cianotipia: ok=${cyResult.ok} marcadores=${cyResult.marcadores}/${cyResult.marcadores_total} frames=${cyRes.frames.length} estrategia=${cyResult.estrategia}`,
+    );
+    if (!cyResult.ok || cyRes.frames.length !== 2)
+      throw new Error(`cianotipia falló: ${cyRes.result}`);
 
     // ✋ asignación manual: mismo escaneo, pero con los QR ilegibles (se
     // quitan del layout). Este layout tiene una sola hoja, así que sin QR se
@@ -179,28 +297,67 @@ async function main(): Promise<void> {
     const blindLayout = JSON.parse(cyLayoutJson) as Layout;
     for (const h of blindLayout.hojas ?? []) h.qrs = {};
     const blindStr = JSON.stringify(blindLayout);
-    const cyScan2 = new Uint8Array(await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer());
-    const blindRes = await run('scan_process', {
-      bytes: cyScan2, name: 'cyan1.png', layout: blindStr, opts: '{}', claims: '{}',
-    }, [cyScan2.buffer]);
+    const cyScan2 = new Uint8Array(
+      await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer(),
+    );
+    const blindRes = await run(
+      'scan_process',
+      {
+        bytes: cyScan2,
+        name: 'cyan1.png',
+        layout: blindStr,
+        opts: '{}',
+        claims: '{}',
+      },
+      [cyScan2.buffer],
+    );
     const blindResult = JSON.parse(blindRes.result) as ScanResult;
     if (!String(blindResult.via ?? '').startsWith('only sheet')) {
-      throw new Error(`sin QR debería caer en la identificación por eliminación: via=${blindResult.via}`);
+      throw new Error(
+        `sin QR debería caer en la identificación por eliminación: via=${blindResult.via}`,
+      );
     }
-    const cyScan3 = new Uint8Array(await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer());
-    const handRes = await run('scan_process', {
-      bytes: cyScan3, name: 'cyan1.png', layout: blindStr,
-      opts: JSON.stringify({ forced_sheet: 1 }), claims: '{}',
-    }, [cyScan3.buffer]);
+    const cyScan3 = new Uint8Array(
+      await (await cc.convertToBlob({ type: 'image/png' })).arrayBuffer(),
+    );
+    const handRes = await run(
+      'scan_process',
+      {
+        bytes: cyScan3,
+        name: 'cyan1.png',
+        layout: blindStr,
+        opts: JSON.stringify({ forced_sheet: 1 }),
+        claims: '{}',
+      },
+      [cyScan3.buffer],
+    );
     const handResult = JSON.parse(handRes.result) as ScanResult;
-    log(`asignación manual: ok=${handResult.ok} hoja=${handResult.hoja_numero} via=${handResult.via} frames=${handRes.frames.length}`);
-    if (!handResult.ok || handRes.frames.length !== 2) throw new Error(`asignación manual falló: ${handRes.result}`);
-    if (!String(handResult.via ?? '').startsWith('assigned by hand')) throw new Error(`via inesperada: ${handResult.via}`);
+    log(
+      `asignación manual: ok=${handResult.ok} hoja=${handResult.hoja_numero} via=${handResult.via} frames=${handRes.frames.length}`,
+    );
+    if (!handResult.ok || handRes.frames.length !== 2)
+      throw new Error(`asignación manual falló: ${handRes.result}`);
+    if (!String(handResult.via ?? '').startsWith('assigned by hand'))
+      throw new Error(`via inesperada: ${handResult.via}`);
 
     // ↩ compatibilidad: los ajustes en español de versiones anteriores deben
     // producir exactamente el mismo lienzo que los nuevos en inglés
-    const legacy: Settings = { ...s, paper: 'Carta (Letter)', orientation: 'Horizontal', page_num_corner: 'Inferior derecha', mode: 'cianotipia', cyan_bg: 'ahorro' };
-    const modern: Settings = { ...s, paper: 'Letter', orientation: 'landscape', page_num_corner: 'Bottom right', mode: 'cyanotype', cyan_bg: 'saving' };
+    const legacy: Settings = {
+      ...s,
+      paper: 'Carta (Letter)',
+      orientation: 'Horizontal',
+      page_num_corner: 'Inferior derecha',
+      mode: 'cianotipia',
+      cyan_bg: 'ahorro',
+    };
+    const modern: Settings = {
+      ...s,
+      paper: 'Letter',
+      orientation: 'landscape',
+      page_num_corner: 'Bottom right',
+      mode: 'cyanotype',
+      cyan_bg: 'saving',
+    };
     const [lay1, lay2] = await Promise.all([
       run('compute_layout', { settings: settingsForCore(legacy), firstW: 320, firstH: 180 }),
       run('compute_layout', { settings: settingsForCore(modern), firstW: 320, firstH: 180 }),
@@ -212,12 +369,18 @@ async function main(): Promise<void> {
     try {
       const vresp = await fetch('/e2e_sample.mp4');
       if (vresp.ok) {
-        const vblob = new File([await vresp.arrayBuffer()], 'e2e_sample.mp4', { type: 'video/mp4' });
+        const vblob = new File([await vresp.arrayBuffer()], 'e2e_sample.mp4', {
+          type: 'video/mp4',
+        });
         const { extractFrames, buildVideo } = await import('./video.ts');
         const got: Blob[] = [];
         const meta = await extractFrames(vblob, {
-          start: 0, end: 3, fps: 2,
-          onFrame: async (blob) => { got.push(blob); },
+          start: 0,
+          end: 3,
+          fps: 2,
+          onFrame: async (blob) => {
+            got.push(blob);
+          },
         });
         log(`video: ${meta.count} frames extraídos a 2 fps (nativo ${meta.fps.toFixed(1)} fps)`);
         if (got.length < 5) throw new Error('incomplete video extraction');
@@ -237,9 +400,11 @@ async function main(): Promise<void> {
         const outL = await buildVideoLossless(lossFrames, 2);
         const headL = new TextDecoder('latin1').decode(outL.bytes.slice(0, 16));
         log(`lossless MOV: ${outL.bytes.length} bytes (${outL.ext})`);
-        if (outL.ext !== 'mov' || !headL.includes('ftyp')) throw new Error('lossless output is not a MOV');
+        if (outL.ext !== 'mov' || !headL.includes('ftyp'))
+          throw new Error('lossless output is not a MOV');
         const totalPng = lossFrames.reduce((a, b) => a + b.size, 0);
-        if (outL.bytes.length < totalPng) throw new Error('lossless MOV smaller than its PNG frames (not stream-copied)');
+        if (outL.bytes.length < totalPng)
+          throw new Error('lossless MOV smaller than its PNG frames (not stream-copied)');
 
         // ProRes 4444 en el navegador (prores_ks de ffmpeg.wasm)
         const { buildVideoProres } = await import('./video.ts');
@@ -247,7 +412,8 @@ async function main(): Promise<void> {
         // el atom stsd con el fourcc va en el moov, al FINAL del archivo
         const bodyP = new TextDecoder('latin1').decode(outP.bytes.slice(-65536));
         log(`ProRes MOV: ${outP.bytes.length} bytes`);
-        if (outP.ext !== 'mov' || !bodyP.includes('ap4h')) throw new Error('ProRes output lacks the ap4h codec atom');
+        if (outP.ext !== 'mov' || !bodyP.includes('ap4h'))
+          throw new Error('ProRes output lacks the ap4h codec atom');
       } else {
         log('· (sin muestra de video: prueba de WebCodecs omitida)');
       }
@@ -260,13 +426,24 @@ async function main(): Promise<void> {
     try {
       const presp = await fetch('/e2e_sample_prores.mov');
       if (presp.ok) {
-        const pblob = new File([await presp.arrayBuffer()], 'e2e_sample_prores.mov', { type: 'video/quicktime' });
+        const pblob = new File([await presp.arrayBuffer()], 'e2e_sample_prores.mov', {
+          type: 'video/quicktime',
+        });
         const { probeVideo, extractFrames } = await import('./video.ts');
         const pprobe = await probeVideo(pblob);
         if (!pprobe.width) throw new Error('ProRes MOV probe returned no dimensions');
         const got: Blob[] = [];
-        const meta = await extractFrames(pblob, { start: 0, end: 1, fps: 4, onFrame: async (b) => { got.push(b); } });
-        log(`MOV ProRes: ${meta.count} frames extraídos vía ffmpeg.wasm (${pprobe.width}×${pprobe.height})`);
+        const meta = await extractFrames(pblob, {
+          start: 0,
+          end: 1,
+          fps: 4,
+          onFrame: async (b) => {
+            got.push(b);
+          },
+        });
+        log(
+          `MOV ProRes: ${meta.count} frames extraídos vía ffmpeg.wasm (${pprobe.width}×${pprobe.height})`,
+        );
         if (got.length < 3) throw new Error(`incomplete ProRes extraction (${got.length})`);
       } else {
         log('· (sin muestra ProRes: prueba del códec no decodificable omitida)');
@@ -279,11 +456,22 @@ async function main(): Promise<void> {
     try {
       const aresp = await fetch('/e2e_sample.avi');
       if (aresp.ok) {
-        const ablob = new File([await aresp.arrayBuffer()], 'e2e_sample.avi', { type: 'video/x-msvideo' });
+        const ablob = new File([await aresp.arrayBuffer()], 'e2e_sample.avi', {
+          type: 'video/x-msvideo',
+        });
         const { extractFrames } = await import('./video.ts');
         const got: Blob[] = [];
-        const meta = await extractFrames(ablob, { start: 0, end: 2, fps: 3, onFrame: async (b) => { got.push(b); } });
-        log(`AVI: ${meta.count} frames extraídos vía ffmpeg.wasm (${meta.fps} fps nativo detectado)`);
+        const meta = await extractFrames(ablob, {
+          start: 0,
+          end: 2,
+          fps: 3,
+          onFrame: async (b) => {
+            got.push(b);
+          },
+        });
+        log(
+          `AVI: ${meta.count} frames extraídos vía ffmpeg.wasm (${meta.fps} fps nativo detectado)`,
+        );
         if (got.length < 5) throw new Error(`incomplete AVI extraction (${got.length})`);
       } else {
         log('· (sin muestra AVI: prueba del decodificador de respaldo omitida)');

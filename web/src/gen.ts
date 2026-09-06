@@ -2,23 +2,51 @@
 // Orquesta al núcleo WASM página a página para no cargar todos los
 // fotogramas a resolución completa a la vez.
 
-import { run, run0, recycleIdle } from './pool.ts';
-import { sanitizeLabel, selectIndices, context2d } from './ui.ts';
-import { isCyanotype } from './settings.ts';
+import { recycleIdle, run, run0 } from './pool.ts';
 import type { RgbaImage } from './project.ts';
+import { isCyanotype } from './settings.ts';
 import type { Bytes, LayoutInfo, Settings, TimelineItem, VideoMeta } from './types.ts';
+import { context2d, sanitizeLabel, selectIndices } from './ui.ts';
 import type { ZipEntryData } from './zip.ts';
 
 const NUM_FIELDS = [
-  'dpi', 'custom_w_mm', 'custom_h_mm', 'margin_mm', 'gutter_mm', 'alpha_border_mm',
-  'cols', 'rows', 'leading_zeros', 'start_index', 'font_size_pt', 'label_gap_mm',
-  'page_num_start', 'page_num_zeros', 'page_num_size_pt', 'marker_count',
-  'marker_size_mm', 'marker_margin_mm', 'qr_size_mm', 'cyan_curve_strength',
-  'cyan_adaptive', 'cyan_clarity', 'cyan_halo_mm', 'cyan_frame_border_mm',
-  'print_scale_x', 'print_scale_y',
+  'dpi',
+  'custom_w_mm',
+  'custom_h_mm',
+  'margin_mm',
+  'gutter_mm',
+  'alpha_border_mm',
+  'cols',
+  'rows',
+  'leading_zeros',
+  'start_index',
+  'font_size_pt',
+  'label_gap_mm',
+  'page_num_start',
+  'page_num_zeros',
+  'page_num_size_pt',
+  'marker_count',
+  'marker_size_mm',
+  'marker_margin_mm',
+  'qr_size_mm',
+  'cyan_curve_strength',
+  'cyan_adaptive',
+  'cyan_clarity',
+  'cyan_halo_mm',
+  'cyan_frame_border_mm',
+  'print_scale_x',
+  'print_scale_y',
 ] as const;
-const INT_FIELDS = new Set<string>(['dpi', 'cols', 'rows', 'leading_zeros', 'start_index',
-  'page_num_start', 'page_num_zeros', 'marker_count']);
+const INT_FIELDS = new Set<string>([
+  'dpi',
+  'cols',
+  'rows',
+  'leading_zeros',
+  'start_index',
+  'page_num_start',
+  'page_num_zeros',
+  'marker_count',
+]);
 
 /** Serializa los ajustes para el núcleo (misma forma que el snapshot),
  *  coercionando números que la interfaz pudo dejar como strings. */
@@ -43,7 +71,10 @@ function zfill(n: number, digits: number): string {
  * Resuelve la curva efectiva de cianotipia UNA vez por generación (fuerza +
  * adaptación al contenido) y devuelve ajustes listos con la curva cocinada.
  */
-export async function resolveCyanCurve<T extends Partial<Settings>>(settings: T, thumbFrames: OffscreenCanvas[]): Promise<T> {
+export async function resolveCyanCurve<T extends Partial<Settings>>(
+  settings: T,
+  thumbFrames: OffscreenCanvas[],
+): Promise<T> {
   const s = { ...settings };
   if (!isCyanotype(s)) return s;
   let hist = 'null';
@@ -116,8 +147,11 @@ export function packImageData(items: PackItem[]): PackedPixels {
   const metas: PackedMeta[] = [];
   for (const it of items) {
     metas.push({
-      w: it.w, h: it.h, has_alpha: !!it.hasAlpha,
-      orig_name: it.origName ?? '', orig_file: it.origFile ?? null,
+      w: it.w,
+      h: it.h,
+      has_alpha: !!it.hasAlpha,
+      orig_name: it.origName ?? '',
+      orig_file: it.origFile ?? null,
       offset: it.data ? total : -1,
     });
     if (it.data) total += it.data.byteLength;
@@ -185,15 +219,26 @@ export function generateSheets(args: GenerateArgs): Promise<GenerateResult> {
 
 /** Nombre único dentro de una carpeta del ZIP: `base`, `base_2`, `base_3`… */
 function uniqueName(base: string, used: Set<string>): string {
-  let cand = base, n = 1;
-  while (used.has(cand)) { n += 1; cand = `${base}_${n}`; }
+  let cand = base,
+    n = 1;
+  while (used.has(cand)) {
+    n += 1;
+    cand = `${base}_${n}`;
+  }
   used.add(cand);
   return cand;
 }
 
 async function generateSheetsInner({
-  settings, frames, labels, pageNumbers = null, timeline = [], videoMeta = {},
-  keepOriginals = true, exportFrames = false, onProgress = () => {},
+  settings,
+  frames,
+  labels,
+  pageNumbers = null,
+  timeline = [],
+  videoMeta = {},
+  keepOriginals = true,
+  exportFrames = false,
+  onProgress = () => {},
 }: GenerateArgs): Promise<GenerateResult> {
   const s: Settings = { ...settings };
   if (!s.fmt_png && !s.fmt_pdf && !s.fmt_tiff) s.fmt_png = true; // algo hay que exportar
@@ -234,8 +279,11 @@ async function generateSheetsInner({
   }
 
   // hojas seleccionadas
-  const pagesSelected = new Set(selectIndices(numPages, s.sheets_include ?? '', s.sheets_exclude ?? ''));
-  const pnumOf = (k: number): number => (pageNumbers && k < pageNumbers.length ? pageNumbers[k] : (s.page_num_start ?? 1) + k);
+  const pagesSelected = new Set(
+    selectIndices(numPages, s.sheets_include ?? '', s.sheets_exclude ?? ''),
+  );
+  const pnumOf = (k: number): number =>
+    pageNumbers && k < pageNumbers.length ? pageNumbers[k] : (s.page_num_start ?? 1) + k;
   const maxPnum = Math.max(1, ...Array.from({ length: numPages }, (_, k) => pnumOf(k)));
   const fileDigits = Math.max(s.page_num_zeros ?? 1, String(maxPnum).length);
 
@@ -261,17 +309,41 @@ async function generateSheetsInner({
         const origFile = origFiles[chunkStart + j];
         if (selected) {
           const d = await f.getImageData(true);
-          items.push({ data: d.data, w: d.w, h: d.h, hasAlpha: f.hasAlpha, origName: f.name, origFile });
+          items.push({
+            data: d.data,
+            w: d.w,
+            h: d.h,
+            hasAlpha: f.hasAlpha,
+            origName: f.name,
+            origFile,
+          });
         } else {
-          items.push({ data: null, w: f.w, h: f.h, hasAlpha: f.hasAlpha, origName: f.name, origFile });
+          items.push({
+            data: null,
+            w: f.w,
+            h: f.h,
+            hasAlpha: f.hasAlpha,
+            origName: f.name,
+            origFile,
+          });
         }
       }
       const { meta, pixels } = packImageData(items);
-      const res = await run('render_sheet', {
-        settings: coreSettings, firstW, firstH, meta, pixels,
-        labels: JSON.stringify(chunkLabels), sheetNum: pnum,
-        render: selected, finish: 'final',
-      }, [pixels.buffer]);
+      const res = await run(
+        'render_sheet',
+        {
+          settings: coreSettings,
+          firstW,
+          firstH,
+          meta,
+          pixels,
+          labels: JSON.stringify(chunkLabels),
+          sheetNum: pnum,
+          render: selected,
+          finish: 'final',
+        },
+        [pixels.buffer],
+      );
 
       const record: unknown = JSON.parse(res.record);
       if (record && typeof record === 'object') {
@@ -311,7 +383,9 @@ async function generateSheetsInner({
   let layoutJson: string | null = null;
   if (s.registration_on && records.length) {
     layoutJson = await run('assemble_layout', {
-      settings: coreSettings, firstW, firstH,
+      settings: coreSettings,
+      firstW,
+      firstH,
       records: JSON.stringify(records),
       timeline: JSON.stringify(timeline),
       video: JSON.stringify(videoMeta),
@@ -320,7 +394,9 @@ async function generateSheetsInner({
     files.set(`${safeName}_layout.json`, new TextEncoder().encode(layoutJson));
   }
 
-  const layoutInfo = JSON.parse(await run('compute_layout', { settings: coreSettings, firstW, firstH })) as LayoutInfo;
+  const layoutInfo = JSON.parse(
+    await run('compute_layout', { settings: coreSettings, firstW, firstH }),
+  ) as LayoutInfo;
   recycleIdle(); // devolver al sistema la memoria WASM que infló la generación
   return { files, sheetImages, layoutJson, avisos: layoutInfo.avisos ?? [], numPages, layoutInfo };
 }
