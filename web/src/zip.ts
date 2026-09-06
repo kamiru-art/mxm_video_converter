@@ -8,9 +8,10 @@ import type { Bytes } from './types.ts';
 
 const PART_BYTES = 32e6;
 
-/** Contenido de una entrada: bytes ya en memoria o un Blob que se lee al
- *  llegar su turno. */
-export type ZipEntryData = Bytes | Blob;
+/** Contenido de una entrada: bytes ya en memoria, un Blob que se lee al
+ *  llegar su turno, o una función que lo produce al llegar su turno (un
+ *  fotograma que vive en el video y se codifica a PNG solo para exportar). */
+export type ZipEntryData = Bytes | Blob | (() => Promise<Bytes | Blob>);
 
 /** files: Map<nombre, Uint8Array|Blob>. Devuelve un Blob ZIP. */
 export async function makeZip(
@@ -49,7 +50,8 @@ export async function makeZip(
   for (const [name, data] of files) {
     const entry = new ZipPassThrough(name);
     zip.add(entry);
-    const bytes = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data;
+    const ready = typeof data === 'function' ? await data() : data;
+    const bytes = ready instanceof Blob ? new Uint8Array(await ready.arrayBuffer()) : ready;
     entry.push(bytes, true);
     i++;
     onProgress(i, files.size);

@@ -9,8 +9,17 @@ import {
   resolveCyanCurve,
   settingsForCore,
 } from './gen.ts';
+import { clearFrameCache, storeFrame } from './opfs.ts';
 import { run } from './pool.ts';
-import { clearFrames, ensureThumb, frameImageData, project } from './project.ts';
+import {
+  clearFrames,
+  ensureThumb,
+  frameImageData,
+  framePngs,
+  prefetchPreviews,
+  prefetchVideoFrames,
+  project,
+} from './project.ts';
 import { defaultSettings, isCyanotype, normalizeSettings } from './settings.ts';
 import * as store from './store.ts';
 import type {
@@ -29,6 +38,7 @@ import {
   download,
   dropzone,
   el,
+  etaClock,
   field,
   numberInput,
   originalPageNumbers,
@@ -203,6 +213,9 @@ async function computeDedup(statusEl: HTMLElement): Promise<void> {
 
 export function mountPhase1(root: HTMLElement): void {
   const s = ph1.settings;
+  // la caché de disco de la sesión anterior no sirve: el proyecto no
+  // sobrevive a la recarga
+  void clearFrameCache();
 
   // ---------- panel de origen ----------
   const framesInfo = el('div', { class: 'hint' }, 'No frames yet.');
@@ -245,21 +258,30 @@ export function mountPhase1(root: HTMLElement): void {
     stopBtn.style.display = '';
     extractProg.show();
     clearFrames();
+    await clearFrameCache();
+    let cached = 0; // fotogramas que dejó ffmpeg.wasm como PNG (en disco)
     try {
+      const eta = etaClock();
       const meta = await extractFrames(video, {
         start: parseFloat(startIn.value) || 0,
         end: endIn.value ? parseFloat(endIn.value) : undefined,
         fps: allFrames.input.checked ? null : parseFloat(fpsIn.value) || null,
         signal: ctl.signal,
-        onFrame: async (blob, thumb, _t, i, w, h) => {
+        // WebCodecs: sin PNG, el fotograma vive en el video (project.ts).
+        // ffmpeg.wasm no lo honra y entrega el PNG, que va a la caché de disco
+        lazy: true,
+        onFrame: async (blob, thumb, t, i, w, h) => {
           // se guarda el origen (video + posición): la etiqueta "Original
           // file name" se construye después con el control de dígitos
           const videoStem = video.name.replace(/\.[^.]+$/, '');
+          const name = `${videoStem}_${String(i + 1).padStart(6, '0')}.png`;
+          if (blob) cached++;
           project.frames.push({
-            name: `${videoStem}_${String(i + 1).padStart(6, '0')}.png`,
+            name,
             videoStem,
             seq: i,
-            blob,
+            blob: blob ? await storeFrame(name, blob) : null,
+            video: blob ? undefined : { file: video, t },
             thumb,
             w,
             h,
@@ -267,7 +289,10 @@ export function mountPhase1(root: HTMLElement): void {
           });
         },
         onProgress: (i, est) =>
-          extractProg.set(est ? i / est : 0.5, `frame ${i}${est ? ` of ~${est}` : ''}`),
+          extractProg.set(
+            est ? i / est : 0.5,
+            `frame ${i}${est ? ` of ~${est}` : ''} · ${eta(i, est ?? 0)}`,
+          ),
       });
       project.videoMeta = { fps_extraccion: meta.fps, origen: meta.origen };
       if (meta.cancelled) {
@@ -276,8 +301,13 @@ export function mountPhase1(root: HTMLElement): void {
             ? `Stopped after ${meta.count} frame(s). They stay loaded: change the range or the fps and extract again.`
             : 'Stopped before the first frame.',
         );
-      } else {
+      } else if (cached) {
         toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
+      } else {
+        toast(
+          `${meta.count} frames read from the video. They are decoded again, at full quality, when the sheets are made.`,
+          'ok',
+        );
       }
       // sin await, un fallo del refresco escapaba del try y no se veía; y
       // dentro del catch de abajo se anunciaría como "Extraction failed",
@@ -329,6 +359,7 @@ export function mountPhase1(root: HTMLElement): void {
         // usuario tiene que enterarse de CUÁL y quedarse con el resto, no ver
         // una carga a medias sin explicación
         clearFrames();
+        void clearFrameCache();
         images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         const rejected: string[] = [];
         for (const f of images) {
@@ -802,7 +833,14 @@ export function mountPhase1(root: HTMLElement): void {
       return;
     }
     genBtn.disabled = true;
+    // otra extracción a mitad vaciaría el proyecto y la caché de disco de
+    // los que el ZIP aún está leyendo
+    const extractWas = extractBtn.disabled;
+    extractBtn.disabled = true;
     genProg.show();
+    // los PNG de los fotogramas que viven en el video, para el ZIP, en una
+    // pasada compartida (ver framePngs); se codifican al empaquetar
+    let pngs: ReturnType<typeof framePngs> | null = null;
     try {
       const thumbs: OffscreenCanvas[] = [];
       if (isCyanotype(s) && (s.cyan_adaptive ?? 0) > 0) {
@@ -812,7 +850,9 @@ export function mountPhase1(root: HTMLElement): void {
         { ...s, sheets_include: ph1.sheets_include, sheets_exclude: ph1.sheets_exclude },
         thumbs,
       );
-      const frames: GenFrame[] = plan.printed.map((p) => {
+      pngs = framePngs(plan.printed.map((p) => p.frameIdx));
+      const pngOf = pngs.get;
+      const frames: GenFrame[] = plan.printed.map((p, k) => {
         const f = project.frames[p.frameIdx];
         return {
           name: f.name,
@@ -820,9 +860,14 @@ export function mountPhase1(root: HTMLElement): void {
           h: f.h,
           hasAlpha: f.hasAlpha,
           blob: f.blob,
+          video: f.video,
+          encodePng: f.video ? pngOf[k] : undefined,
           getImageData: (full) => frameImageData(p.frameIdx, full),
         };
       });
+      // tiempo transcurrido y estimación: con el video como fuente, esto es
+      // lo que tarda (decodificar, remuestrear y codificar cada hoja)
+      const eta = etaClock();
       const out = await generateSheets({
         settings,
         frames,
@@ -832,20 +877,28 @@ export function mountPhase1(root: HTMLElement): void {
         videoMeta: project.videoMeta,
         keepOriginals: ph1.keepOriginals,
         exportFrames: ph1.exportFrames,
-        onProgress: (d, t, note) => genProg.set(d / t, note),
+        prefetch: (chunk) => prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
+        onProgress: (d, t, note) => genProg.set(d / t, `${note} · ${eta(d, t)}`),
       });
       project.layoutJson = out.layoutJson;
       project.sheetImages = out.sheetImages;
       warnBox.replaceChildren(...out.avisos.map((a) => el('li', {}, a)));
       genProg.set(1, 'packing ZIP…');
-      const zip = await makeZip(out.files, (i, n) => genProg.set(1, `packing ${i}/${n}`));
+      // las copias de los fotogramas que viven en el video se codifican
+      // aquí, al llegar su turno en el ZIP: es la parte lenta del empaquetado
+      const zipEta = etaClock();
+      const zip = await makeZip(out.files, (i, n) =>
+        genProg.set(1, `packing ${i}/${n} · ${zipEta(i, n)}`),
+      );
       download(zip, `${sanitizeLabel(s.out_name || 'hojas')}.zip`, 'application/zip');
       toast(`Done: ${out.numPages} sheet(s). Print at 100 % (no “fit to page”).`, 'ok');
     } catch (e) {
       console.error(e);
       toast(`Generation failed: ${errMsg(e)}`, 'err');
     } finally {
+      pngs?.cancel();
       genBtn.disabled = false;
+      extractBtn.disabled = extractWas;
       genProg.hide();
     }
   });
@@ -920,6 +973,8 @@ export function mountPhase1(root: HTMLElement): void {
         (ph1.previewPage + 1) * plan.perPage,
       );
       const settingsPrev = await resolveCyanCurve({ ...s, dpi: Math.min(s.dpi, 150) }, []);
+      // los que viven en el video, en una pasada (no una búsqueda por cada uno)
+      await prefetchPreviews(chunk.map((p) => p.frameIdx));
       const items: PackItem[] = [];
       for (const p of chunk) {
         const d = await frameImageData(p.frameIdx, false);
@@ -1075,6 +1130,7 @@ export function mountPhase1(root: HTMLElement): void {
     demoBtn.disabled = true;
     try {
       clearFrames();
+      void clearFrameCache();
       for (let i = 0; i < DEMO_FRAMES; i++) {
         const canvas = demoFrame(i, DEMO_FRAMES);
         const blob = await canvas.convertToBlob({ type: 'image/png' });

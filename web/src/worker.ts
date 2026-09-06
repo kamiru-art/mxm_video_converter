@@ -182,15 +182,18 @@ const handlers: Handlers = {
       ctx.drawImage(src, 0, 0);
       src.close();
     }
-    const png = await canvas.convertToBlob({ type: 'image/png' });
-    const tw = Math.max(1, Math.round(a.thumbW));
-    const th = Math.max(1, Math.round((h / w) * tw));
-    const small = new OffscreenCanvas(tw, th);
-    const sctx = small.getContext('2d');
-    if (!sctx) throw new Error('Could not create a 2D canvas context in the worker.');
-    sctx.drawImage(canvas, 0, 0, tw, th);
-    const thumb = small.transferToImageBitmap();
-    return { value: { png, thumb, w, h }, transfer: [thumb] };
+    const png = a.png === false ? null : await canvas.convertToBlob({ type: 'image/png' });
+    let thumb: ImageBitmap | null = null;
+    if (a.thumbW) {
+      const tw = Math.max(1, Math.round(a.thumbW));
+      const th = Math.max(1, Math.round((h / w) * tw));
+      const small = new OffscreenCanvas(tw, th);
+      const sctx = small.getContext('2d');
+      if (!sctx) throw new Error('Could not create a 2D canvas context in the worker.');
+      sctx.drawImage(canvas, 0, 0, tw, th);
+      thumb = small.transferToImageBitmap();
+    }
+    return { value: { png, thumb, w, h }, transfer: thumb ? [thumb] : [] };
   },
   // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
   pdf_new: (a) => {

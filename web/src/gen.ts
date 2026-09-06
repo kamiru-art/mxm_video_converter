@@ -3,7 +3,7 @@
 // fotogramas a resolución completa a la vez.
 
 import { recycleIdle, run, run0 } from './pool.ts';
-import type { RgbaImage } from './project.ts';
+import type { RgbaImage, VideoRef } from './project.ts';
 import { isCyanotype } from './settings.ts';
 import type { Bytes, LayoutInfo, Settings, TimelineItem, VideoMeta } from './types.ts';
 import { context2d, sanitizeLabel, selectIndices } from './ui.ts';
@@ -177,6 +177,12 @@ export interface GenFrame {
   /** El archivo original, para la copia de `_originals/`; nulo si no hay. */
   blob: Blob | null;
   getImageData: (full: boolean) => Promise<RgbaImage>;
+  /** Fotograma que vive en su video (ProjectFrame.video): `prefetch` lo
+   *  decodifica con los demás de su página. */
+  video?: VideoRef;
+  /** Sin `blob`: produce el PNG para `_originals/` y `_frames/` al armar el
+   *  ZIP, y solo entonces. */
+  encodePng?: () => Promise<Blob>;
 }
 
 export interface GenerateArgs {
@@ -191,6 +197,9 @@ export interface GenerateArgs {
   videoMeta?: VideoMeta;
   keepOriginals?: boolean;
   exportFrames?: boolean;
+  /** Antes de cada página seleccionada, con sus fotogramas: decodificar
+   *  de golpe los que viven en un video (project.ts). */
+  prefetch?: (frames: GenFrame[]) => Promise<void>;
   onProgress?: (done: number, total: number, note: string) => void;
 }
 
@@ -238,6 +247,7 @@ async function generateSheetsInner({
   videoMeta = {},
   keepOriginals = true,
   exportFrames = false,
+  prefetch = async () => {},
   onProgress = () => {},
 }: GenerateArgs): Promise<GenerateResult> {
   const s: Settings = { ...settings };
@@ -260,10 +270,10 @@ async function generateSheetsInner({
     for (let i = 0; i < frames.length; i++) {
       const cand = uniqueName(sanitizeLabel(labels[i]), usados);
       const ext = (frames[i].name?.match(/\.[a-z0-9]+$/i)?.[0] ?? '.png').toLowerCase();
-      const blob = frames[i].blob;
-      if (blob) {
+      const data: ZipEntryData | undefined = frames[i].blob ?? frames[i].encodePng;
+      if (data) {
         const path = `${originalesDir}/${cand}${ext}`;
-        files.set(path, blob);
+        files.set(path, data);
         origFiles[i] = path;
       }
     }
@@ -273,8 +283,8 @@ async function generateSheetsInner({
     const usados = new Set<string>();
     for (let i = 0; i < frames.length; i++) {
       const cand = uniqueName(sanitizeLabel(labels[i]), usados);
-      const blob = frames[i].blob;
-      if (blob) files.set(`${dir}/${cand}.png`, blob);
+      const data: ZipEntryData | undefined = frames[i].blob ?? frames[i].encodePng;
+      if (data) files.set(`${dir}/${cand}.png`, data);
     }
   }
 
@@ -303,6 +313,10 @@ async function generateSheetsInner({
       const pnum = pnumOf(pageIdx);
       const pageBase = `${safeName}_p${zfill(pnum, fileDigits)}`;
 
+      if (selected) {
+        onProgress(done, totalSel, `sheet ${pnum}: decoding ${chunk.length} frame(s)…`);
+        await prefetch(chunk);
+      }
       const items: PackItem[] = [];
       for (let j = 0; j < chunk.length; j++) {
         const f = chunk[j];

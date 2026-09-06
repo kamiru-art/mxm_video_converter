@@ -37,8 +37,15 @@ export interface ExtractOptions {
   end?: number;
   /** null/undefined = todos los fotogramas */
   fps?: number | null;
+  /** true = sin PNG: el fotograma se queda en el video y onFrame recibe
+   *  `blob` null; se vuelve a decodificar cuando hace falta con
+   *  decodeVideoFrames(file, [t]). Solo lo honra el camino de WebCodecs,
+   *  que decodifica a cientos de fotogramas por segundo; ffmpeg.wasm tarda
+   *  minutos por pasada y entrega el PNG igual, así que quien llama mira
+   *  `blob`, no esta opción. */
+  lazy?: boolean;
   onFrame?: (
-    blob: Blob,
+    blob: Blob | null,
     thumb: OffscreenCanvas,
     t: number,
     i: number,
@@ -218,7 +225,9 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
       : sink.canvases(start, end);
     // el PNG y la miniatura se hacen en los workers, varios a la vez; la cola
     // los entrega en orden y es la que lleva la cuenta (ver frames.ts)
-    const queue = new FrameQueue(opts, est);
+    // sin PNG si el fotograma va a vivir en el video (`lazy`): este
+    // decodificador puede volver a leerlo cuando haga falta
+    const queue = new FrameQueue(opts, est, !opts.lazy);
     let cancelled = false;
 
     try {
@@ -257,6 +266,42 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
       origen: file.name,
       cancelled,
     };
+  } finally {
+    probe.input.dispose();
+  }
+}
+
+/**
+ * Vuelve a decodificar del video los fotogramas de `times` (segundos, los
+ * `t` que dio la extracción) y entrega cada uno como ImageBitmap con el
+ * índice que tenía en `times`; quien lo recibe lo cierra. Llegan en orden
+ * de TIEMPO, no en el orden pedido: así cada paquete se decodifica una sola
+ * vez, y una página de hojas cuesta lo que cuesta decodificar el tramo
+ * (~30 ms por fotograma 4K por hardware), no una búsqueda por fotograma.
+ */
+export async function decodeVideoFrames(
+  file: File,
+  times: number[],
+  onFrame: (index: number, image: ImageBitmap) => void | Promise<void>,
+): Promise<void> {
+  if (!times.length) return;
+  const probe = await probeMediabunny(file);
+  try {
+    if (!(await probe.track.canDecode())) {
+      throw new Error(`${file.name}: this browser can no longer decode the video.`);
+    }
+    const order = times.map((_t, i) => i).sort((a, b) => times[a] - times[b]);
+    const sink = new CanvasSink(probe.track, { poolSize: 2 });
+    let k = 0;
+    for await (const wrapped of sink.canvasesAtTimestamps(order.map((i) => times[i]))) {
+      const index = order[k++];
+      if (!wrapped) {
+        throw new Error(`${file.name}: no frame at ${times[index].toFixed(3)} s.`);
+      }
+      const image = await createImageBitmap(wrapped.canvas);
+      await onFrame(index, image);
+    }
+    if (k !== times.length) throw new Error(`${file.name}: the decoder stopped early.`);
   } finally {
     probe.input.dispose();
   }
