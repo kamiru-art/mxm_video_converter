@@ -254,7 +254,10 @@ export function extractFramesFallback(
         4,
         Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * 4))),
       );
-      const queue = new FrameQueue(opts, est);
+      // PNG siempre, aunque `opts.lazy` lo pida: volver a decodificar por
+      // aquí cuesta minutos, así que el fotograma se guarda (phase1 lo
+      // manda a la caché de disco)
+      const queue = new FrameQueue(opts, est, true);
       let outSize: [number, number] | null = null;
       const onLog = ({ message }: LogEvent): void => {
         outSize ??= parseOutputSize(message);

@@ -49,8 +49,25 @@ The video decoders are separate and do not use the core: `web/src/video.ts`
 uses WebCodecs through `mediabunny`, and falls back to `ffmpeg.wasm`
 (`web/src/avi.ts`) when the browser refuses a file. Both hand every decoded
 frame to `web/src/frames.ts`, which sends it through the same pool to an
-`encode_frame` command: the worker encodes the PNG and makes the thumbnail,
-several frames at a time, and the queue delivers them to the phase in order.
+`encode_frame` command: the worker makes the thumbnail (and the PNG, when
+one is wanted), several frames at a time, and the queue delivers them to the
+phase in order.
+
+**The video is the source of truth.** A frame that WebCodecs can decode is
+not stored at all: `ProjectFrame` (`web/src/project.ts`) keeps `video:
+{file, t}` and a 256 px thumbnail, and the frame is decoded again from the
+file whenever its pixels are needed: a page of sheets at a time
+(`prefetchVideoFrames`, one pass in time order), the preview
+(`prefetchPreviews`), the lightbox, and the ZIP export (`framePngs`, which
+encodes the PNGs only then, pipelined through the pool). A 4K frame is 10 MB
+as PNG, so a project of a few hundred frames used to hold gigabytes of Blobs
+that added nothing: the sheet only needs each frame at cell size, resampled
+once with Lanczos from the decoded frame. Frames that come from
+`ffmpeg.wasm` cannot be re-decoded quickly (minutes per pass), so those keep
+their PNG, written to the browser's private file system (`web/src/opfs.ts`,
+OPFS) and held as file-backed Blobs; without OPFS they stay in memory as
+before. Image folders, TIFF and the demo frames are files already and are
+untouched.
 
 ## 3) Layer/Module Responsibilities
 
@@ -78,6 +95,7 @@ several frames at a time, and the queue delivers them to the phase in order.
 | Adapter over storage | `web/src/store.ts` | Every read and write of `localStorage` is wrapped in `try`/`catch` in one place. |
 | Explicit buffer transfer | `web/src/worker.ts` | Pixel buffers are moved between threads instead of copied. |
 | Ordered encode queue | `web/src/frames.ts` (`FrameQueue`) | Encoding a 4K frame to PNG costs about 160 ms, and it used to run on the main thread one frame at a time while the hardware decoder waited. The queue sends each frame to a pool worker as an `ImageBitmap` or raw RGBA, keeps at most one job per worker plus one in flight, and emits the results in order, so the frame index is stable and the memory is bounded. Measured on a 4K HEVC clip of 56 s at 4 fps: 36 s before, 11 s after, with byte-identical PNGs. |
+| Lazy ZIP entries | `web/src/zip.ts` (`ZipEntryData` as a function) | The `_originals/` and `_frames/` copies of a video frame are produced when the ZIP reaches them, not before, so exporting costs one PNG per frame at pack time and nothing when the export is off. |
 | Cancellation by `AbortSignal` | `web/src/video.ts`, `web/src/avi.ts` | The two extractors accept a `signal`. WebCodecs checks it between frames; `ffmpeg.wasm` cannot be interrupted inside `exec`, so the abort terminates the instance and the rejected call is read as the stop, not as a failure. Both return what was delivered so far with `cancelled: true`, and the phase keeps those frames. |
 | Network-first document, cache-first assets | `web/src/sw.ts` | Vite hashes the asset names on each build, so a hand-written precache list would go stale. The service worker caches what the browser actually asks for. A hit under `/assets/` is final (the URL cannot change); everything else is refreshed in the background. |
 | Immutable cache for hashed files | `web/public/_headers` | Cloudflare serves static assets with `max-age=0, must-revalidate` by default. The files under `/assets/` are content-addressed, so the browser may keep them for a year. |
@@ -108,4 +126,4 @@ several frames at a time, and the queue delivers them to the phase in order.
 
 - `web/src/main.ts`, `web/src/pool.ts`, `web/src/worker.ts`, `web/src/project.ts`
 - `rust-core/src/api.rs`, `rust-core/src/lib.rs`
-- `web/src/sw.ts`, `web/src/video.ts`, `web/src/avi.ts`, `web/src/frames.ts`
+- `web/src/sw.ts`, `web/src/video.ts`, `web/src/avi.ts`, `web/src/frames.ts`, `web/src/opfs.ts`

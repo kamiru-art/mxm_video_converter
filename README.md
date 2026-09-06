@@ -135,6 +135,13 @@ WebCodecs. If the browser cannot decode a file, the application uses
 `ffmpeg.wasm`. Thus the application also reads the MOV files of cameras, for
 example 10-bit HEVC and ProRes.
 
+When the browser decodes the video itself, the application does not keep a
+copy of the frames. It reads them again from the video when it makes the
+sheets, at full quality, and it writes the PNG files only if you export
+them. Thus a long 4K video does not fill the memory of the browser. When the
+built-in converter decodes the video instead, the frames are kept on disk,
+in the private storage of the browser.
+
 ## Structure
 
 | Directory | Contents |

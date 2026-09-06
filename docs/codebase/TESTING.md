@@ -46,7 +46,13 @@ skips the video section instead of failing. CI installs `ffmpeg` so the
 section always runs there. Each decoder is also stopped half-way through an
 `AbortSignal`: the test requires `cancelled: true`, fewer frames than the
 clip has, and consecutive frame indices, because the PNGs are encoded in
-parallel and must still come out in order.
+parallel and must still come out in order. The lazy path is covered end to
+end: an extraction with `lazy: true` yields no PNG, three frames are
+re-decoded by timestamp and come back with the requested indices, a sheet
+and a ZIP are generated from frames that live in the video, and the PNG the
+ZIP produces is byte-identical to the one the eager extraction made of the
+same frame. The `ffmpeg.wasm` sample is extracted with `lazy: true` too and
+must still deliver PNGs, and the OPFS cache does a byte-exact round trip.
 
 `CHROME_PATH` selects the browser binary (`.github/workflows/ci.yml`).
 

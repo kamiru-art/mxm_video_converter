@@ -379,6 +379,7 @@ async function main(): Promise<void> {
           end: 3,
           fps: 2,
           onFrame: async (blob) => {
+            if (!blob) throw new Error('expected a PNG frame');
             got.push(blob);
           },
         });
@@ -407,6 +408,107 @@ async function main(): Promise<void> {
         );
         if (!partial.cancelled || partial.count < 2 || partial.count >= 30)
           throw new Error(`abort did not stop the extraction (${partial.count} frames)`);
+
+        // extracción perezosa: sin PNG, el fotograma vive en el video. Se
+        // vuelve a decodificar por su instante, en el orden pedido, y las
+        // hojas y el ZIP salen del video sin ningún PNG intermedio
+        const { decodeVideoFrames } = await import('./video.ts');
+        const refs: { t: number; thumbW: number }[] = [];
+        const lazyMeta = await extractFrames(vblob, {
+          start: 0,
+          end: 3,
+          fps: 2,
+          lazy: true,
+          onFrame: async (b, thumb, t) => {
+            if (b !== null) throw new Error('lazy extraction produced a PNG');
+            refs.push({ t, thumbW: thumb.width });
+          },
+        });
+        if (lazyMeta.count < 5 || refs.some((r) => r.thumbW !== 256))
+          throw new Error(`lazy extraction: ${lazyMeta.count} frames, thumbs ${refs[0]?.thumbW}`);
+        const wanted = [refs[3].t, refs[0].t, refs[4].t];
+        const decoded: { index: number; w: number; h: number }[] = [];
+        await decodeVideoFrames(vblob, wanted, (index, bmp) => {
+          decoded.push({ index, w: bmp.width, h: bmp.height });
+          bmp.close();
+        });
+        // llegan en orden de tiempo (t0 < t3 < t4) con el índice pedido
+        if (
+          decoded.map((d) => d.index).join() !== '1,0,2' ||
+          decoded.some((d) => d.w !== 320 || d.h !== 180)
+        )
+          throw new Error(`decodeVideoFrames: ${JSON.stringify(decoded)}`);
+        log(`video: ${lazyMeta.count} fotogramas perezosos; 3 redecodificados por instante`);
+
+        const { clearFrames, frameImageData, framePngs, prefetchVideoFrames, project } =
+          await import('./project.ts');
+        const { makeZip } = await import('./zip.ts');
+        clearFrames();
+        for (const [i, r] of refs.entries()) {
+          project.frames.push({
+            name: `lazy_${i + 1}.png`,
+            blob: null,
+            video: { file: vblob, t: r.t },
+            thumb: null,
+            w: 320,
+            h: 180,
+            hasAlpha: false,
+          });
+        }
+        const pngs = framePngs(project.frames.map((_f, i) => i));
+        const lazyFrames: GenFrame[] = project.frames.map((f, i) => ({
+          name: f.name,
+          w: f.w,
+          h: f.h,
+          hasAlpha: false,
+          blob: null,
+          video: f.video,
+          encodePng: pngs.get[i],
+          getImageData: (full: boolean) => frameImageData(i, full),
+        }));
+        const lazyLabels = lazyFrames.map((_f, i) => `lz_${i + 1}`);
+        const lazyOut = await generateSheets({
+          settings: { ...s, cols: 3, rows: 2, out_name: 'lazy', fmt_pdf: false, fmt_tiff: false },
+          frames: lazyFrames,
+          labels: lazyLabels,
+          timeline: lazyLabels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
+          videoMeta: { fps_extraccion: 2 },
+          keepOriginals: true,
+          exportFrames: true,
+          prefetch: (chunk) =>
+            prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
+        });
+        const lazySheet = lazyOut.files.get('lazy_p1.png');
+        if (!(lazySheet instanceof Blob) || !lazySheet.size)
+          throw new Error('lazy sheet was not generated');
+        const lazyEntry = lazyOut.files.get('lazy_frames/lz_1.png');
+        if (typeof lazyEntry !== 'function') throw new Error('frame export entry is not lazy');
+        const lazyZip = await makeZip(lazyOut.files);
+        // el PNG que sale del video al exportar es EL MISMO que el de la
+        // extracción con PNG (mismo instante, mismo codificador): byte a byte
+        const lazyPng = new Uint8Array(await new Blob([await lazyEntry()]).arrayBuffer());
+        const eager = new Uint8Array(await got[0].arrayBuffer());
+        if (lazyPng.length !== eager.length || lazyPng.some((v, i) => v !== eager[i]))
+          throw new Error(
+            `exported frame differs from the eager PNG (${lazyPng.length} vs ${eager.length} bytes)`,
+          );
+        pngs.cancel();
+        log(
+          `hojas desde el video: hoja ${lazySheet.size} bytes, ZIP ${lazyZip.size} bytes, PNG exportado idéntico al de la extracción ✓`,
+        );
+        clearFrames();
+
+        // caché de disco (OPFS): lo que entra sale igual, y se puede vaciar
+        const { storeFrame, clearFrameCache } = await import('./opfs.ts');
+        await clearFrameCache();
+        const stored = await storeFrame('e2e_1.png', got[0]);
+        const back = new Uint8Array(await stored.arrayBuffer());
+        const orig = new Uint8Array(await got[0].arrayBuffer());
+        if (back.length !== orig.length || back.some((v, i) => v !== orig[i]))
+          throw new Error('OPFS round trip changed the bytes');
+        await clearFrameCache();
+        log(`OPFS: ${back.length} bytes ida y vuelta`);
+
         const getters = got.map((b) => () => createImageBitmap(b));
         const out2 = await buildVideo(getters, 2);
         log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
@@ -461,6 +563,7 @@ async function main(): Promise<void> {
           end: 1,
           fps: 4,
           onFrame: async (b) => {
+            if (!b) throw new Error('expected a PNG frame');
             got.push(b);
           },
         });
@@ -489,6 +592,7 @@ async function main(): Promise<void> {
           end: 2,
           fps: 3,
           onFrame: async (b) => {
+            if (!b) throw new Error('expected a PNG frame');
             got.push(b);
           },
         });
@@ -518,6 +622,23 @@ async function main(): Promise<void> {
         );
         if (!partial.cancelled || partial.count < 2 || partial.count >= 20)
           throw new Error(`abort did not stop the AVI extraction (${partial.count} frames)`);
+
+        // `lazy` NO se honra aquí: ffmpeg.wasm no puede volver a decodificar
+        // deprisa, así que entrega el PNG igual
+        let lazyAvi = 0;
+        const lazyAviMeta = await extractFrames(ablob, {
+          start: 0,
+          end: 1,
+          fps: 3,
+          lazy: true,
+          onFrame: async (b) => {
+            if (!b) throw new Error('ffmpeg.wasm honoured lazy and dropped the PNG');
+            lazyAvi++;
+          },
+        });
+        if (lazyAviMeta.count < 2 || lazyAvi !== lazyAviMeta.count)
+          throw new Error(`lazy AVI extraction: ${lazyAvi}/${lazyAviMeta.count}`);
+        log(`AVI: con lazy sigue entregando PNG (${lazyAvi} fotogramas)`);
       } else {
         log('· (sin muestra AVI: prueba del decodificador de respaldo omitida)');
       }

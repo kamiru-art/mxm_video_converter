@@ -38,16 +38,22 @@ export class FrameQueue {
   failed = false;
   private readonly opts: ExtractOptions;
   private readonly est: number | null;
+  private readonly png: boolean;
 
-  constructor(opts: ExtractOptions, est: number | null) {
+  /** `png` lo decide el decodificador, no `opts.lazy`: WebCodecs puede
+   *  volver a decodificar y lo omite; ffmpeg.wasm no puede y lo entrega
+   *  siempre, con la misma `opts`. */
+  constructor(opts: ExtractOptions, est: number | null, png: boolean) {
     this.opts = opts;
     this.est = est;
+    this.png = png;
   }
 
   /** Encola un fotograma. Solo espera si hay demasiados en vuelo. */
   async push(image: FrameSource, t: number): Promise<void> {
     const transfer: Transferable[] = 'rgba' in image ? [image.rgba.buffer] : [image];
-    const result = run('encode_frame', { image, thumbW: THUMB_W }, transfer);
+    const png = this.png;
+    const result = run('encode_frame', { image, thumbW: THUMB_W, png }, transfer);
     // el error sale por emit(), en orden; sin esto una promesa que aún nadie
     // espera avisaría de "unhandled rejection"
     result.catch(() => {});
@@ -65,6 +71,7 @@ export class FrameQueue {
     if (!job) return;
     try {
       const { png, thumb, w, h } = await job.result;
+      if (!thumb) throw new Error('The frame encoder returned no thumbnail.');
       // ProjectFrame.thumb es un OffscreenCanvas; el ImageBitmap del worker
       // se vuelca en uno y se cierra
       const canvas = new OffscreenCanvas(thumb.width, thumb.height);

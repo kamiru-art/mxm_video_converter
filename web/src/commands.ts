@@ -10,11 +10,11 @@ import type { Bytes, DecodedImage, RenderSheetOutput, ScanOutput } from './types
  *  transferibles: el fotograma se mueve al worker, no se copia. */
 export type FrameSource = ImageBitmap | { rgba: Bytes; w: number; h: number };
 
-/** Lo que devuelve encode_frame: el PNG sin pérdida a resolución nativa y la
- *  miniatura, que se transfiere de vuelta. */
+/** Lo que devuelve encode_frame: el PNG sin pérdida a resolución nativa (si
+ *  se pidió) y la miniatura (si se pidió), que se transfiere de vuelta. */
 export interface EncodedFrame {
-  png: Blob;
-  thumb: ImageBitmap;
+  png: Blob | null;
+  thumb: ImageBitmap | null;
   w: number;
   h: number;
 }
@@ -121,7 +121,11 @@ export interface Commands {
   };
   analyze_colorblocker: { args: { bytes: Bytes; paper: string; dpi: number }; result: string };
   // Sin núcleo: PNG y miniatura de un fotograma de video (ver frames.ts)
-  encode_frame: { args: { image: FrameSource; thumbW: number }; result: EncodedFrame };
+  encode_frame: {
+    /** `png` por defecto true; sin `thumbW` no hay miniatura. */
+    args: { image: FrameSource; thumbW?: number; png?: boolean };
+    result: EncodedFrame;
+  };
   // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
   pdf_new: { args: { dpi: number }; result: null };
   pdf_add: { args: { png: Bytes }; result: null };

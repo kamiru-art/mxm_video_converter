@@ -73,6 +73,27 @@ export function download(
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+/** Tiempo transcurrido y estimación de lo que falta, para una barra de
+ *  progreso: "1:23 elapsed · ~2:40 left". Lineal sobre lo hecho hasta
+ *  ahora, que es lo que hay: cada hoja cuesta más o menos lo mismo. La
+ *  estimación aparece tras la primera unidad y unos segundos, para no
+ *  anunciar disparates con una sola muestra. */
+export function etaClock(): (done: number, total: number) => string {
+  const t0 = performance.now();
+  const clock = (ms: number): string => {
+    const s = Math.max(0, Math.round(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  return (done, total) => {
+    const elapsed = performance.now() - t0;
+    let out = `${clock(elapsed)} elapsed`;
+    if (done > 0 && total > done && elapsed > 3000) {
+      out += ` · ~${clock((elapsed / done) * (total - done))} left`;
+    }
+    return out;
+  };
+}
+
 export interface ProgressBar {
   root: HTMLDivElement;
   set(frac: number, text?: string): void;
