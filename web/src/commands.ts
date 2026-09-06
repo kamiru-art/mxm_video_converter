@@ -126,9 +126,11 @@ export interface Commands {
     args: { image: FrameSource; thumbW?: number; png?: boolean };
     result: EncodedFrame;
   };
-  // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
+  // PDF con estado (una instancia por worker; el pool lo enruta al worker 0).
+  // Va en streaming: pdf_add devuelve los bytes de ESA página y pdf_finish
+  // el cierre; el archivo es la concatenación, en orden, de todo lo devuelto
   pdf_new: { args: { dpi: number }; result: null };
-  pdf_add: { args: { png: Bytes }; result: null };
+  pdf_add: { args: { png: Bytes }; result: Bytes };
   pdf_finish: { args: Record<string, never>; result: Bytes };
   pdf_abort: { args: Record<string, never>; result: null };
 }

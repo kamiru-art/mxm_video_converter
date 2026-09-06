@@ -298,6 +298,9 @@ async function generateSheetsInner({
   const fileDigits = Math.max(s.page_num_zeros ?? 1, String(maxPnum).length);
 
   if (s.fmt_pdf) await run0('pdf_new', { dpi: s.dpi });
+  // el PDF llega por bloques (uno por página y el cierre): como Blobs, el
+  // navegador puede sacarlos del heap; el núcleo no retiene ninguna página
+  const pdfParts: Blob[] = [];
 
   const records: Record<string, unknown>[] = [];
   let done = 0;
@@ -367,7 +370,7 @@ async function generateSheetsInner({
         records.push(rec);
       }
       if (selected && res.png) {
-        if (s.fmt_pdf) await run0('pdf_add', { png: res.png });
+        if (s.fmt_pdf) pdfParts.push(new Blob([await run0('pdf_add', { png: res.png })]));
         if (s.fmt_tiff) {
           const tif = await run('encode_tiff', { png: res.png });
           files.set(`${pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
@@ -384,8 +387,8 @@ async function generateSheetsInner({
     }
 
     if (s.fmt_pdf) {
-      const pdf = await run0('pdf_finish', {});
-      files.set(`${safeName}.pdf`, new Blob([pdf], { type: 'application/pdf' }));
+      pdfParts.push(new Blob([await run0('pdf_finish', {})]));
+      files.set(`${safeName}.pdf`, new Blob(pdfParts, { type: 'application/pdf' }));
     }
   } catch (e) {
     // sin esto, un fallo a mitad de generación dejaría el PDF a medias vivo
