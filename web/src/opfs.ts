@@ -13,6 +13,9 @@
 const DIR = 'frames';
 
 let dirPromise: Promise<FileSystemDirectoryHandle | null> | null = null;
+/** Un vaciado en curso: la carpeta no se vuelve a crear hasta que termine,
+ *  o el borrado se llevaría por delante los archivos nuevos. */
+let clearing: Promise<void> = Promise.resolve();
 
 function supported(): boolean {
   return (
@@ -28,6 +31,7 @@ function cacheDir(): Promise<FileSystemDirectoryHandle | null> {
   if (!dirPromise) {
     dirPromise = (async () => {
       if (!supported()) return null;
+      await clearing;
       try {
         const root = await navigator.storage.getDirectory();
         return await root.getDirectoryHandle(DIR, { create: true });
@@ -51,20 +55,24 @@ export async function storeFrame(name: string, blob: Blob): Promise<Blob> {
     await w.close();
     return await handle.getFile();
   } catch (e) {
-    console.warn('[opfs] frame kept in memory:', e);
+    const err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.warn(`[opfs] frame kept in memory (${err})`);
     return blob;
   }
 }
 
 /** Vacía la caché. Al empezar una extracción y al montar la fase: un
  *  proyecto no sobrevive a la recarga, así que sus archivos tampoco. */
-export async function clearFrameCache(): Promise<void> {
+export function clearFrameCache(): Promise<void> {
   dirPromise = null;
-  if (!supported()) return;
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry(DIR, { recursive: true });
-  } catch {
-    /* no existía, o el navegador no deja */
-  }
+  if (!supported()) return Promise.resolve();
+  clearing = clearing.then(async () => {
+    try {
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry(DIR, { recursive: true });
+    } catch {
+      /* no existía, o el navegador no deja */
+    }
+  });
+  return clearing;
 }
