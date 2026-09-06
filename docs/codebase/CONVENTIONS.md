@@ -1,11 +1,11 @@
 # Coding Conventions
 
-These rules are read from the code. There is no linter configuration and no
-formatter configuration in the repository, so most of the conventions below
-are conventions of practice. The one thing the tooling does enforce is the
-type system: the web application is TypeScript under `strict`, and
-`npm run typecheck` (which `npm run build` and CI run first) fails on any
-type error.
+These rules are read from the code, and since 2026-09-06 the tooling enforces
+the ones it can: `rustfmt` and `clippy` for the core (`rust-core/rustfmt.toml`,
+the `[lints]` table of `rust-core/Cargo.toml`), Biome for the web
+(`web/biome.jsonc`), and the type system (TypeScript under `strict`,
+`npm run typecheck`). CI fails on any of them. The rest of the conventions
+below are conventions of practice.
 
 ## 1) Naming Rules
 
@@ -27,24 +27,71 @@ loading. Do not rename them.
 
 ## 2) Formatting and Linting
 
-- Formatter: none configured. The Rust code follows default `rustfmt` layout;
-  the TypeScript uses two-space indentation and semicolons.
-- Linter: `cargo clippy` runs in CI but cannot fail the build. The step is
-  `cargo clippy --release --all-targets 2>&1 | tail -5`, so its exit status is
-  the status of `tail` (`.github/workflows/ci.yml`). It is labelled
-  "informational" in the workflow itself.
-- There is no TypeScript linter, but `tsc` runs with `strict`,
-  `verbatimModuleSyntax` and `erasableSyntaxOnly` over three projects:
-  `tsconfig.json` (the page, DOM library), `tsconfig.worker.json` (the
-  processing worker and the service worker, WebWorker library) and
-  `tsconfig.node.json` (the build and test scripts, Node types). The DOM and
-  WebWorker libraries cannot share one program, which is why there are three.
-- No `any`, no `@ts-ignore`. A value from `JSON.parse` is narrowed with one
-  `as` cast to the interface in `types.ts` that describes it, at the parse
-  site and nowhere else. Catch variables are `unknown`; `errMsg()` from
-  `web/src/errors.ts` turns them into a message.
-- Run commands: `cargo test`, `cargo clippy` in `rust-core/`;
-  `npm run typecheck`, `npm run build` and `npm run test:e2e` in `web/`.
+### Rust core
+
+- Formatter: `rustfmt` with the default style. `rust-core/rustfmt.toml` only
+  records the decision; CI runs `cargo fmt --check` before the tests.
+- Linter: `cargo clippy` with warnings as errors, twice: natively with
+  `--all-targets` (unit and integration tests included) and for
+  `wasm32-unknown-unknown`, because `api.rs` is
+  `#![cfg(target_arch = "wasm32")]` and the native pass never compiles it.
+  Two lints are allowed crate-wide in the `[lints.clippy]` table of
+  `Cargo.toml`, with the reason next to them: `needless_range_loop` (in the
+  pixel kernels the index is the computation) and `too_many_arguments`.
+  Anything else must be fixed, or allowed at the site with a comment.
+- The toolchain is pinned in `rust-toolchain.toml` at the repository root
+  (channel, `clippy`, `rustfmt`, the wasm target). Every developer and CI get
+  the same compiler, so a new Rust release with new lints cannot break CI on
+  its own. To upgrade: change the channel, run both clippy passes, fix what
+  appears, commit together.
+
+### Web application
+
+- Formatter and linter: Biome, configured in `web/biome.jsonc`. Two-space
+  indentation, semicolons, single quotes, trailing commas, 100 columns.
+  `npm run lint` is what CI runs (`biome check`: lint plus formatting);
+  `npm run lint:fix` applies the safe fixes; `npm run format` only formats.
+  `style.css` is linted but not formatted: it is written compactly on
+  purpose, several declarations per line, and the formatter would triple it.
+- Biome rather than ESLint + Prettier because the web compiles with
+  TypeScript 7, whose npm package no longer ships the JavaScript compiler API
+  that typescript-eslint parses with. Biome has its own parser.
+- The rules are the conventions the code already followed: no `any`
+  (`noExplicitAny`), no `@ts-ignore` (`noTsIgnore`), no default export
+  (`noDefaultExport`, off for `vite.config.ts`, which Vite requires), types
+  imported with `import type` (`useImportType`), no non-null assertion
+  (`noNonNullAssertion`), and no floating promise (`noFloatingPromises`). A
+  promise that is deliberately not awaited, because the function already
+  catches its own errors (`refreshPreview`, `processScans`, the service
+  worker's `put`), is marked with `void`.
+- `tsc` runs with `strict`, `verbatimModuleSyntax` and `erasableSyntaxOnly`
+  over three projects: `tsconfig.json` (the page, DOM library),
+  `tsconfig.worker.json` (the processing worker and the service worker,
+  WebWorker library) and `tsconfig.node.json` (the build and test scripts,
+  Node types). The DOM and WebWorker libraries cannot share one program,
+  which is why there are three.
+- A value from `JSON.parse` is narrowed with one `as` cast to the interface
+  in `types.ts` that describes it, at the parse site and nowhere else. Catch
+  variables are `unknown`; `errMsg()` from `web/src/errors.ts` turns them
+  into a message.
+
+### Commands
+
+```bash
+cd rust-core
+cargo fmt --check                                   # or `cargo fmt` to apply
+cargo test
+cargo clippy --release --all-targets -- -D warnings
+cargo clippy --release --target wasm32-unknown-unknown -- -D warnings
+
+cd ../web
+npm run typecheck
+npm run lint                                        # or `npm run lint:fix`
+```
+
+The two formatting commits (rustfmt over the core, Biome over the web) are
+listed in `.git-blame-ignore-revs`; `git config blame.ignoreRevsFile
+.git-blame-ignore-revs` makes `git blame` skip them.
 
 ## 3) Import and Module Conventions
 
@@ -109,14 +156,16 @@ loading. Do not rename them.
 
 ## 6) Known Convention Divergence
 
-The comments in the source are Spanish. The user interface strings, the error
-messages that reach the user, the README and the header of the CI workflow are
-English. Two comment blocks inside `.github/workflows/ci.yml` are Spanish
-inside an otherwise English file. `[ASK USER]` — see the question in the
-summary.
+The comments in the source are Spanish, and so are the comments in the
+configuration files that sit next to the source (`Cargo.toml`,
+`rust-toolchain.toml`, `rustfmt.toml`, `biome.jsonc`). The user interface
+strings, the error messages that reach the user, the README, the commit
+messages and the whole of `.github/workflows/ci.yml` are English.
 
 ## 7) Evidence
 
 - `rust-core/src/api.rs`, `rust-core/src/sheet.rs`, `rust-core/src/scanproc.rs`
+- `rust-core/Cargo.toml` (`[lints]`), `rust-core/rustfmt.toml`, `rust-toolchain.toml`
+- `web/biome.jsonc`, `web/package.json` (`lint`, `lint:fix`, `format`)
 - `web/src/pool.ts`, `web/src/worker.ts`, `web/src/ui.ts`, `web/src/main.ts`
-- `.github/workflows/ci.yml`
+- `.github/workflows/ci.yml`, `.git-blame-ignore-revs`

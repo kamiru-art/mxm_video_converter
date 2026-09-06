@@ -167,12 +167,16 @@ Then use these commands:
 
 ```bash
 cd rust-core
+cargo fmt --check                       # formatting (rustfmt, default style)
 cargo test                              # tests of the core (native and fast)
+cargo clippy --release --all-targets -- -D warnings
+cargo clippy --release --target wasm32-unknown-unknown -- -D warnings
 wasm-pack build --release --target web --out-dir ../web/src/wasm
 
 cd ../web
 npm install
 npm run typecheck                       # type check (tsc); `npm run build` runs it too
+npm run lint                            # lint and formatting (biome); `npm run lint:fix` repairs
 npm run dev                             # development server
 npm run test:e2e                        # end-to-end test in Chrome
 npm run build                           # production build, into web/dist
@@ -191,8 +195,11 @@ export CLOUDFLARE_ACCOUNT_ID=<your account id>
 not open in the development server until you do one of those two commands one
 time.
 
-The CI workflow does the same tests for each push and for each pull request.
-When the tests pass on the `main` branch, the workflow publishes the site.
+`rust-toolchain.toml` selects the Rust version. `rustup` installs it the first
+time you run `cargo` in the repository.
+
+The CI workflow does the same checks for each push and for each pull request.
+When the checks pass on the `main` branch, the workflow publishes the site.
 
 ## License
 

@@ -45,10 +45,9 @@ system are the two CI secrets used to deploy.
 | `CLOUDFLARE_API_TOKEN` | The deploy step | GitHub repository secret | `.github/workflows/ci.yml` |
 | `CLOUDFLARE_ACCOUNT_ID` | The deploy step | GitHub repository secret | `.github/workflows/ci.yml` |
 
-The account id is also written in `web/wrangler.jsonc`, so the repository
-holds a copy of it. An account id is not a credential, and it is useless
-without the token, but the committed copy is redundant because CI passes the
-secret. `[ASK USER]` — see the question in the summary.
+The account id is deliberately absent from `web/wrangler.jsonc`: CI passes it
+as a secret, and a local deploy exports `CLOUDFLARE_ACCOUNT_ID`. It is not a
+credential, but a public repository has no reason to publish it.
 
 If `CLOUDFLARE_API_TOKEN` is absent, the workflow prints a warning, marks the
 deploy as skipped and stays green. A repository that is recreated therefore
