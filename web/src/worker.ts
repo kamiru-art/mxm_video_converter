@@ -37,9 +37,11 @@ interface Transferred<T> {
   transfer: Transferable[];
 }
 
-type Handler<K extends CommandName> = (
-  a: Commands[K]['args'],
-) => Commands[K]['result'] | Transferred<Commands[K]['result']>;
+type Outcome<K extends CommandName> = Commands[K]['result'] | Transferred<Commands[K]['result']>;
+
+/** Un manejador es síncrono (el núcleo lo es) salvo encode_frame, que espera
+ *  al codificador PNG del navegador. */
+type Handler<K extends CommandName> = (a: Commands[K]['args']) => Outcome<K> | Promise<Outcome<K>>;
 
 type Handlers = { [K in CommandName]: Handler<K> };
 
@@ -156,6 +158,40 @@ const handlers: Handlers = {
     return { value: png, transfer: [png.buffer] };
   },
   analyze_colorblocker: (a) => core.analyze_colorblocker(a.bytes, a.paper, a.dpi),
+  // PNG y miniatura de un fotograma de video, fuera del hilo principal (ver
+  // frames.ts). No pasa por el núcleo: el codificador PNG del navegador es
+  // el mismo que usaba el hilo principal, y aquí corren varios a la vez. El
+  // lienzo es opaco a propósito: un fotograma de video no tiene
+  // transparencia, y un PNG RGB pesa un 20 % menos que el mismo en RGBA.
+  encode_frame: async (a) => {
+    const src = a.image;
+    const w = 'rgba' in src ? src.w : src.width;
+    const h = 'rgba' in src ? src.h : src.height;
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) throw new Error('Could not create a 2D canvas context in the worker.');
+    if ('rgba' in src) {
+      if (src.rgba.byteLength !== w * h * 4) {
+        throw new Error(
+          `The video decoder returned ${src.rgba.byteLength} bytes for a ${w}×${h} frame (${w * h * 4} expected).`,
+        );
+      }
+      const px = new Uint8ClampedArray(src.rgba.buffer, src.rgba.byteOffset, w * h * 4);
+      ctx.putImageData(new ImageData(px, w, h), 0, 0);
+    } else {
+      ctx.drawImage(src, 0, 0);
+      src.close();
+    }
+    const png = await canvas.convertToBlob({ type: 'image/png' });
+    const tw = Math.max(1, Math.round(a.thumbW));
+    const th = Math.max(1, Math.round((h / w) * tw));
+    const small = new OffscreenCanvas(tw, th);
+    const sctx = small.getContext('2d');
+    if (!sctx) throw new Error('Could not create a 2D canvas context in the worker.');
+    sctx.drawImage(canvas, 0, 0, tw, th);
+    const thumb = small.transferToImageBitmap();
+    return { value: { png, thumb, w, h }, transfer: [thumb] };
+  },
   // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
   pdf_new: (a) => {
     pdfInstance?.free(); // no filtrar una instancia anterior abandonada
@@ -192,7 +228,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     await ready;
     const h = handlers[cmd] as ((a: unknown) => unknown) | undefined;
     if (!h) throw new Error(`Unknown command: ${cmd}`);
-    const out = h(args ?? {});
+    const out = await h(args ?? {});
     const mem = wasm?.memory?.buffer?.byteLength ?? 0;
     const pinned = pdfInstance !== null;
     if (isTransferred(out)) {

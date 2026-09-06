@@ -22,6 +22,7 @@ import {
   WebMOutputFormat,
 } from 'mediabunny';
 import { BadRangeError } from './errors.ts';
+import { FrameQueue } from './frames.ts';
 import { recycleIdle, run } from './pool.ts';
 import type { Bytes } from './types.ts';
 import { context2d } from './ui.ts';
@@ -44,8 +45,12 @@ export interface ExtractOptions {
     w: number,
     h: number,
   ) => void | Promise<void>;
+  /** `i` fotogramas entregados hasta ahora, de unos `est` (null si no se sabe). */
   onProgress?: (i: number, est: number | null) => void;
-  cancelled?: () => boolean;
+  /** Parar a mitad: la extracción devuelve lo ya entregado, en orden, con
+   *  `cancelled: true`. Se mira entre fotograma y fotograma; con ffmpeg.wasm
+   *  además se termina la instancia, porque su exec no se interrumpe. */
+  signal?: AbortSignal;
 }
 
 export interface ExtractResult {
@@ -53,6 +58,8 @@ export interface ExtractResult {
   fps: number;
   duration: number;
   origen: string;
+  /** Parada por `signal` antes del final: `count` es lo que dio tiempo. */
+  cancelled: boolean;
 }
 
 export interface ProbeResult {
@@ -149,9 +156,17 @@ function assertRange(start: number, end: number, duration: number | null = null)
   );
 }
 
+/** Instantes a muestrear entre start y end a `fps`; al menos uno. */
+function sampleTimes(start: number, end: number, fps: number): number[] {
+  const times: number[] = [];
+  for (let t = start; t < end - 1e-9; t += 1 / fps) times.push(t);
+  if (!times.length) times.push(start);
+  return times;
+}
+
 /**
  * Extrae fotogramas como PNG lossless a resolución nativa.
- * opts: {start, end, fps (null = todos), onFrame(blob, thumbCanvas, t, i), onProgress(i, est)}
+ * opts: {start, end, fps (null = todos), onFrame(blob, thumbCanvas, t, i), onProgress(i, est), signal}
  * Devuelve el número de fotogramas extraídos.
  */
 export async function extractFrames(file: File, opts: ExtractOptions = {}): Promise<ExtractResult> {
@@ -191,68 +206,57 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
     const end = Math.min(duration, opts.end ?? duration);
     // ya recortado a la duración real: cubre el inicio pasado el final
     assertRange(start, end, duration);
+    // poolSize 2: mediabunny reutiliza los lienzos, y el fotograma sale de
+    // ellos (createImageBitmap) antes de pedir el siguiente
     const sink = new CanvasSink(track, { poolSize: 2 });
-    let count = 0;
-
-    let emitFailed = false; // distingue fallos del decodificador de fallos de la app
-    const emit = async (wrapped: WrappedCanvas, index: number): Promise<void> => {
-      try {
-        const canvas = wrapped.canvas;
-        // PNG sin pérdida a resolución nativa
-        const blob = await canvasToBlob(canvas, 'image/png');
-        // miniatura para la interfaz / dedup / histograma
-        const tw = 256;
-        const th = Math.max(1, Math.round((canvas.height / canvas.width) * tw));
-        const thumb = new OffscreenCanvas(tw, th);
-        context2d(thumb).drawImage(canvas, 0, 0, tw, th);
-        await opts.onFrame?.(blob, thumb, wrapped.timestamp, index, canvas.width, canvas.height);
-      } catch (e) {
-        emitFailed = true;
-        throw e;
-      }
-    };
+    // muestreo disperso a `fps` (decodifica cada paquete UNA vez si los
+    // instantes van ordenados, y van), o todos los fotogramas
+    const times = opts.fps && opts.fps > 0 ? sampleTimes(start, end, opts.fps) : null;
+    const est = times ? times.length : nativeFps ? Math.round((end - start) * nativeFps) : null;
+    const canvases: AsyncIterable<WrappedCanvas | null> = times
+      ? sink.canvasesAtTimestamps(times)
+      : sink.canvases(start, end);
+    // el PNG y la miniatura se hacen en los workers, varios a la vez; la cola
+    // los entrega en orden y es la que lleva la cuenta (ver frames.ts)
+    const queue = new FrameQueue(opts, est);
+    let cancelled = false;
 
     try {
-      if (opts.fps && opts.fps > 0) {
-        const times: number[] = [];
-        for (let t = start; t < end - 1e-9; t += 1 / opts.fps) times.push(t);
-        if (!times.length) times.push(start);
-        let i = 0;
-        for await (const wrapped of sink.canvasesAtTimestamps(times)) {
-          if (opts.cancelled?.()) break;
-          if (wrapped) {
-            // count, NO i: canvasesAtTimestamps devuelve null cuando no hay
-            // fotograma para ese instante (clip recortado, primer PTS > 0), y
-            // con i el primer fotograma se llamaba clip_000003.png, así que las
-            // etiquetas impresas dejaban de casar con la línea de tiempo.
-            await emit(wrapped, count);
-            count++;
-          }
-          i++;
-          opts.onProgress?.(i, times.length);
+      for await (const wrapped of canvases) {
+        if (opts.signal?.aborted) {
+          cancelled = true;
+          break;
         }
-      } else {
-        const est = nativeFps ? Math.round((end - start) * nativeFps) : null;
-        let i = 0;
-        for await (const wrapped of sink.canvases(start, end)) {
-          if (opts.cancelled?.()) break;
-          await emit(wrapped, count);
-          count++;
-          i++;
-          opts.onProgress?.(i, est);
-        }
+        // canvasesAtTimestamps devuelve null cuando no hay fotograma para ese
+        // instante (clip recortado, primer PTS > 0). Se salta, y el índice
+        // del fotograma es el de los ENTREGADOS, no el del instante: si no,
+        // el primero se llamaba clip_000003.png y las etiquetas impresas
+        // dejaban de casar con la línea de tiempo.
+        if (!wrapped) continue;
+        // copia en la GPU (~1 ms en 4K) que se transfiere al worker; el
+        // lienzo vuelve al pool de mediabunny en el siguiente fotograma
+        const image = await createImageBitmap(wrapped.canvas);
+        await queue.push(image, wrapped.timestamp);
       }
+      await queue.finish();
     } catch (e) {
       // canDecode dijo que sí pero el decodificador falló antes de dar nada:
-      // último intento con ffmpeg.wasm. Un fallo DENTRO de emit (onFrame de la
-      // app, cuota de memoria) no es del decodificador: se propaga tal cual.
-      if (count === 0 && !emitFailed) {
+      // último intento con ffmpeg.wasm. Un fallo DESPUÉS de decodificar
+      // (codificar el PNG, el onFrame de la app, cuota de memoria) no es del
+      // decodificador: se propaga tal cual.
+      if (queue.count === 0 && !queue.failed) {
         console.warn('[video] WebCodecs decode failed, retrying with ffmpeg.wasm:', e);
         return useFallback();
       }
       throw e;
     }
-    return { count, fps: opts.fps || nativeFps || 12, duration, origen: file.name };
+    return {
+      count: queue.count,
+      fps: opts.fps || nativeFps || 12,
+      duration,
+      origen: file.name,
+      cancelled,
+    };
   } finally {
     probe.input.dispose();
   }
