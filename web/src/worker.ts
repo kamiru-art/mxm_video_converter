@@ -203,8 +203,8 @@ const handlers: Handlers = {
   },
   pdf_add: (a) => {
     if (!pdfInstance) throw new Error('pdf_add without pdf_new');
-    pdfInstance.add_page_png(a.png);
-    return null;
+    const chunk = bytes(pdfInstance.add_page_png(a.png));
+    return { value: chunk, transfer: [chunk.buffer] };
   },
   pdf_finish: () => {
     if (!pdfInstance) throw new Error('pdf_finish without pdf_new');

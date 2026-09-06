@@ -50,8 +50,21 @@ export async function makeZip(
   for (const [name, data] of files) {
     const entry = new ZipPassThrough(name);
     zip.add(entry);
-    const ready = typeof data === 'function' ? await data() : data;
-    const bytes = ready instanceof Blob ? new Uint8Array(await ready.arrayBuffer()) : ready;
+    let bytes: Bytes;
+    try {
+      const ready = typeof data === 'function' ? await data() : data;
+      bytes = ready instanceof Blob ? new Uint8Array(await ready.arrayBuffer()) : ready;
+    } catch (e) {
+      // "NotReadableError" a secas no dice nada: el navegador se quedó sin
+      // sitio para los Blobs (memoria y, detrás, disco libre del sistema) y
+      // uno de los ya creados no se puede leer. Decir CUÁL y por qué.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `Could not read "${name}" while packing the ZIP (${msg}). The browser ran out of room for the files of this project: ` +
+          'it keeps them in memory and then on the free space of the system disk. Generate fewer sheets at a time, ' +
+          'turn off TIFF or the exported frames, or free disk space.',
+      );
+    }
     entry.push(bytes, true);
     i++;
     onProgress(i, files.size);

@@ -666,19 +666,28 @@ impl Pdf {
         }
     }
 
-    /// Añade una página desde un PNG (el mismo que devuelve render_sheet).
-    pub fn add_page_png(&mut self, png: &[u8]) -> Result<(), JsValue> {
-        let (img, _) = codecs::decode(png).map_err(err)?;
-        if let Some(b) = self.inner.as_mut() {
-            b.add_page(&img.to_rgb8());
+    /// Añade una página desde un PNG (el mismo que devuelve render_sheet) y
+    /// devuelve los bytes de esa página: JS los va guardando en orden y el
+    /// núcleo no retiene ninguna. Un PNG RGB de 8 bits entra sin
+    /// recomprimir; cualquier otro se decodifica y se comprime aquí.
+    pub fn add_page_png(&mut self, png: &[u8]) -> Result<Vec<u8>, JsValue> {
+        let b = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| err("PDF already finalized"))?;
+        if let Some(chunk) = b.add_page_png(png) {
+            return Ok(chunk);
         }
-        Ok(())
+        let (img, _) = codecs::decode(png).map_err(err)?;
+        Ok(b.add_page(&img.to_rgb8()))
     }
 
     pub fn page_count(&self) -> usize {
         self.inner.as_ref().map_or(0, |b| b.page_count())
     }
 
+    /// Cierra el archivo y devuelve el último bloque (árbol de páginas,
+    /// catálogo, xref y trailer), que va detrás de los de add_page_png.
     pub fn finish(&mut self) -> Result<Vec<u8>, JsValue> {
         self.inner
             .take()

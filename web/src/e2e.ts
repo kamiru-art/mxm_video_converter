@@ -90,8 +90,22 @@ async function main(): Promise<void> {
     const layoutObj = JSON.parse(layoutJson) as Layout;
     if (!layoutObj.marcadores?.ids_por_hoja)
       throw new Error('layout without ids_por_hoja (no-QR identity)');
+    // el PDF sale por bloques: cabecera al principio, cierre al final, y la
+    // xref tiene que apuntar a cada objeto (lo comprueba el test de Rust; aquí
+    // que la concatenación de los bloques sea un archivo entero)
+    const pdfBlob = out.files.get('e2e.pdf');
+    if (!(pdfBlob instanceof Blob)) throw new Error('PDF missing');
+    const pdfBytes = new Uint8Array(await pdfBlob.arrayBuffer());
+    const pdfText = new TextDecoder('latin1').decode(pdfBytes);
+    if (!pdfText.startsWith('%PDF-1.4') || !pdfText.endsWith('%%EOF\n'))
+      throw new Error('PDF is not a whole file');
+    const startxref = Number(/startxref\n(\d+)\n%%EOF\n$/.exec(pdfText)?.[1]);
+    if (pdfText.slice(startxref, startxref + 5) !== 'xref\n')
+      throw new Error(`PDF startxref (${startxref}) does not point at the xref table`);
+    if (!/\/Predictor 15 \/Colors 3/.test(pdfText))
+      throw new Error('PDF page is not the sheet PNG stream');
     log(
-      `hoja generada (${sheetPng.length} bytes), PDF: ${out.files.has('e2e.pdf')}, TIFF ok, layout: ids_por_hoja ✓`,
+      `hoja generada (${sheetPng.length} bytes), PDF: ${pdfBytes.length} bytes con xref en ${startxref}, TIFF ok, layout: ids_por_hoja ✓`,
     );
 
     // "escanear": dibujar la hoja rotada 2° sobre un lienzo mayor
