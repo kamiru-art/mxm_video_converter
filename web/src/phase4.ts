@@ -245,7 +245,7 @@ export function mountPhase4(root: HTMLElement): void {
 
   const paper = el('div', { class: 'paper' },
     el('h2', {}, '③ Final video'),
-    el('div', { class: 'hint' }, 'Rebuilds the film with the processed frames in their original order, reusing deduplicated drawings in all their positions.'),
+    el('div', { class: 'hint' }, 'Rebuilds the video from the processed frames in their original order, reusing deduplicated drawings wherever they appear.'),
     dropzone({
       label: 'Project layout.json (optional if you come from phase ②)',
       accept: '.json',
@@ -258,7 +258,7 @@ export function mountPhase4(root: HTMLElement): void {
     el('h3', {}, 'Frames'),
     dropzone({
       label: 'Add processed frames from files (optional)',
-      sublabel: 'If you processed the scans in another session, drop the frames folder here.',
+      sublabel: 'Frames processed in another session: drop the folder here.',
       accept: 'image/*,.tif,.tiff', multiple: true,
       onFiles: (files) => {
         for (const f of files) extraFrames.set(sanitizeLabel(f.name.replace(/\.[^.]+$/, '')), f);
@@ -279,7 +279,7 @@ export function mountPhase4(root: HTMLElement): void {
     ),
     resInfo,
     el('div', { class: 'hint' },
-      'Lossless stores every frame as PNG inside a MOV: pixel-identical, any resolution (8K included); it opens in editors (DaVinci Resolve, Premiere) and VLC/IINA, but QuickTime Player and browsers no longer decode PNG video. ProRes 4444 is the QuickTime-playable master: visually lossless, 10-bit, ready for editing. The remaining qualities use the browser encoder, which is always lossy.'),
+      'Lossless writes every frame as PNG inside a MOV: pixel-identical at any resolution, 8K included. It opens in DaVinci Resolve, Premiere, VLC and IINA; QuickTime Player and browsers cannot play PNG video. ProRes 4444 is the QuickTime-playable master: visually lossless, 10-bit. The other qualities use the browser encoder and are lossy.'),
     field('File name', nameIn),
     buildBtn,
     prog.root,
@@ -288,7 +288,7 @@ export function mountPhase4(root: HTMLElement): void {
   const bench = el('div', { class: 'bench' },
     el('h2', {}, 'Result'),
     el('div', { class: 'hint' },
-      'The video is built in your browser: H.264 MP4 or WebM (VP9/AV1) for the lossy qualities, lossless PNG-in-MOV for editors, or ProRes 4444 for QuickTime and editing. Resolutions the browser encoder rejects (some machines refuse 5K/8K H.264) still work with the MOV qualities.'),
+      'Encoded in your browser: H.264 MP4 or WebM (VP9/AV1) for the lossy qualities, PNG-in-MOV or ProRes 4444 for editing. If the browser encoder rejects a resolution (some machines refuse 5K/8K H.264), the MOV qualities still work.'),
     preview,
   );
 

@@ -219,7 +219,7 @@ export function mountPhase1(root: HTMLElement): void {
 
   const dz = dropzone({
     label: 'Drop your video or a folder of images here',
-    sublabel: 'MP4 / MOV / WebM / MKV / AVI / MPG / WMV, or PNG, JPG, TIFF, WebP (16-bit too). Nothing gets uploaded anywhere.',
+    sublabel: 'MP4 / MOV / WebM / MKV / AVI / MPG / WMV, or PNG, JPG, TIFF, WebP (16-bit too). Nothing is uploaded.',
     accept: 'video/*,image/*,.tif,.tiff,.avi,.mpg,.mpeg,.wmv,.flv,.3gp',
     multiple: true,
     onFiles: async (fileList) => {
@@ -425,7 +425,7 @@ export function mountPhase1(root: HTMLElement): void {
       field('Ink color profile (ColorBlocker)', inkProfSel),
     ),
     field('Compensation curve (cyanotype profile)', curveSel,
-      'Calibrated in the Calibration tab. Without a curve, density = original brightness.'),
+      'Measured in Calibration. Without a curve, density follows the original brightness.'),
     el('div', { class: 'row' },
       field('Curve strength (%)', bindNum('cyan_curve_strength', numberInput(100, { min: 0, max: 100 })),
         'How much of the calibrated curve to apply. 0 = none.'),
@@ -433,8 +433,8 @@ export function mountPhase1(root: HTMLElement): void {
         'Local contrast. Brings out pencil lines.'),
     ),
     field('Content adaptation (%)', bindNum('cyan_adaptive', numberInput(0, { min: 0, max: 100 })),
-      'Spends the ink range on the tones the drawings actually use instead of on the whole scale. Useful when '
-      + 'everything sits in the mid-greys; leave it at 0 to print the curve exactly as calibrated.'),
+      'Spends the ink range on the tones the drawings use instead of the whole scale. Useful when everything '
+      + 'sits in the mid-greys. 0 prints the curve as calibrated.'),
     field('Negative background', bindSel('cyan_bg', select([['saving', 'INK-SAVING (inked halos only)'], ['full', 'Full (entire background inked)']], s.cyan_bg))),
     el('div', { class: 'row' },
       field('Inked halo (mm)', bindNum('cyan_halo_mm', numberInput(5, { min: 0, step: 0.5 }))),
@@ -772,10 +772,8 @@ export function mountPhase1(root: HTMLElement): void {
       field('From', bindNum('start_index', numberInput(1, { min: 0 }), { integer: true })),
     ),
     field('Label numbering', numberingSel,
-      'Only in use when Labels is set to auto-increment. Sequential numbers the frames by their place in the '
-      + 'selection; Original by their place in the whole video, so Include and Exclude move the two apart and '
-      + 'selecting everything makes them agree. Either way the number belongs to the frame, so repeated drawings '
-      + 'printed once leave their numbers unused.'),
+      'Applies to auto-increment labels. Sequential counts the selected frames; Original uses each frame’s '
+      + 'position in the whole video. A repeated drawing printed once keeps its number, so gaps are expected.'),
     dedupCheck.label, dedupStatus,
 
     el('h3', {}, 'Sheet & grid'),
@@ -802,13 +800,12 @@ export function mountPhase1(root: HTMLElement): void {
       field('From', bindNum('page_num_start', numberInput(1, { min: 0 }), { integer: true })),
     ),
     field('Sheet numbering', pageNumberingSel,
-      'Both start counting at “From”. Sequential numbers the sheets in the order they come out. Original takes each '
-      + 'number from where that sheet’s first frame falls in the whole project, so leaving frames out does not '
-      + 'renumber the sheets that follow.'),
+      'Both start at “From”. Sequential numbers the sheets in output order. Original uses the position of each '
+      + 'sheet’s first frame in the whole project, so excluded frames do not renumber later sheets.'),
 
     el('h3', {}, 'Registration (to scan back)'),
     bindCheck('registration_on', check('ArUco markers with per-sheet identity (required for phase ②)', s.registration_on)),
-    el('div', { class: 'hint' }, 'Each sheet gets its own marker IDs, so no QR codes are needed and the drawings get more room.'),
+    el('div', { class: 'hint' }, 'Each sheet gets its own marker IDs: no QR codes needed, more room for the drawings.'),
     el('div', { class: 'row' },
       field('Markers', markerCountSel),
       field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
@@ -826,7 +823,7 @@ export function mountPhase1(root: HTMLElement): void {
       sync();
       return el('div', {},
         c.label,
-        el('div', { class: 'hint' }, 'Marker identity distinguishes a limited number of sheets (the preview warns you when a project exceeds it). QRs identify any number of sheets and keep compatibility with the desktop app, at the cost of cell space.'),
+        el('div', { class: 'hint' }, 'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets and keep desktop-app compatibility, at the cost of cell space.'),
         qrRow,
       );
     })(),
@@ -835,7 +832,7 @@ export function mountPhase1(root: HTMLElement): void {
     cyanBox,
 
     el('h3', {}, 'Printer'),
-    field('Printer profile (Calibration tab)', printerSel, 'Compensates the measured real scale of your printer.'),
+    field('Printer profile (Calibration tab)', printerSel, 'Corrects the measured scale of your printer.'),
 
     el('h3', {}, 'Output'),
     el('div', { class: 'row' },
@@ -853,7 +850,7 @@ export function mountPhase1(root: HTMLElement): void {
       bindCheck('fmt_pdf', check('PDF (print-ready)', s.fmt_pdf !== false)),
       bindCheck('fmt_tiff', check('TIFF', !!s.fmt_tiff)),
     ),
-    el('div', { class: 'hint' }, 'The layout.json (the map for phase ②) is always included.'),
+    el('div', { class: 'hint' }, 'layout.json, the map phase ② needs, is always included.'),
     (() => { const c = check('Keep a copy of the original frames (rescue sheets)', ph1.keepOriginals); c.input.addEventListener('change', () => { ph1.keepOriginals = c.input.checked; }); return c.label; })(),
     (() => { const c = check('Also export the individual frames', ph1.exportFrames); c.input.addEventListener('change', () => { ph1.exportFrames = c.input.checked; }); return c.label; })(),
     genBtn, genProg.root,
