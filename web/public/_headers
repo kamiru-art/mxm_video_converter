@@ -3,7 +3,7 @@
 # everything in web/public/ into web/dist/, so it ships with the build.
 #
 # The Content-Security-Policy below is also applied by the end-to-end test
-# (e2e-run.mjs reads THIS file), so a policy that breaks the application
+# (e2e-run.mts reads THIS file), so a policy that breaks the application
 # fails CI instead of reaching the site. Keep it as one line: the parser
 # there, and Cloudflare's, both read one header per line.
 #

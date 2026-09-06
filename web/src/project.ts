@@ -1,7 +1,7 @@
 // Estado del proyecto compartido entre fases (vive en memoria).
 
 import { run } from './pool.ts';
-import type { Bytes, ScanResult, VideoMeta } from './types.ts';
+import type { Bytes, VideoMeta } from './types.ts';
 import { context2d } from './ui.ts';
 
 /** Un fotograma cargado en la fase ①: de un video, de una carpeta de
@@ -38,7 +38,6 @@ export interface Project {
   sheetImages: Map<string, Blob>;
   /** etiqueta → Blob PNG del fotograma (fase ②) */
   processedFrames: Map<string, Blob>;
-  lastReport: ScanResult[] | null;
 }
 
 export const project: Project = {
@@ -47,7 +46,6 @@ export const project: Project = {
   layoutJson: null,
   sheetImages: new Map(),
   processedFrames: new Map(),
-  lastReport: null,
 };
 
 const rgbaCache = new Map<string, RgbaImage>(); // `${idx}:${full}` → {data,w,h}
@@ -64,7 +62,6 @@ export function clearFrames(): void {
   project.layoutJson = null;
   project.sheetImages.clear();
   project.processedFrames.clear();
-  project.lastReport = null;
   rgbaCache.clear();
   cacheBytes = 0;
 }
