@@ -1,0 +1,21 @@
+{
+  // El worker de procesamiento y el service worker: mismo rigor que la
+  // página, pero con la biblioteca WebWorker en vez de DOM.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/worker.ts", "src/sw.ts", "src/wasm/*.d.ts"]
+}

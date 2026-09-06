@@ -1,0 +1,23 @@
+{
+  // Scripts de Node (test runner, preparación de ffmpeg) y la configuración
+  // de Vite. Node los ejecuta tal cual, sin compilar: por eso
+  // `erasableSyntaxOnly`, que prohíbe lo que el borrado de tipos de Node no
+  // sabe quitar (enums, namespaces, parámetros-propiedad).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["e2e-run.mts", "prepare-ffmpeg.mts", "vite.config.ts"]
+}

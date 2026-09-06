@@ -6,9 +6,10 @@
 |-------|------|----------------|----------|
 | Rust unit | The built-in `#[test]` harness | 40 tests across the domain modules | `rust-core/src/*.rs` |
 | Rust integration | The same harness, in `tests/` | 6 end-to-end round trips: build a sheet, simulate a scan of it, recover the frames | `rust-core/tests/pipeline.rs` |
-| Browser end-to-end | `puppeteer-core` driving headless Chrome against a page the runner serves itself | The real pipeline in a real browser: workers, WebAssembly, WebGPU, WebCodecs, `ffmpeg.wasm` | `web/e2e-run.mjs`, `web/e2e.html`, `web/src/e2e.js` |
+| Browser end-to-end | `puppeteer-core` driving headless Chrome against a page the runner serves itself | The real pipeline in a real browser: workers, WebAssembly, WebGPU, WebCodecs, `ffmpeg.wasm` | `web/e2e-run.mts`, `web/e2e.html`, `web/src/e2e.ts` |
+| Type check | `tsc` under `strict`, three projects | Every call across the worker boundary, the DOM wiring of the phases, the layout and settings shapes; it runs before any build (`npm run typecheck`) | `web/tsconfig.json`, `web/tsconfig.worker.json`, `web/tsconfig.node.json` |
 
-There are **no JavaScript unit tests**. The browser test is the only coverage
+There are **no TypeScript unit tests**. The browser test is the only coverage
 of `web/src`, and it does not call any `mount*` function, so the DOM wiring of
 the phases is not exercised.
 
@@ -35,7 +36,7 @@ cd web && npm run test:e2e              # needs Google Chrome and ffmpeg
 ```
 
 The browser test builds the site with `MXM_E2E=1`, starts its own HTTP server
-over `web/dist`, and drives `e2e.html`. `web/e2e-run.mjs` generates its own
+over `web/dist`, and drives `e2e.html`. `web/e2e-run.mts` generates its own
 sample media with `ffmpeg` when `ffmpeg` is present: an MP4 for the WebCodecs
 path and an MPEG-4 ASP AVI, chosen because WebCodecs will not decode it and it
 therefore exercises the `ffmpeg.wasm` fallback. If `ffmpeg` is absent the page
@@ -51,7 +52,7 @@ section always runs there.
   the function: `zero_cols_or_rows_is_rejected`, `sixteen_bit_scan_keeps_depth`,
   `v1_converts`.
 - Rust integration tests: `rust-core/tests/pipeline.rs`.
-- Browser test: the assertions live in `web/src/e2e.js`, and `web/e2e-run.mjs`
+- Browser test: the assertions live in `web/src/e2e.ts`, and `web/e2e-run.mts`
   is only the runner.
 
 ## 5) Mocking Strategy
@@ -91,5 +92,5 @@ pipeline and what gets published is what the test ran against.
 ## 8) Evidence
 
 - `rust-core/tests/pipeline.rs`, `rust-core/src/qr.rs`
-- `web/e2e-run.mjs`, `web/e2e.html`, `web/src/e2e.js`
+- `web/e2e-run.mts`, `web/e2e.html`, `web/src/e2e.ts`
 - `web/package.json`, `.github/workflows/ci.yml`

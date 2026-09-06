@@ -4,11 +4,11 @@
 
 | Area | Value | Evidence |
 |------|-------|----------|
-| Primary languages | Rust (image processing core) and JavaScript (browser UI) | `rust-core/Cargo.toml`, `web/package.json` |
-| Runtime | The user's web browser. There is no server-side runtime. | `web/wrangler.jsonc` (static `assets` only), `web/src/main.js` |
-| Build-time runtime | Node.js 22 | `.github/workflows/ci.yml` (`node-version: 22`) |
-| Package managers | Cargo (Rust), npm (JavaScript) | `rust-core/Cargo.lock`, `web/package-lock.json` |
-| Module/build system | Vite 8 for the web bundle; `wasm-pack` for the Rust to WebAssembly step | `web/vite.config.js`, `.github/workflows/ci.yml` |
+| Primary languages | Rust (image processing core) and TypeScript (browser UI, worker, service worker, build scripts) | `rust-core/Cargo.toml`, `web/package.json`, `web/tsconfig.json` |
+| Runtime | The user's web browser. There is no server-side runtime. | `web/wrangler.jsonc` (static `assets` only), `web/src/main.ts` |
+| Build-time runtime | Node.js 24 (22.18 or later works: the build scripts are `.mts` files that Node runs through its own type stripping) | `.github/workflows/ci.yml` (`node-version: 24`), `web/package.json` (`engines`) |
+| Package managers | Cargo (Rust), npm (TypeScript) | `rust-core/Cargo.lock`, `web/package-lock.json` |
+| Module/build system | Vite 8 for the web bundle; `wasm-pack` for the Rust to WebAssembly step | `web/vite.config.ts`, `.github/workflows/ci.yml` |
 | Compile target | `wasm32-unknown-unknown`, `crate-type = ["cdylib", "rlib"]` | `rust-core/Cargo.toml` |
 
 Note on `usize`: the shipped target is 32-bit. Any width assumption taken from
@@ -42,7 +42,7 @@ in this repository.
 | `fflate` | ^0.8.3 | Builds the result ZIP files in the browser. |
 
 There is no UI framework. The interface is built with `document.createElement`
-through the `el()` helper in `web/src/ui.js`.
+through the `el()` helper in `web/src/ui.ts`.
 
 ## 3) Development Toolchain
 
@@ -51,8 +51,9 @@ through the `el()` helper in `web/src/ui.js`.
 | `cargo test` | The Rust test suite: 40 unit tests and 6 end-to-end integration tests. | `rust-core/src/*.rs`, `rust-core/tests/pipeline.rs` |
 | `cargo clippy` | Lint. CI runs it but does not fail on it: the step ends with `\| tail -5`. | `.github/workflows/ci.yml` |
 | `wasm-pack` | Compiles the core to WebAssembly, into `web/src/wasm/`. | `.github/workflows/ci.yml` |
+| TypeScript 7 (`tsc`) | Type checking only: `npm run typecheck` runs three projects (page, workers, Node scripts) and `npm run build` runs it first. Vite does the transpiling and never checks types. | `web/tsconfig.json`, `web/tsconfig.worker.json`, `web/tsconfig.node.json` |
 | Vite 8 | Development server and production bundle. | `web/package.json` |
-| `puppeteer-core` 25 | Drives headless Chrome for the browser test. | `web/e2e-run.mjs` |
+| `puppeteer-core` 25 | Drives headless Chrome for the browser test. | `web/e2e-run.mts` |
 | `wrangler` 4 | Publishes to Cloudflare. It is not a declared dependency; CI pins the version in the action. | `.github/workflows/ci.yml`, `web/wrangler.jsonc` |
 
 There is no formatter configuration and no linter configuration in the
@@ -69,6 +70,7 @@ wasm-pack build --release --target web --out-dir ../web/src/wasm
 # Web application
 cd web
 npm install
+npm run typecheck    # tsc over the page, the workers and the Node scripts
 npm run dev          # development server (does NOT produce web/public/ffmpeg/)
 npm run test:e2e     # browser end-to-end test; needs Chrome and ffmpeg
 npm run build        # production bundle into web/dist
@@ -77,7 +79,7 @@ npx wrangler@4 deploy
 
 ## 5) Environment and Config
 
-- Config sources: `rust-core/Cargo.toml`, `web/package.json`, `web/vite.config.js`,
+- Config sources: `rust-core/Cargo.toml`, `web/package.json`, `web/vite.config.ts`,
   `web/wrangler.jsonc`, `.github/workflows/ci.yml`.
 - Required environment variables: none at runtime. The application reads no
   environment variable, because it runs fully in the browser.
@@ -87,11 +89,11 @@ npx wrangler@4 deploy
 - `web/wrangler.jsonc` also holds a copy of the account id in the repository.
 - Runtime constraints: WebAssembly is necessary. WebCodecs gives the fast video
   path, and WebGPU gives the fast scan path; the application falls back when
-  they are absent (`web/src/main.js`, `web/src/webgpu.js`).
+  they are absent (`web/src/main.ts`, `web/src/webgpu.ts`).
 
 ## 6) Evidence
 
 - `rust-core/Cargo.toml`, `rust-core/Cargo.lock`
 - `web/package.json`, `web/package-lock.json`
-- `web/vite.config.js`, `web/wrangler.jsonc`
+- `web/vite.config.ts`, `web/wrangler.jsonc`
 - `.github/workflows/ci.yml`

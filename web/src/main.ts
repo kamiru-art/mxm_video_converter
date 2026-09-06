@@ -1,17 +1,18 @@
 // MXM Studio — bootstrap and phase navigation.
 
 import './style.css';
-import { mountPhase1 } from './phase1.js';
-import { mountPhase2 } from './phase2.js';
-import { mountPhase3 } from './phase3.js';
-import { mountPhase4 } from './phase4.js';
-import { mountHelp } from './help.js';
-import { run } from './pool.js';
-import { toast } from './ui.js';
-import { getGpuDevice } from './webgpu.js';
+import { mountPhase1 } from './phase1.ts';
+import { mountPhase2 } from './phase2.ts';
+import { mountPhase3 } from './phase3.ts';
+import { mountPhase4 } from './phase4.ts';
+import { mountHelp } from './help.ts';
+import { run } from './pool.ts';
+import { toast } from './ui.ts';
+import { errMsg } from './errors.ts';
+import { getGpuDevice } from './webgpu.ts';
 
-const mounted = new Set();
-const mounters = {
+const mounted = new Set<string>();
+const mounters: Record<string, (root: HTMLElement) => void> = {
   sheets: mountPhase1,
   scans: mountPhase2,
   calibration: mountPhase3,
@@ -19,17 +20,18 @@ const mounters = {
   help: mountHelp,
 };
 // rutas antiguas en español: los enlaces guardados siguen funcionando
-const LEGACY_ROUTES = { hojas: 'sheets', escaneos: 'scans', calibracion: 'calibration', ayuda: 'help' };
-const resolveRoute = (v) => LEGACY_ROUTES[v] ?? v;
+const LEGACY_ROUTES: Record<string, string> = { hojas: 'sheets', escaneos: 'scans', calibracion: 'calibration', ayuda: 'help' };
+const resolveRoute = (v: string): string => LEGACY_ROUTES[v] ?? v;
 
-function show(view) {
-  for (const b of document.querySelectorAll('#phase-nav .frame')) {
+function show(view: string): void {
+  for (const b of document.querySelectorAll<HTMLElement>('#phase-nav .frame')) {
     b.classList.toggle('active', b.dataset.view === view);
   }
   for (const v of document.querySelectorAll('.view')) {
     v.classList.toggle('active', v.id === `view-${view}`);
   }
   const rootEl = document.getElementById(`view-${view}`);
+  if (!rootEl) throw new Error(`Missing view container #view-${view} in index.html`);
   if (!mounted.has(view)) {
     mounted.add(view);
     mounters[view]?.(rootEl);
@@ -38,9 +40,13 @@ function show(view) {
   if (location.hash !== `#${view}`) history.replaceState(null, '', `#${view}`);
 }
 
-document.getElementById('phase-nav').addEventListener('click', (e) => {
-  const btn = e.target.closest('.frame');
-  if (btn) show(btn.dataset.view);
+const phaseNav = document.getElementById('phase-nav');
+if (!phaseNav) throw new Error('Missing #phase-nav in index.html');
+phaseNav.addEventListener('click', (e) => {
+  if (!(e.target instanceof Element)) return;
+  const btn = e.target.closest<HTMLElement>('.frame');
+  const view = btn?.dataset.view;
+  if (view) show(view);
 });
 
 window.addEventListener('hashchange', () => {
@@ -54,7 +60,7 @@ show(mounters[initial] ? initial : 'sheets');
 // warm up the WASM core
 run('version', {}).then(
   (v) => console.log(`mxm-core ${v} ready`),
-  (e) => toast(`Could not load the WebAssembly core: ${e.message}`, 'err'),
+  (e: unknown) => toast(`Could not load the WebAssembly core: ${errMsg(e)}`, 'err'),
 );
 
 // Indicador de capacidades: el mismo proyecto tarda muy distinto según el
@@ -63,10 +69,10 @@ run('version', {}).then(
 (async () => {
   const badge = document.getElementById('capbadge');
   const text = document.getElementById('capbadge-text');
-  if (!badge) return;
+  if (!badge || !text) return;
   const cores = navigator.hardwareConcurrency;
   const coresTxt = cores ? ` · ${cores} cores` : '';
-  let gpu = null;
+  let gpu: GPUDevice | null = null;
   try { gpu = await getGpuDevice(); } catch { gpu = null; }
   badge.classList.add(gpu ? 'gpu' : 'cpu');
   text.textContent = `${gpu ? 'WebGPU' : 'CPU (WebAssembly)'}${coresTxt}`;
@@ -80,7 +86,7 @@ run('version', {}).then(
 // en desarrollo un service worker sirve archivos viejos y confunde.
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((e) => {
+    navigator.serviceWorker.register('/sw.js').catch((e: unknown) => {
       console.warn('[sw] could not register:', e);
     });
   });

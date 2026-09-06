@@ -1,8 +1,8 @@
 // Help: the complete workflow, written to be used without technical knowledge.
 
-import { el } from './ui.js';
+import { el } from './ui.ts';
 
-export function mountHelp(root) {
+export function mountHelp(root: HTMLElement): void {
   root.append(el('div', { class: 'prose', html: `
 <h2>How it works</h2>
 <ol class="steps">

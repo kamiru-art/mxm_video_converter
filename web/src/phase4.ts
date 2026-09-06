@@ -1,27 +1,35 @@
 // Fase ④ — Reconstruir el video final desde los fotogramas procesados.
 
-import { el, toast, download, progressBar, dropzone, field, numberInput, select } from './ui.js';
-import { project } from './project.js';
-import { ph2 } from './phase2.js';
-import { buildVideo, buildVideoLossless, buildVideoProres, decodeFrameBitmap } from './video.js';
-import { sanitizeLabel } from './ui.js';
+import { el, toast, download, progressBar, dropzone, field, numberInput, select, sanitizeLabel } from './ui.ts';
+import { errMsg } from './errors.ts';
+import { project } from './project.ts';
+import { ph2 } from './phase2.ts';
+import { buildVideo, buildVideoLossless, buildVideoProres, decodeFrameBitmap } from './video.ts';
+import type { VideoResult } from './video.ts';
+import type { Layout, TimelineItem } from './types.ts';
+
+/** Un fotograma disponible para el video: el Blob PNG (o el archivo suelto). */
+interface Available {
+  data: Blob;
+}
 
 /** Resuelve la secuencia de imágenes según la línea de tiempo del layout
  *  (port de frames_from_timeline: deduplicados reutilizados, alias). */
-function framesFromTimeline(layout, disponibles) {
+function framesFromTimeline(layout: Layout, disponibles: Map<string, Available>): { files: Available[]; missing: string[] } {
   // alias etiqueta→claves desambiguadas
-  const alias = new Map();
+  const alias = new Map<string, string[]>();
   for (const h of layout.hojas ?? []) {
     for (const [clave, info] of Object.entries(h.frames ?? {})) {
       const et = info?.etiqueta;
       if (et && et !== clave) {
         const k = sanitizeLabel(et);
-        if (!alias.has(k)) alias.set(k, []);
-        alias.get(k).push(sanitizeLabel(clave));
+        const list = alias.get(k) ?? [];
+        list.push(sanitizeLabel(clave));
+        alias.set(k, list);
       }
     }
   }
-  let timeline = layout.timeline ?? [];
+  let timeline: TimelineItem[] = layout.timeline ?? [];
   if (!timeline.length) {
     timeline = [];
     let pos = 1;
@@ -31,14 +39,15 @@ function framesFromTimeline(layout, disponibles) {
       }
     }
   }
-  const files = [];
-  const missing = new Set();
+  const files: Available[] = [];
+  const missing = new Set<string>();
   for (const item of [...timeline].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0))) {
     const rep = sanitizeLabel(item.rep ?? item.etiqueta ?? '');
     const candidates = [rep, `${rep}_procesado`, ...(alias.get(rep) ?? [])];
-    let found = null;
+    let found: Available | null = null;
     for (const c of candidates) {
-      if (disponibles.has(c)) { found = disponibles.get(c); break; }
+      const hit = disponibles.get(c);
+      if (hit) { found = hit; break; }
     }
     if (found) files.push(found);
     else missing.add(item.etiqueta ?? rep);
@@ -46,9 +55,9 @@ function framesFromTimeline(layout, disponibles) {
   return { files, missing: [...missing].sort() };
 }
 
-export function mountPhase4(root) {
-  let layout = null;
-  const extraFrames = new Map(); // stem → Blob (fotogramas sueltos del usuario)
+export function mountPhase4(root: HTMLElement): void {
+  let layout: Layout | null = null;
+  const extraFrames = new Map<string, Blob>(); // stem → Blob (fotogramas sueltos del usuario)
 
   const layoutInfo = el('div', { class: 'hint' });
   const stateInfo = el('div', { class: 'hint' });
@@ -69,7 +78,7 @@ export function mountPhase4(root) {
     ['low', 'Low (small file)'],
     ['custom', 'Custom bitrate…'],
   ], 'high');
-  const isMovQuality = () => qualSel.value === 'lossless' || qualSel.value === 'prores';
+  const isMovQuality = (): boolean => qualSel.value === 'lossless' || qualSel.value === 'prores';
   const bitrateIn = numberInput(8, { min: 0.5, max: 500, step: 0.5 });
   const bitrateField = field('Bitrate (Mbps)', bitrateIn);
   bitrateField.style.display = 'none';
@@ -89,12 +98,12 @@ export function mountPhase4(root) {
     ['480', '480p'],
   ], 'original');
   const resInfo = el('div', { class: 'hint' }, 'Load frames to see the output resolution.');
-  let nativeDims = null; // {w, h} del primer frame disponible
+  let nativeDims: { w: number; h: number } | null = null; // del primer frame disponible
 
-  function evenPair(w, h) {
+  function evenPair(w: number, h: number): [number, number] {
     return [Math.max(2, Math.round(w / 2) * 2), Math.max(2, Math.round(h / 2) * 2)];
   }
-  function outputDims() {
+  function outputDims(): { w: number; h: number; upscaled: boolean } | null {
     if (!nativeDims) return null;
     let { w, h } = nativeDims;
     const target = resSel.value === 'original' ? null : parseInt(resSel.value, 10);
@@ -108,9 +117,9 @@ export function mountPhase4(root) {
       : evenPair(w, h);
     return { w: ew, h: eh, upscaled: target ? target > nativeDims.h : false };
   }
-  function refreshResInfo() {
+  function refreshResInfo(): void {
     const d = outputDims();
-    if (!d) { resInfo.textContent = 'Load frames to see the output resolution.'; return; }
+    if (!d || !nativeDims) { resInfo.textContent = 'Load frames to see the output resolution.'; return; }
     resInfo.textContent = `Output resolution: ${d.w}×${d.h}`
       + (resSel.value === 'original' ? ' (native frame size)' : ` (frames are ${nativeDims.w}×${nativeDims.h})`)
       + (d.upscaled ? '. This upscales the frames; expect some softness.' : '');
@@ -121,15 +130,15 @@ export function mountPhase4(root) {
   prog.hide();
   const preview = el('video', { controls: '', style: 'max-width:100%; border-radius:6px; margin-top:10px; display:none' });
 
-  function currentLayout() {
+  function currentLayout(): Layout | null {
     if (layout) return layout;
     if (ph2.layout) return ph2.layout;
-    if (project.layoutJson) return JSON.parse(project.layoutJson);
+    if (project.layoutJson) return JSON.parse(project.layoutJson) as Layout;
     return null;
   }
 
-  function availableMap() {
-    const map = new Map();
+  function availableMap(): Map<string, Available> {
+    const map = new Map<string, Available>();
     for (const [label, png] of project.processedFrames) {
       map.set(sanitizeLabel(label), { data: png });
     }
@@ -139,12 +148,12 @@ export function mountPhase4(root) {
     return map;
   }
 
-  function refresh() {
+  function refresh(): void {
     const l = currentLayout();
     layoutInfo.textContent = l
       ? `Layout: ${(l.proyecto || 'project')} · ${l.timeline?.length || 'no'} positions in the timeline`
       : 'Load a layout.json (or process scans in phase ②).';
-    if (l?.video?.fps_extraccion) fpsIn.value = l.video.fps_extraccion;
+    if (l?.video?.fps_extraccion) fpsIn.value = String(l.video.fps_extraccion);
     const disponibles = availableMap();
     stateInfo.textContent = `${disponibles.size} frames available (phase ② in memory + whatever you drop here).`;
     if (l) {
@@ -155,8 +164,7 @@ export function mountPhase4(root) {
       // dimensiones nativas del primer frame disponible, para mostrar la salida
       const first = files[0];
       if (first) {
-        const blob = first.data instanceof Blob ? first.data : new Blob([first.data], { type: 'image/png' });
-        decodeFrameBitmap(blob).then((bmp) => {
+        decodeFrameBitmap(first.data).then((bmp) => {
           nativeDims = { w: bmp.width, h: bmp.height };
           bmp.close();
           refreshResInfo();
@@ -180,33 +188,31 @@ export function mountPhase4(root) {
     try {
       // un getter por dibujo ÚNICO (files repite objetos para los dedup):
       // buildVideo cachea los reescalados por identidad del getter
-      const getterOf = new Map();
+      const getterOf = new Map<Available, () => Promise<ImageBitmap>>();
       const getters = files.map((f) => {
         let g = getterOf.get(f);
         if (!g) {
-          g = async () => {
-            const blob = f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' });
-            return decodeFrameBitmap(blob); // TIFF sueltos incluidos
-          };
+          g = async () => decodeFrameBitmap(f.data); // TIFF sueltos incluidos
           getterOf.set(f, g);
         }
         return g;
       });
       const fps = parseFloat(fpsIn.value) || 12;
       const targetH = resSel.value === 'original' ? 0 : parseInt(resSel.value, 10);
-      let out;
+      let out: VideoResult;
       if (qualSel.value === 'lossless') {
-        const blobs = files.map((f) => (f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' })));
+        const blobs = files.map((f) => f.data);
         out = await buildVideoLossless(blobs, fps,
           (i, n) => prog.set(i / (n + 1), `preparing frame ${i}/${n}`), { targetH });
       } else if (qualSel.value === 'prores') {
-        const blobs = files.map((f) => (f.data instanceof Blob ? f.data : new Blob([f.data], { type: 'image/png' })));
+        const blobs = files.map((f) => f.data);
         prog.set(0.02, 'encoding ProRes…');
         out = await buildVideoProres(blobs, fps,
           (p) => prog.set(p, `encoding ProRes ${Math.round(p * 100)}%`), { targetH });
       } else {
+        const format = fmtSel.value === 'mp4' ? 'mp4' : fmtSel.value === 'webm' ? 'webm' : 'auto';
         out = await buildVideo(getters, fps, (i, n) => prog.set(i / n, `encoding ${i}/${n}`), {
-          format: fmtSel.value,
+          format,
           quality: qualSel.value,
           bitrateMbps: parseFloat(bitrateIn.value) || 0,
           targetH,
@@ -230,7 +236,7 @@ export function mountPhase4(root) {
       }
     } catch (e) {
       console.error(e);
-      toast(`Encoding failed: ${e.message ?? e}`, 'err');
+      toast(`Encoding failed: ${errMsg(e)}`, 'err');
     } finally {
       buildBtn.disabled = false;
       prog.hide();
@@ -244,8 +250,8 @@ export function mountPhase4(root) {
       label: 'Project layout.json (optional if you come from phase ②)',
       accept: '.json',
       onFiles: async ([f]) => {
-        try { layout = JSON.parse(await f.text()); refresh(); }
-        catch (e) { toast(e.message, 'err'); }
+        try { layout = JSON.parse(await f.text()) as Layout; refresh(); }
+        catch (e) { toast(errMsg(e), 'err'); }
       },
     }),
     layoutInfo,

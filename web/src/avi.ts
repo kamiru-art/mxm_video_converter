@@ -4,16 +4,24 @@
 // DNxHD…). Se carga bajo demanda (unos 32 MB) y se descarga de la memoria al
 // terminar la extracción.
 
-import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
+import type { LogEvent } from '@ffmpeg/ffmpeg';
+import { BadRangeError } from './errors.ts';
+import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
+import { context2d } from './ui.ts';
 
-let ffPromise = null;
+// video.ts monta sus PNG por WORKERFS con la misma instancia: el enum sale de
+// aquí para que el módulo de ffmpeg siga cargándose bajo demanda.
+export { FFFSType };
+
+let ffPromise: Promise<FFmpeg> | null = null;
 
 // Un asset que falta NO responde 404: wrangler.jsonc trae
 // not_found_handling: "single-page-application", así que el servidor
 // devuelve index.html con 200. Mirar solo r.ok no puede detectarlo jamás y el
 // fallo salía como "Unexpected token '<'" de JSON.parse, o como un módulo que
 // no instancia. Se comprueba también el content-type y se nombra la causa.
-function coreMissing(res, what) {
+function coreMissing(res: Response, what: string): Error {
   return new Error(
     `The video converter module is missing on the server: /ffmpeg/${what} came back as `
     + `${res.headers.get('content-type') || 'an unknown type'} (HTTP ${res.status}). `
@@ -26,22 +34,28 @@ function coreMissing(res, what) {
 // Blob de 32 MB por sesión. Revocarla tras el load tampoco valdría, porque la
 // sesión siguiente necesita rearmar el mismo módulo: se crea una vez y se
 // reutiliza (y de paso las sesiones posteriores arrancan sin volver a bajarlo).
-let wasmURLPromise = null;
+let wasmURLPromise: Promise<string> | null = null;
 
-function coreWasmURL(base) {
+function coreWasmURL(base: string): Promise<string> {
   // un fallo no se cachea: si el módulo aparece luego, el siguiente intento
   // vuelve a probar en vez de quedarse con la promesa rechazada
-  if (!wasmURLPromise) wasmURLPromise = assembleCore(base).catch((e) => { wasmURLPromise = null; throw e; });
+  if (!wasmURLPromise) wasmURLPromise = assembleCore(base).catch((e: unknown) => { wasmURLPromise = null; throw e; });
   return wasmURLPromise;
 }
 
-async function assembleCore(base) {
+interface CoreManifest {
+  parts?: number;
+  bytes?: number;
+}
+
+async function assembleCore(base: string): Promise<string> {
   const res = await fetch(`${base}/manifest.json`);
   if (!res.ok || !/\bjson\b/i.test(res.headers.get('content-type') || '')) throw coreMissing(res, 'manifest.json');
-  const manifest = await res.json();
-  if (!(manifest.parts > 0)) throw new Error('The video converter manifest lists no parts; rebuild web/public/ffmpeg/ with "npm run build".');
+  const manifest = (await res.json()) as CoreManifest;
+  const nParts = manifest.parts ?? 0;
+  if (!(nParts > 0)) throw new Error('The video converter manifest lists no parts; rebuild web/public/ffmpeg/ with "npm run build".');
   const parts = await Promise.all(
-    Array.from({ length: manifest.parts }, (_, i) =>
+    Array.from({ length: nParts }, (_, i) =>
       fetch(`${base}/ffmpeg-core.wasm.${i}`).then((r) => {
         // el mismo fallback SPA: una parte que falte llegaría como HTML y el
         // módulo moriría al instanciar sin decir por qué
@@ -52,7 +66,7 @@ async function assembleCore(base) {
   return URL.createObjectURL(new Blob(parts, { type: 'application/wasm' }));
 }
 
-async function loadCore() {
+async function loadCore(): Promise<FFmpeg> {
   const base = `${location.origin}/ffmpeg`;
   const wasmURL = await coreWasmURL(base);
   const ff = new FFmpeg();
@@ -60,28 +74,28 @@ async function loadCore() {
   return ff;
 }
 
-function getFF() {
+function getFF(): Promise<FFmpeg> {
   if (!ffPromise) ffPromise = loadCore();
   return ffPromise;
 }
 
 /** Cierra la instancia y libera su memoria WASM. */
-async function release() {
+async function release(): Promise<void> {
   const p = ffPromise;
   ffPromise = null;
   try { (await p)?.terminate(); } catch { /* ya cerrada */ }
 }
 
 // La instancia es ÚNICA y se comparte entre la extracción y la exportación
-// MOV (video.js). Dos sesiones a la vez se pisarían: terminate() de una
+// MOV (video.ts). Dos sesiones a la vez se pisarían: terminate() de una
 // rechaza los exec de la otra, los callbacks de progreso son globales por
 // instancia y el FS es un solo espacio de nombres. withFF serializa cada
 // sesión (montar → exec → leer) y libera la instancia cuando no queda
 // ninguna en cola.
-let ffQueue = Promise.resolve();
+let ffQueue: Promise<unknown> = Promise.resolve();
 let ffPending = 0;
 
-export function withFF(fn) {
+export function withFF<T>(fn: (ff: FFmpeg) => Promise<T>): Promise<T> {
   ffPending++;
   const run = ffQueue.then(async () => {
     try {
@@ -99,18 +113,22 @@ export function withFF(fn) {
 // gigabytes y writeFile los copiaría enteros).
 const MOUNT = '/input';
 
-async function mountInput(ff, file) {
+async function mountInput(ff: FFmpeg, file: File): Promise<string> {
   await ff.createDir(MOUNT);
-  await ff.mount('WORKERFS', { blobs: [{ name: 'in', data: file }] }, MOUNT);
+  await ff.mount(FFFSType.WORKERFS, { blobs: [{ name: 'in', data: file }] }, MOUNT);
   return `${MOUNT}/in`;
 }
 
-async function unmountInput(ff) {
+async function unmountInput(ff: FFmpeg): Promise<void> {
   try { await ff.unmount(MOUNT); } catch { /* sin montar */ }
   try { await ff.deleteDir(MOUNT); } catch { /* ya no está */ }
 }
 
-function parseProbeLog(log) {
+/** Lo que se saca del log de ffmpeg: ProbeResult sin la marca `fallback`,
+ *  que la pone probeFallback al devolverlo. */
+type ProbeInfo = Omit<ProbeResult, 'fallback'>;
+
+function parseProbeLog(log: string): ProbeInfo {
   const d = /Duration:\s*(\d+):(\d+):(\d+\.?\d*)/.exec(log);
   const duration = d ? (+d[1]) * 3600 + (+d[2]) * 60 + parseFloat(d[3]) : 0;
   const dims = /,\s*(\d{2,5})x(\d{2,5})[\s,]/.exec(log);
@@ -123,9 +141,9 @@ function parseProbeLog(log) {
   };
 }
 
-async function probeLoaded(ff, path) {
+async function probeLoaded(ff: FFmpeg, path: string): Promise<ProbeInfo> {
   let log = '';
-  const onLog = ({ message }) => { log += message + '\n'; };
+  const onLog = ({ message }: LogEvent): void => { log += message + '\n'; };
   ff.on('log', onLog);
   try {
     await ff.exec(['-hide_banner', '-i', path, '-frames:v', '0', '-f', 'null', 'out']);
@@ -139,7 +157,7 @@ async function probeLoaded(ff, path) {
 }
 
 /** Sondeo: duración, dimensiones y fps. Mismo formato que probeVideo. */
-export function probeFallback(file) {
+export function probeFallback(file: File): Promise<ProbeResult> {
   return withFF(async (ff) => {
     const path = await mountInput(ff, file);
     try {
@@ -152,24 +170,23 @@ export function probeFallback(file) {
 
 /**
  * Extrae fotogramas como PNG por tandas (la memoria WASM solo retiene una
- * tanda a la vez). Misma interfaz que extractFrames de video.js.
+ * tanda a la vez). Misma interfaz que extractFrames de video.ts.
  */
-export function extractFramesFallback(file, opts = {}) {
+export function extractFramesFallback(file: File, opts: ExtractOptions = {}): Promise<ExtractResult> {
   return withFF(async (ff) => {
   const path = await mountInput(ff, file);
   try {
     const probe = await probeLoaded(ff, path);
     const start = Math.max(0, opts.start ?? 0);
     const end = Math.min(probe.duration, opts.end ?? probe.duration);
-    // duplica a propósito el assertRange de extractFrames (video.js): la
+    // duplica a propósito el assertRange de extractFrames (video.ts): la
     // duración solo se conoce aquí, y sin esto un rango vacío o invertido
     // salía del bucle con count 0 y la interfaz lo daba por bueno en verde
     if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) {
-      const n = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} s` : 'not a number');
-      const e = new Error(`Invalid time range: start (${n(start)}) must come before end (${n(end)}).`
+      const n = (v: number): string => (Number.isFinite(v) ? `${v.toFixed(2)} s` : 'not a number');
+      // extractFrames lo relanza en vez del error del contenedor
+      throw new BadRangeError(`Invalid time range: start (${n(start)}) must come before end (${n(end)}).`
         + ` This video lasts ${probe.duration.toFixed(2)} s.`);
-      e.badRange = true; // extractFrames lo relanza en vez del error del contenedor
-      throw e;
     }
     const fps = opts.fps || probe.fps || 12;
     const dt = 1 / fps;
@@ -193,16 +210,18 @@ export function extractFramesFallback(file, opts = {}) {
       let got = 0;
       for (let i = 1; i <= want; i++) {
         const name = `f_${String(i).padStart(3, '0')}.png`;
-        let data;
+        let data: Uint8Array | string;
         try { data = await ff.readFile(name); } catch { break; }
         await ff.deleteFile(name);
+        if (typeof data === 'string') throw new Error('The video decoder returned text instead of image bytes.');
         got++;
-        const blob = new Blob([data], { type: 'image/png' });
+        // readFile copia el PNG fuera de la memoria WASM: ArrayBuffer propio
+        const blob = new Blob([data as Uint8Array<ArrayBuffer>], { type: 'image/png' });
         const bmp = await createImageBitmap(blob);
         const tw = 256;
         const th = Math.max(1, Math.round((bmp.height / bmp.width) * tw));
         const thumb = new OffscreenCanvas(tw, th);
-        thumb.getContext('2d').drawImage(bmp, 0, 0, tw, th);
+        context2d(thumb).drawImage(bmp, 0, 0, tw, th);
         const { width: w, height: h } = bmp;
         bmp.close();
         await opts.onFrame?.(blob, thumb, t + (i - 1) * dt, count, w, h);

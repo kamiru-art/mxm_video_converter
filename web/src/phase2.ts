@@ -1,42 +1,99 @@
 // Fase ② — Procesar escaneos: de la hoja pintada/expuesta a fotogramas.
 
-import { run, recycleIdle, poolSize } from './pool.js';
+import { run, recycleIdle, poolSize } from './pool.ts';
 import { el, toast, download, progressBar, dropzone, field, numberInput, select, check,
-         sanitizeLabel, pngUrl, lightbox } from './ui.js';
-import { project } from './project.js';
-import { generateSheets, resolveCyanCurve } from './gen.js';
-import { makeZip } from './zip.js';
-import { getGpuDevice, gpuWarpPerspective } from './webgpu.js';
+         sanitizeLabel, pngUrl, lightbox, context2d } from './ui.ts';
+import type { GalleryItem } from './ui.ts';
+import { project } from './project.ts';
+import type { RgbaImage } from './project.ts';
+import { generateSheets, resolveCyanCurve } from './gen.ts';
+import type { GenFrame } from './gen.ts';
+import { makeZip } from './zip.ts';
+import type { ZipEntryData } from './zip.ts';
+import { getGpuDevice, gpuWarpPerspective } from './webgpu.ts';
+import { defaultSettings } from './settings.ts';
+import { errMsg } from './errors.ts';
+import type { Bytes, DetectOutput, Layout, ScanOutput, ScanResult, Settings } from './types.ts';
 
-export const ph2 = {
-  layout: null,        // objeto layout.json (v1 o v2; el núcleo normaliza)
+export interface LabeledPng {
+  label: string;
+  png: Blob;
+}
+
+export interface ResultEntry {
+  result: ScanResult;
+  frames: LabeledPng[];
+  sinIdentificar: LabeledPng[];
+  overlay: Blob | null;
+  /** filas del informe y URLs de miniaturas de ESTA entrada (ver buildResultRows) */
+  rows?: HTMLTableRowElement[] | null;
+  urls?: string[];
+  shown?: LabeledPng[];
+}
+
+export interface Phase2State {
+  /** objeto layout.json (v1 o v2; el núcleo normaliza) */
+  layout: Layout | null;
+  layoutName: string;
+  /** resultados por escaneo */
+  results: ResultEntry[];
+  /** nº hoja → nombre de escaneo (ya identificadas) */
+  claims: Record<number, string>;
+  /** nombre de escaneo → nº de hoja puesto a mano */
+  assign: Record<string, number>;
+}
+
+export const ph2: Phase2State = {
+  layout: null,
   layoutName: '',
-  results: [],         // resultados por escaneo
-  claims: {},          // nº hoja → nombre de escaneo (ya identificadas)
-  assign: {},          // nombre de escaneo → nº de hoja puesto a mano
+  results: [],
+  claims: {},
+  assign: {},
 };
 
-function layoutSummary(layout) {
+/** Opciones de detección comunes a todo el lote (van al núcleo en JSON). */
+interface ScanOpts {
+  bleed: number;
+  min_markers: number;
+  mode: string;
+  resize_to_original: boolean;
+  normalize_patches: boolean;
+  fine_align: boolean;
+  forced_sheet?: number;
+}
+
+interface BatchContext {
+  base: ScanOpts;
+  layoutStr: string;
+  gpu: GPUDevice | null;
+}
+
+interface SheetConflict {
+  numero: number;
+  scans: string[];
+}
+
+function layoutSummary(layout: Layout): string {
   const hojas = layout.hojas ?? [];
   let frames = 0;
   for (const h of hojas) frames += Object.keys(h.frames ?? {}).length;
   return `${layout.proyecto ? `“${layout.proyecto}” · ` : ''}mode ${layout.modo ?? 'normal'} · ${hojas.length} sheet(s) · ${frames} expected frames`;
 }
 
-function expectedLabels(layout) {
-  const out = new Map(); // etiqueta → nº hoja
+function expectedLabels(layout: Layout): Map<string, number> {
+  const out = new Map<string, number>(); // etiqueta → nº hoja
   for (const h of layout.hojas ?? []) {
     for (const et of Object.keys(h.frames ?? {})) out.set(et, h.numero);
   }
   return out;
 }
 
-export function mountPhase2(root) {
+export function mountPhase2(root: HTMLElement): void {
   const layoutInfo = el('div', { class: 'hint' }, 'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).');
 
   /** Un layout nuevo es otro proyecto: las hojas que el usuario asignó a mano
    *  se refieren a números del anterior y aquí no significan lo mismo. */
-  function setLayout(layout, name, info) {
+  function setLayout(layout: Layout, name: string, info: string): void {
     ph2.layout = layout;
     ph2.layoutName = name;
     ph2.assign = {};
@@ -46,7 +103,7 @@ export function mountPhase2(root) {
   const useCurrentBtn = el('button', { class: 'btn ghost small', style: 'margin-top:6px' }, 'Use the current project layout');
   useCurrentBtn.addEventListener('click', () => {
     if (!project.layoutJson) { toast('You have not generated sheets in this session yet.', 'err'); return; }
-    const layout = JSON.parse(project.layoutJson);
+    const layout = JSON.parse(project.layoutJson) as Layout;
     setLayout(layout, 'current project layout', `✔ ${layoutSummary(layout)}`);
     renderSummary();
   });
@@ -56,11 +113,11 @@ export function mountPhase2(root) {
     accept: '.json,application/json',
     onFiles: async ([f]) => {
       try {
-        const layout = JSON.parse(await f.text());
+        const layout = JSON.parse(await f.text()) as Layout;
         setLayout(layout, f.name, `✔ ${f.name}: ${layoutSummary(layout)}`);
         renderSummary();
       } catch (e) {
-        toast(`Could not read the layout: ${e.message}`, 'err');
+        toast(`Could not read the layout: ${errMsg(e)}`, 'err');
       }
     },
   });
@@ -78,7 +135,7 @@ export function mountPhase2(root) {
     if (Number.isFinite(v) && v > 0) localStorage.setItem('mxm_ram_gb', String(v));
     else { ramIn.value = ''; localStorage.removeItem('mxm_ram_gb'); }
   });
-  function machineRam() {
+  function machineRam(): { gb: number; manual: boolean } {
     const manual = parseFloat(ramIn.value);
     if (Number.isFinite(manual) && manual > 0) return { gb: manual, manual: true };
     return { gb: navigator.deviceMemory || 4, manual: false };
@@ -96,9 +153,9 @@ export function mountPhase2(root) {
 
   // los archivos cargados se retienen para poder reprocesarlos con otras
   // opciones sin volver a soltarlos
-  const loadedScans = new Map(); // nombre → File
+  const loadedScans = new Map<string, File>(); // nombre → File
   const reprocessBtn = el('button', { class: 'btn ghost small', style: 'display:none; margin-top:6px' });
-  function refreshReprocess() {
+  function refreshReprocess(): void {
     reprocessBtn.style.display = loadedScans.size ? '' : 'none';
     reprocessBtn.textContent = `Reprocess the ${loadedScans.size} loaded scan(s) with the current options`;
   }
@@ -126,7 +183,7 @@ export function mountPhase2(root) {
   });
 
   /** Profundidad de bits de un PNG (byte 24 del IHDR). */
-  async function pngBitDepth(file) {
+  async function pngBitDepth(file: File): Promise<number> {
     try {
       const head = new Uint8Array(await file.slice(0, 26).arrayBuffer());
       return head[24] ?? 8;
@@ -134,7 +191,7 @@ export function mountPhase2(root) {
   }
 
   /** ImageBitmap si el navegador puede decodificar SIN perder profundidad. */
-  async function decodeForGpu(f) {
+  async function decodeForGpu(f: File): Promise<ImageBitmap | null> {
     const name = f.name.toLowerCase();
     if (/\.(tif|tiff)$/.test(name)) return null;              // decodifica WASM
     if (/\.png$/.test(name) && (await pngBitDepth(f)) > 8) return null; // 16 bits
@@ -143,15 +200,15 @@ export function mountPhase2(root) {
 
   /** Camino acelerado: detectar en WASM → enderezar en la GPU → recortar en
    *  WASM. La memoria WASM nunca ve entrada y salida a la vez. */
-  async function processViaGpu(f, bmp, layoutStr, opts) {
+  async function processViaGpu(f: File, bmp: ImageBitmap, layoutStr: string, opts: string): Promise<ScanOutput | null> {
     const c = new OffscreenCanvas(bmp.width, bmp.height);
-    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const ctx = context2d(c, { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
     const d = ctx.getImageData(0, 0, bmp.width, bmp.height);
     const rgba = new Uint8Array(d.data.buffer);
     const det = JSON.parse(await run('scan_detect', {
       rgba, w: bmp.width, h: bmp.height, name: f.name, layout: layoutStr, opts,
-    }, [rgba.buffer]));
+    }, [rgba.buffer])) as DetectOutput;
     if (!det.ok) {
       return { result: JSON.stringify(det.res), frames: [], sin_identificar: [], overlay: null };
     }
@@ -166,7 +223,7 @@ export function mountPhase2(root) {
 
   /** Pico de memoria estimado de un escaneo, a partir del tamaño del archivo.
    *  Con GPU la memoria WASM nunca ve entrada y salida a la vez. */
-  function estimatePeakBytes(f, gpu) {
+  function estimatePeakBytes(f: File, gpu: boolean): number {
     const name = f.name.toLowerCase();
     const ratio = /\.(jpe?g|webp)$/.test(name) ? 12 : /\.(tif|tiff)$/.test(name) ? 2.5 : 5;
     return f.size * ratio * (gpu ? 2.2 : 3.5);
@@ -174,7 +231,7 @@ export function mountPhase2(root) {
 
   /** Cuántos escaneos procesar a la vez, según la RAM y la GPU del equipo.
    *  La RAM declarada por el usuario manda; si no, navigator.deviceMemory. */
-  function pickConcurrency(files, gpu, singleSheet) {
+  function pickConcurrency(files: File[], gpu: boolean, singleSheet: boolean): number {
     if (singleSheet) return 1; // una sola hoja: evitar carreras de identidad
     const ram = machineRam();
     const budget = ram.gb * 1e9 * 0.3;
@@ -187,7 +244,7 @@ export function mountPhase2(root) {
   let processing = false;
 
   /** Opciones de detección comunes a todo el lote. */
-  function currentOpts() {
+  function currentOpts(): ScanOpts {
     // Number.isFinite y no ||: el 0 es un valor válido de bleed
     const bleedVal = parseFloat(bleedIn.value);
     const minMarkersVal = parseInt(minMarkersIn.value, 10);
@@ -202,22 +259,22 @@ export function mountPhase2(root) {
   }
 
   /** Opciones de UN escaneo: las del lote más la hoja asignada a mano. */
-  function optsFor(name, base) {
+  function optsFor(name: string, base: ScanOpts): string {
     const n = ph2.assign[name];
     return JSON.stringify(n == null ? base : { ...base, forced_sheet: n });
   }
 
-  async function makeContext() {
+  async function makeContext(): Promise<BatchContext> {
     return { base: currentOpts(), layoutStr: JSON.stringify(ph2.layout), gpu: await getGpuDevice() };
   }
 
   /** Procesa un escaneo y devuelve su entrada de informe, SIN registrarla:
    *  quien llama decide si se añade al informe o reemplaza a otra. */
-  async function runOne(f, ctx) {
+  async function runOne(f: File, ctx: BatchContext): Promise<ResultEntry> {
     const opts = optsFor(f.name, ctx.base);
-    let r = null;
+    let r: ScanOutput | null = null;
     if (ctx.gpu) {
-      let bmp = null;
+      let bmp: ImageBitmap | null = null;
       try {
         bmp = await decodeForGpu(f);
         // cualquier fallo del camino GPU (canvas demasiado grande, memoria
@@ -227,7 +284,7 @@ export function mountPhase2(root) {
         console.warn('[scan] GPU path failed, falling back to WASM:', e);
         r = null;
       } finally {
-        bmp?.close?.();
+        bmp?.close();
       }
     }
     if (!r) {
@@ -237,9 +294,9 @@ export function mountPhase2(root) {
         claims: JSON.stringify(ph2.claims),
       }, [bytes.buffer]);
     }
-    const asBlob = (u8, type) => new Blob([u8], { type });
+    const asBlob = (u8: Bytes, type: string): Blob => new Blob([u8], { type });
     return {
-      result: JSON.parse(r.result),
+      result: JSON.parse(r.result) as ScanResult,
       frames: (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
       sinIdentificar: (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
       overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
@@ -249,7 +306,7 @@ export function mountPhase2(root) {
   /** Escaneos que dicen ser la MISMA hoja: sus recortes comparten etiqueta y
    *  solo puede quedar uno. Se recalcula con el informe, no se avisa y se
    *  olvida: mientras el conflicto siga ahí, hay que verlo. */
-  let sheetConflicts = [];
+  let sheetConflicts: SheetConflict[] = [];
 
   /** Los fotogramas recuperados y las identidades se DERIVAN del informe: se
    *  rehacen enteros a partir de ph2.results, en orden.
@@ -258,10 +315,10 @@ export function mountPhase2(root) {
    *  equivocaba en cuanto dos escaneos compartían etiquetas: al soltar uno se
    *  llevaba por delante los fotogramas del otro, que seguía en el informe
    *  con sus recortes intactos, y la fase ③ armaba el video sin ellos. */
-  function rebuildFromResults() {
+  function rebuildFromResults(): void {
     project.processedFrames.clear();
     ph2.claims = {};
-    const byNumber = new Map(); // nº hoja → escaneos que la reclaman
+    const byNumber = new Map<number, string[]>(); // nº hoja → escaneos que la reclaman
     for (const e of ph2.results) {
       const r = e.result;
       const via = String(r.via ?? '');
@@ -280,7 +337,7 @@ export function mountPhase2(root) {
       .map(([numero, scans]) => ({ numero, scans }));
   }
 
-  function describeMachine(gpu, width) {
+  function describeMachine(gpu: GPUDevice | null, width: number): void {
     const ram = machineRam();
     const ramTxt = ram.manual ? `${ram.gb} GB RAM (set by you)`
       : navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM (browser estimate)`
@@ -288,7 +345,7 @@ export function mountPhase2(root) {
     specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ramTxt}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
   }
 
-  async function processScans(files) {
+  async function processScans(files: File[]): Promise<void> {
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
     if (processing) { toast('Wait for the current batch to finish.', 'err'); return; }
     processing = true;
@@ -302,12 +359,11 @@ export function mountPhase2(root) {
       let done = 0;
       const queue = [...files];
       await Promise.all(Array.from({ length: width }, async () => {
-        while (queue.length) {
-          const f = queue.shift();
+        for (let f = queue.shift(); f; f = queue.shift()) {
           try {
             addResult(await runOne(f, ctx));
           } catch (e) {
-            toast(`Error in one scan: ${e.message}`, 'err');
+            toast(`Error in one scan: ${errMsg(e)}`, 'err');
           }
           done++;
           prog.set(done / files.length, `${done}/${files.length} scans`);
@@ -320,7 +376,7 @@ export function mountPhase2(root) {
       // la zona de soltar y el botón de reprocesar lanzan el lote sin await:
       // lo que falle al preparar el contexto (GPU, layout) no lo ve nadie más
       console.error(e);
-      toast(`Could not process the scans: ${e.message ?? e}`, 'err');
+      toast(`Could not process the scans: ${errMsg(e)}`, 'err');
     } finally {
       prog.hide();
       processing = false;
@@ -337,7 +393,7 @@ export function mountPhase2(root) {
    *  fallo — es un resultado, y el aviso ya lo dice —; deshacerlo también
    *  impediría volver a “automatic” justamente en los escaneos que nadie
    *  identifica solo, que es lo que pide la caja de conflictos. */
-  async function reprocessOne(name) {
+  async function reprocessOne(name: string): Promise<boolean> {
     const f = loadedScans.get(name);
     if (!f) { toast(`“${name}” is no longer loaded: drop it again to reprocess it.`, 'err'); return false; }
     if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return false; }
@@ -364,7 +420,7 @@ export function mountPhase2(root) {
         n != null ? 'ok' : 'err');
     } catch (e) {
       console.error(e);
-      toast(`Could not reprocess “${name}”: ${e.message ?? e}`, 'err');
+      toast(`Could not reprocess “${name}”: ${errMsg(e)}`, 'err');
     } finally {
       prog.hide();
       processing = false;
@@ -394,8 +450,8 @@ export function mountPhase2(root) {
 
   /** Las hojas del layout como opciones legibles: número + qué fotogramas
    *  lleva, que es lo que deja reconocerla en las miniaturas. */
-  function sheetChoices(forScan) {
-    const out = [['', 'automatic']];
+  function sheetChoices(forScan: string): [string, string][] {
+    const out: [string, string][] = [['', 'automatic']];
     for (const h of ph2.layout?.hojas ?? []) {
       const labels = Object.keys(h.frames ?? {}).sort();
       const range = labels.length > 1 ? ` · ${labels[0]} → ${labels[labels.length - 1]}`
@@ -408,7 +464,7 @@ export function mountPhase2(root) {
   }
 
   /** Selector “esta hoja es la N”: al elegir, reprocesa ESE escaneo. */
-  function assignControl(scanName) {
+  function assignControl(scanName: string): HTMLSelectElement {
     const cur = ph2.assign[scanName];
     const sel = select(sheetChoices(scanName), cur == null ? '' : String(cur));
     sel.className = 'assign-sel';
@@ -432,8 +488,8 @@ export function mountPhase2(root) {
   }
 
   /** Todas las imágenes del informe en orden, para recorrerlas con ← →. */
-  function galleryItems() {
-    const items = [];
+  function galleryItems(): GalleryItem[] {
+    const items: GalleryItem[] = [];
     for (const e of ph2.results) {
       if (e.overlay) {
         items.push({ data: e.overlay, caption: `${e.result.scan}: green = marker found, red = missing, blue = frames, orange = QRs` });
@@ -443,17 +499,18 @@ export function mountPhase2(root) {
     return items;
   }
 
-  function openInGallery(blob, caption) {
+  function openInGallery(blob: Blob, caption: string): void {
     const items = galleryItems();
     const index = items.findIndex((it) => it.data === blob);
     if (index < 0) { lightbox(blob, caption); return; }
     lightbox(blob, caption, { items, index });
   }
 
-  function buildResultRows(entry) {
+  function buildResultRows(entry: ResultEntry): HTMLTableRowElement[] {
     const { result: r, frames, sinIdentificar, overlay } = entry;
-    entry.urls = [];
-    const trackUrl = (u) => { entry.urls.push(u); return u; };
+    const urls: string[] = [];
+    entry.urls = urls;
+    const trackUrl = (u: string): string => { urls.push(u); return u; };
     // miniaturas pequeñas; un clic abre la imagen a tamaño completo
     const shown = [...frames, ...sinIdentificar].slice(0, 60);
     entry.shown = shown;
@@ -496,7 +553,7 @@ export function mountPhase2(root) {
    *  archivo: `ph2.assign` y el reprocesado individual buscan por nombre de
    *  escaneo, así que dos filas con el mismo nombre harían que editar una
    *  cambiara la otra. Un archivo, una fila. */
-  function addResult(entry) {
+  function addResult(entry: ResultEntry): void {
     const dup = ph2.results.find((e) => e.result.scan === entry.result.scan);
     if (dup) { replaceResult(dup, entry); return; }
     ph2.results.push(entry);
@@ -507,14 +564,14 @@ export function mountPhase2(root) {
 
   /** Suelta las filas y las URLs de una entrada (sus Blobs siguen vivos si
    *  otro resultado los usa; las URLs no). */
-  function dropRows(entry) {
+  function dropRows(entry: ResultEntry): void {
     for (const row of entry.rows ?? []) row.remove();
     for (const u of entry.urls ?? []) URL.revokeObjectURL(u);
     entry.rows = null;
     entry.urls = [];
   }
 
-  function replaceResult(oldEntry, entry) {
+  function replaceResult(oldEntry: ResultEntry, entry: ResultEntry): void {
     const i = ph2.results.indexOf(oldEntry);
     const anchor = oldEntry.rows?.[0] ?? null;
     if (i >= 0) ph2.results[i] = entry; else ph2.results.push(entry);
@@ -527,7 +584,7 @@ export function mountPhase2(root) {
 
   /** `keepAssign`: al reprocesar el lote con otras opciones, las hojas que el
    *  usuario asignó a mano deben sobrevivir; el botón “Clear results” no. */
-  function clearReport(keepAssign = false) {
+  function clearReport(keepAssign = false): void {
     for (const e of ph2.results) dropRows(e);
     ph2.results = [];
     if (!keepAssign) ph2.assign = {};
@@ -538,7 +595,7 @@ export function mountPhase2(root) {
 
   /** Dónde imprimió ESTE proyecto el número de hoja: es lo primero que hay
    *  que mirar para saber qué hoja es un escaneo sin identificar. */
-  function whereTheSheetNumberIs() {
+  function whereTheSheetNumberIs(): string {
     const aj = ph2.layout?.ajustes;
     if (!aj) return 'Look for the sheet number printed on the page';
     if (aj.page_num_on === false) return 'This project printed no sheet number, so go by the drawings';
@@ -550,7 +607,7 @@ export function mountPhase2(root) {
 
   /** Caja de asignación manual: los escaneos que se enderezaron bien pero
    *  cuya hoja nadie pudo nombrar. */
-  function renderAssignBox() {
+  function renderAssignBox(): void {
     assignSlot.replaceChildren();
     const pending = ph2.results.filter((e) => e.result.hoja_numero == null);
     if (!ph2.layout || !pending.length) return;
@@ -567,7 +624,7 @@ export function mountPhase2(root) {
     ));
   }
 
-  function renderConflicts() {
+  function renderConflicts(): void {
     conflictSlot.replaceChildren();
     if (!sheetConflicts.length) return;
     conflictSlot.append(el('div', { class: 'missing-box' },
@@ -579,7 +636,7 @@ export function mountPhase2(root) {
     ));
   }
 
-  function renderSummary() {
+  function renderSummary(): void {
     const any = ph2.results.length > 0;
     reportTable.style.display = any ? '' : 'none';
     downloadRow.style.display = any ? '' : 'none';
@@ -608,11 +665,11 @@ export function mountPhase2(root) {
     el('button', {
       class: 'btn sun', onclick: async () => {
         try {
-          const files = new Map();
+          const files = new Map<string, ZipEntryData>();
           for (const [label, png] of project.processedFrames) {
             files.set(`frames/${sanitizeLabel(label)}.png`, png);
           }
-          for (const { result, sinIdentificar } of ph2.results) {
+          for (const { sinIdentificar } of ph2.results) {
             for (const f of sinIdentificar ?? []) files.set(`sin_identificar/${sanitizeLabel(f.label)}.png`, f.png);
           }
           const informe = buildInforme();
@@ -624,7 +681,7 @@ export function mountPhase2(root) {
           // un ZIP de cientos de fotogramas puede quedarse sin memoria: sin
           // esto, el botón simplemente no hacía nada
           console.error(e);
-          toast(`Could not build the ZIP: ${e.message ?? e}`, 'err');
+          toast(`Could not build the ZIP: ${errMsg(e)}`, 'err');
         }
       },
     }, 'Download frames + report (ZIP)'),
@@ -636,7 +693,7 @@ export function mountPhase2(root) {
   renderSummary();
 
   function buildInforme() {
-    const expected = ph2.layout ? expectedLabels(ph2.layout) : new Map();
+    const expected = ph2.layout ? expectedLabels(ph2.layout) : new Map<string, number>();
     const extraidas = [...project.processedFrames.keys()];
     return {
       fecha: new Date().toISOString(),
@@ -650,10 +707,10 @@ export function mountPhase2(root) {
     };
   }
 
-  function informeCsv() {
+  function informeCsv(): string {
     const lines = ['escaneo,ok,hoja,marcadores,estrategia,escala,frames,error,espejado,residual_mm'];
     for (const { result: r, frames } of ph2.results) {
-      const esc = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
+      const esc = (v: unknown): string => `"${String(v ?? '').replaceAll('"', '""')}"`;
       lines.push([esc(r.scan), r.ok, r.hoja_numero ?? '', `${r.marcadores}/${r.marcadores_total}`,
         esc(r.estrategia), r.escala, frames.length, esc(r.error), r.espejado, r.residual_mm].join(','));
     }
@@ -661,8 +718,8 @@ export function mountPhase2(root) {
   }
 
   // ── hojas de rescate ─────────────────────────────────────────
-  let rescueMissing = [];
-  const rescueOriginals = new Map(); // nombre → File
+  let rescueMissing: string[] = [];
+  const rescueOriginals = new Map<string, File>(); // nombre → File
   const rescueInfo = el('div', { class: 'hint' });
   const rescueDz = dropzone({
     label: 'Drop the project originals folder (…_originals/)',
@@ -680,8 +737,8 @@ export function mountPhase2(root) {
       toast('This layout has no generation settings (is it from v1?). Generate the sheets with MXM Studio to use rescue.', 'err');
       return;
     }
-    const found = [];
-    const sinOriginal = [];
+    const found: { label: string; file: File }[] = [];
+    const sinOriginal: string[] = [];
     for (const et of rescueMissing) {
       const safe = sanitizeLabel(et);
       let file = rescueOriginals.get(safe) ?? rescueOriginals.get(et);
@@ -690,7 +747,7 @@ export function mountPhase2(root) {
         outer: for (const h of ph2.layout.hojas ?? []) {
           for (const [key, info] of Object.entries(h.frames ?? {})) {
             if ((info.etiqueta ?? key) === et && info.archivo_original) {
-              const base = info.archivo_original.split('/').pop().replace(/\.[^.]+$/, '');
+              const base = (info.archivo_original.split('/').pop() ?? '').replace(/\.[^.]+$/, '');
               file = rescueOriginals.get(base);
               if (file) break outer;
             }
@@ -707,7 +764,9 @@ export function mountPhase2(root) {
     rescueBtn.disabled = true;
     rescueProg.show();
     try {
-      const ajustes = { ...ph2.layout.ajustes };
+      // un layout v2 trae el bloque de ajustes completo: los valores por
+      // defecto solo cubren claves que un layout real nunca deja vacías
+      const ajustes: Settings = { ...defaultSettings(), ...ph2.layout.ajustes };
       let baseName = ajustes.out_name || 'hojas';
       baseName = baseName.replace(/_rescate$/, '');
       ajustes.out_name = `${baseName}_rescate`;
@@ -716,10 +775,10 @@ export function mountPhase2(root) {
       ajustes.sheets_exclude = '';
       ajustes.page_num_start = 1;
       ajustes.page_num_prefix = (ajustes.page_num_prefix || '') + 'R';
-      const frames = [];
-      for (const { label, file } of found) {
+      const frames: GenFrame[] = [];
+      for (const { file } of found) {
         const isTiff = /\.(tif|tiff)$/i.test(file.name);
-        let getImageData;
+        let getImageData: () => Promise<RgbaImage>;
         let w = 16, h = 9, hasAlpha = false;
         if (isTiff) {
           const bytesP = file.arrayBuffer().then((b) => new Uint8Array(b));
@@ -734,9 +793,10 @@ export function mountPhase2(root) {
           getImageData = async () => {
             const b = await createImageBitmap(file);
             const c = new OffscreenCanvas(b.width, b.height);
-            c.getContext('2d').drawImage(b, 0, 0);
+            const ctx = context2d(c);
+            ctx.drawImage(b, 0, 0);
             b.close();
-            const d = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+            const d = ctx.getImageData(0, 0, c.width, c.height);
             return { data: new Uint8Array(d.data.buffer), w: c.width, h: c.height };
           };
         }
@@ -754,7 +814,7 @@ export function mountPhase2(root) {
       toast(`Rescue sheets generated with ${found.length} frame(s). Print, paint/expose, scan and process against the rescue layout.`, 'ok');
     } catch (e) {
       console.error(e);
-      toast(`Rescue failed: ${e.message ?? e}`, 'err');
+      toast(`Rescue failed: ${errMsg(e)}`, 'err');
     } finally {
       rescueBtn.disabled = false;
       rescueProg.hide();
@@ -770,12 +830,12 @@ export function mountPhase2(root) {
   /** Convierte una hoja recién generada en un “escaneo”: la pega girada 2°
    *  sobre un fondo mayor, como saldría de un escáner de mesa. Recorre el
    *  circuito ①→②→③ entero sin imprimir ni escanear nada. */
-  async function simulateScan(blob, name) {
+  async function simulateScan(blob: Blob, name: string): Promise<File> {
     const bmp = await createImageBitmap(blob);
     const w = Math.round(bmp.width * 1.08);
     const h = Math.round(bmp.height * 1.08);
     const c = new OffscreenCanvas(w, h);
-    const ctx = c.getContext('2d');
+    const ctx = context2d(c);
     ctx.fillStyle = '#B6B4AE'; // tapa del escáner
     ctx.fillRect(0, 0, w, h);
     ctx.translate(w / 2, h / 2);
@@ -792,12 +852,12 @@ export function mountPhase2(root) {
     if (!project.sheetImages.size) { toast('Generate the sheets in phase ① first.', 'err'); return; }
     if (!ph2.layout) {
       if (!project.layoutJson) { toast('Generate the sheets in phase ① first.', 'err'); return; }
-      const layout = JSON.parse(project.layoutJson);
+      const layout = JSON.parse(project.layoutJson) as Layout;
       setLayout(layout, 'current project layout', `✔ ${layoutSummary(layout)}`);
     }
     demoBtn.disabled = true;
     try {
-      const files = [];
+      const files: File[] = [];
       for (const [name, blob] of project.sheetImages) files.push(await simulateScan(blob, name));
       for (const f of files) loadedScans.set(f.name, f);
       refreshReprocess();
@@ -805,12 +865,12 @@ export function mountPhase2(root) {
       await processScans(files);
     } catch (e) {
       console.error(e);
-      toast(`Could not simulate the scans: ${e.message ?? e}`, 'err');
+      toast(`Could not simulate the scans: ${errMsg(e)}`, 'err');
     } finally {
       demoBtn.disabled = false;
     }
   });
-  function refreshDemo() {
+  function refreshDemo(): void {
     demoBtn.style.display = project.sheetImages.size ? '' : 'none';
   }
   root.addEventListener('mxm:activated', refreshDemo);

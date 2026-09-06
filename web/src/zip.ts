@@ -4,27 +4,33 @@
 // retiene cientos de MB en ArrayBuffers mientras se arma el ZIP.
 
 import { Zip, ZipPassThrough } from 'fflate';
+import type { Bytes } from './types.ts';
 
 const PART_BYTES = 32e6;
 
+/** Contenido de una entrada: bytes ya en memoria o un Blob que se lee al
+ *  llegar su turno. */
+export type ZipEntryData = Bytes | Blob;
+
 /** files: Map<nombre, Uint8Array|Blob>. Devuelve un Blob ZIP. */
-export async function makeZip(files, onProgress = () => {}) {
-  const parts = [];
-  let chunks = [];
+export async function makeZip(files: Map<string, ZipEntryData>, onProgress: (i: number, n: number) => void = () => {}): Promise<Blob> {
+  const parts: Blob[] = [];
+  let chunks: Bytes[] = [];
   let chunkBytes = 0;
-  const flush = () => {
+  const flush = (): void => {
     if (chunks.length) {
       parts.push(new Blob(chunks));
       chunks = [];
       chunkBytes = 0;
     }
   };
-  let resolveDone, rejectDone;
-  const done = new Promise((res, rej) => { resolveDone = res; rejectDone = rej; });
+  let resolveDone: () => void = () => {};
+  let rejectDone: (e: Error) => void = () => {};
+  const done = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej; });
   const zip = new Zip((err, chunk, final) => {
-    if (err) return rejectDone(err);
+    if (err) { rejectDone(err); return; }
     if (chunk) {
-      chunks.push(chunk);
+      chunks.push(chunk as Bytes); // fflate reserva sus propios ArrayBuffer
       chunkBytes += chunk.byteLength;
       if (chunkBytes >= PART_BYTES) flush();
     }
