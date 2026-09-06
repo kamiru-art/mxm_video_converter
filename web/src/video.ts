@@ -131,11 +131,16 @@ async function probeMediabunny(file: File): Promise<MediabunnyProbe> {
 export async function probeVideo(file: File): Promise<ProbeResult> {
   try {
     const p = await probeMediabunny(file);
+    // el contenedor se abre, pero ¿decodifica este navegador el códec? Si
+    // no (HEVC en Firefox, ProRes en todos), la extracción irá por
+    // ffmpeg.wasm, minutos en vez de segundos: que el aviso salga AHORA, en
+    // el sondeo, y no después de pulsar Extract
+    const fallback = !(await p.track.canDecode());
     // sondeo y nada más: aquí no decodifica nadie, así que el Input se cierra
     // ya y no se devuelve (ni `track`, que moriría con él). El formato
     // coincide con el de probeFallback
     p.input.dispose();
-    return { duration: p.duration, fps: p.fps, width: p.width, height: p.height };
+    return { duration: p.duration, fps: p.fps, width: p.width, height: p.height, fallback };
   } catch (e) {
     // mediabunny no abre el contenedor: que lo intente ffmpeg.wasm; si
     // tampoco puede, el error original es el informativo

@@ -346,7 +346,11 @@ export function mountPhase1(root: HTMLElement): void {
         try {
           videoInfo.textContent = 'Reading the video…';
           const p = await probeVideo(pendingVideo);
-          const via = p.fallback ? ' (decoded with the built-in converter)' : '';
+          // el respaldo es software y un solo hilo: en 4K son minutos, y
+          // conviene saberlo antes de elegir el rango y los fps
+          const via = p.fallback
+            ? '. This browser cannot decode this codec itself, so the built-in converter will do it: much slower (minutes for a 4K clip). Chrome or Edge decode it in hardware'
+            : '';
           videoInfo.textContent = `${pendingVideo.name}: ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}${via}. Pick range/fps and press “Extract”.`;
           endIn.value = p.duration.toFixed(1);
           extractBtn.disabled = false;

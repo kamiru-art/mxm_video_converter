@@ -133,7 +133,11 @@ available:
 The application reads MP4, WebM, AVI and MOV files. It decodes them with
 WebCodecs. If the browser cannot decode a file, the application uses
 `ffmpeg.wasm`. Thus the application also reads the MOV files of cameras, for
-example 10-bit HEVC and ProRes.
+example 10-bit HEVC and ProRes. The built-in converter is software and much
+slower: minutes for a 4K clip instead of seconds. The application tells you
+before you extract. Chrome and Edge decode HEVC in hardware; Firefox (and
+the browsers built on it, such as Zen) decode H.264, VP9 and AV1 themselves
+but not HEVC, so a camera MOV in HEVC is faster in Chrome.
 
 When the browser decodes the video itself, the application does not keep a
 copy of the frames. It reads them again from the video when it makes the
