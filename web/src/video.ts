@@ -501,7 +501,7 @@ async function prepareFramePngs(frames: Blob[], onProgress?: (i: number, n: numb
   for (let i = 0; i < uniq.length; i += LIMIT) {
     const chunk = uniq.slice(i, i + LIMIT);
     const ds = await Promise.all(chunk.map(imageDims));
-    chunk.forEach((b, j) => dimsByBlob.set(b, ds[j]));
+    for (const [j, b] of chunk.entries()) dimsByBlob.set(b, ds[j]);
   }
   const dims = frames.map((f) => {
     const d = dimsByBlob.get(f);

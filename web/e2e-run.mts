@@ -134,7 +134,7 @@ console.log('---\nRESULT:', title);
 console.log(log);
 if (cspViolations.length) {
   console.log(`\nCSP: ${cspViolations.length} violation(s) against web/public/_headers:`);
-  for (const v of new Set(cspViolations)) console.log('  ' + v);
+  for (const v of new Set(cspViolations)) console.log(`  ${v}`);
 }
 await browser.close();
 server.close();

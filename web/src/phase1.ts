@@ -71,7 +71,7 @@ function stem(name: string): string {
 
 function formatLabel(s: Settings, num: number): string {
   let str = String(num);
-  while (str.length < (s.leading_zeros ?? 1)) str = '0' + str;
+  while (str.length < (s.leading_zeros ?? 1)) str = `0${str}`;
   return s.base_name ? `${s.base_name}${s.separator}${str}` : str;
 }
 
@@ -103,7 +103,7 @@ export function computePlan(): Plan {
       // con el video + el número, respetando el control de dígitos
       if (f.videoStem != null) {
         let n = String((f.seq ?? 0) + 1);
-        while (n.length < (s.leading_zeros ?? 1)) n = '0' + n;
+        while (n.length < (s.leading_zeros ?? 1)) n = `0${n}`;
         return `${f.videoStem}${s.separator}${n}`;
       }
       return stem(f.name);
@@ -293,17 +293,17 @@ export function mountPhase1(root: HTMLElement): void {
 
   const includeIn = el('input', { type: 'text', placeholder: 'e.g. 1, 3-5 (empty = all)' });
   const excludeIn = el('input', { type: 'text', placeholder: 'e.g. 8, 12' });
-  includeIn.addEventListener('change', () => { ph1.include = includeIn.value; refreshFrames(); });
-  excludeIn.addEventListener('change', () => { ph1.exclude = excludeIn.value; refreshFrames(); });
+  includeIn.addEventListener('change', () => { ph1.include = includeIn.value; void refreshFrames(); });
+  excludeIn.addEventListener('change', () => { ph1.exclude = excludeIn.value; void refreshFrames(); });
 
   const namingSel = select([['auto', 'Auto-increment (abc_001…)'], ['original', 'Original file name']], ph1.naming);
   const numberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
   const pageNumberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
   // los tres cambian las etiquetas visibles: refrescar también las miniaturas
   const relabel = (): Promise<void> => renderThumbs().then(() => refreshPreview()).catch(reportRefreshFailure);
-  namingSel.addEventListener('change', () => { ph1.naming = namingSel.value === 'original' ? 'original' : 'auto'; relabel(); });
-  numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value === 'original' ? 'original' : 'sequential'; relabel(); });
-  pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value === 'original' ? 'original' : 'sequential'; refreshPreview(); });
+  namingSel.addEventListener('change', () => { ph1.naming = namingSel.value === 'original' ? 'original' : 'auto'; void relabel(); });
+  numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value === 'original' ? 'original' : 'sequential'; void relabel(); });
+  pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value === 'original' ? 'original' : 'sequential'; void refreshPreview(); });
 
   const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
   const dedupStatus = el('div', { class: 'hint' });
@@ -312,7 +312,7 @@ export function mountPhase1(root: HTMLElement): void {
     try {
       if (ph1.dedupOn) await computeDedup(dedupStatus);
       else dedupStatus.textContent = '';
-      refreshPreview();
+      void refreshPreview();
       await renderThumbs();
     } catch (e) {
       console.error(e);
@@ -328,26 +328,26 @@ export function mountPhase1(root: HTMLElement): void {
     input.addEventListener('change', () => {
       const v = integer ? parseInt(input.value, 10) : parseFloat(input.value);
       if (!Number.isNaN(v)) s[key] = v;
-      persist(); refreshPreview();
+      persist(); void refreshPreview();
     });
     binds.push(() => { input.value = String(s[key]); });
     return input;
   }
   function bindText(key: StringKeys<Settings>, input: HTMLInputElement): HTMLInputElement {
     input.value = s[key] ?? '';
-    input.addEventListener('change', () => { s[key] = input.value; persist(); refreshPreview(); });
+    input.addEventListener('change', () => { s[key] = input.value; persist(); void refreshPreview(); });
     binds.push(() => { input.value = s[key] ?? ''; });
     return input;
   }
   function bindSel(key: StringKeys<Settings>, input: HTMLSelectElement): HTMLSelectElement {
     input.value = s[key];
-    input.addEventListener('change', () => { s[key] = input.value; persist(); refreshPreview(); });
+    input.addEventListener('change', () => { s[key] = input.value; persist(); void refreshPreview(); });
     binds.push(() => { input.value = s[key]; });
     return input;
   }
   function bindCheck(key: BooleanKeys<Settings>, c: { input: HTMLInputElement; label: HTMLLabelElement }): HTMLLabelElement {
     c.input.checked = !!s[key];
-    c.input.addEventListener('change', () => { s[key] = c.input.checked; persist(); refreshPreview(); });
+    c.input.addEventListener('change', () => { s[key] = c.input.checked; persist(); void refreshPreview(); });
     binds.push(() => { c.input.checked = !!s[key]; });
     return c.label;
   }
@@ -389,7 +389,7 @@ export function mountPhase1(root: HTMLElement): void {
     cyanBody.style.display = modeCheck.input.checked ? '' : 'none';
     const holder = simulateToggle.label.parentElement;
     if (holder) holder.style.display = modeCheck.input.checked ? '' : 'none';
-    persist(); refreshPreview();
+    persist(); void refreshPreview();
   });
 
   const curveProfiles = (): SelectOption[] => [['', '(no curve: linear)'], ...store.listProfiles('cianotipia').map((n): SelectOption => [n, n])];
@@ -401,7 +401,7 @@ export function mountPhase1(root: HTMLElement): void {
     if (p?.ink && p.ink !== s.cyan_ink && !s.cyan_ink_stops) {
       toast(`Heads up: this curve was measured with ink ${p.ink} and you are now using ${s.cyan_ink}.`);
     }
-    persist(); refreshPreview();
+    persist(); void refreshPreview();
   });
   const inkProfiles = (): SelectOption[] => [['', '(plain ink)'], ...store.listProfiles('cianotipia_color').map((n): SelectOption => [n, n])];
   const inkProfSel = select(inkProfiles(), '');
@@ -415,7 +415,7 @@ export function mountPhase1(root: HTMLElement): void {
     } else {
       s.cyan_ink_stops = null;
     }
-    persist(); refreshPreview();
+    persist(); void refreshPreview();
   });
 
   const cyanBody = el('div', {},
@@ -453,8 +453,8 @@ export function mountPhase1(root: HTMLElement): void {
     s.print_scale_y = p?.scale_y ?? 1;
     if (p?.marker_recomendado_mm) s.marker_size_mm = Math.max(s.marker_size_mm, p.marker_recomendado_mm);
     if (p?.qr_recomendado_mm) s.qr_size_mm = Math.max(s.qr_size_mm, p.qr_recomendado_mm);
-    binds.forEach((b) => b());
-    persist(); refreshPreview();
+    for (const b of binds) b();
+    persist(); void refreshPreview();
     if (p) toast(`Printer profile applied (scale ${(p.scale_x * 100).toFixed(1)} % × ${(p.scale_y * 100).toFixed(1)} %).`, 'ok');
   });
 
@@ -473,8 +473,8 @@ export function mountPhase1(root: HTMLElement): void {
           if (p?.settings) {
             Object.assign(s, normalizeSettings(p.settings));
             Object.assign(ph1, normalizePhase(p.fase ?? {}));
-            binds.forEach((b) => b());
-            persist(); refreshPreview();
+            for (const b of binds) b();
+            persist(); void refreshPreview();
             toast(`Preset “${presetSel.value}” loaded.`, 'ok');
           }
         },
@@ -564,11 +564,11 @@ export function mountPhase1(root: HTMLElement): void {
   const previewImg = el('img', { alt: 'Sheet preview', style: 'display:none' });
   previewImg.addEventListener('load', () => { previewImg.style.display = ''; });
   const previewInfo = el('div', { class: 'progress-note', style: 'margin-top:8px; text-align:center' });
-  const prevBtn = el('button', { onclick: () => { ph1.previewPage--; refreshPreview(); } }, '‹');
-  const nextBtn = el('button', { onclick: () => { ph1.previewPage++; refreshPreview(); } }, '›');
+  const prevBtn = el('button', { onclick: () => { ph1.previewPage--; void refreshPreview(); } }, '‹');
+  const nextBtn = el('button', { onclick: () => { ph1.previewPage++; void refreshPreview(); } }, '›');
   const pageLabel = el('span', {}, '—');
   const simulateToggle = check('Simulate final blue print', false);
-  simulateToggle.input.addEventListener('change', () => { ph1.previewSimulate = simulateToggle.input.checked; refreshPreview(); });
+  simulateToggle.input.addEventListener('change', () => { ph1.previewSimulate = simulateToggle.input.checked; void refreshPreview(); });
   simulateToggle.label.style.color = 'var(--cian-200)';
 
   let previewBusy = false, previewQueued = false;
@@ -630,7 +630,7 @@ export function mountPhase1(root: HTMLElement): void {
       console.error('preview', e);
     } finally {
       previewBusy = false;
-      if (previewQueued) { previewQueued = false; refreshPreview(); }
+      if (previewQueued) { previewQueued = false; void refreshPreview(); }
     }
   }
 
@@ -657,7 +657,7 @@ export function mountPhase1(root: HTMLElement): void {
     ph1.dedupGroups = null;
     if (ph1.dedupOn && project.frames.length) await computeDedup(dedupStatus);
     await renderThumbs();
-    refreshPreview();
+    void refreshPreview();
   }
 
   // refrescar listas de perfiles al volver a esta vista
@@ -720,7 +720,7 @@ export function mountPhase1(root: HTMLElement): void {
       Object.assign(s, { cols: 3, rows: 2, base_name: 'demo', out_name: 'demo', project_name: 'Demo' });
       ph1.include = ''; ph1.exclude = '';
       includeIn.value = ''; excludeIn.value = '';
-      binds.forEach((b) => b());
+      for (const b of binds) b();
       syncCustom();
       persist();
       pendingVideo = null;
@@ -743,7 +743,7 @@ export function mountPhase1(root: HTMLElement): void {
   markerCountSel.addEventListener('change', () => {
     const v = parseInt(markerCountSel.value, 10);
     if (!Number.isNaN(v)) s.marker_count = v;
-    persist(); refreshPreview();
+    persist(); void refreshPreview();
   });
   binds.push(() => { markerCountSel.value = String(s.marker_count); });
 
@@ -818,7 +818,7 @@ export function mountPhase1(root: HTMLElement): void {
       );
       const c = check('Add a QR code per frame (for projects with MANY sheets)', !!s.qr_on);
       const sync = (): void => { qrRow.style.display = s.qr_on ? '' : 'none'; };
-      c.input.addEventListener('change', () => { s.qr_on = c.input.checked; sync(); persist(); refreshPreview(); });
+      c.input.addEventListener('change', () => { s.qr_on = c.input.checked; sync(); persist(); void refreshPreview(); });
       binds.push(() => { c.input.checked = !!s.qr_on; sync(); });
       sync();
       return el('div', {},

@@ -35,7 +35,7 @@ export function settingsForCore(s: Partial<Settings>): string {
 
 function zfill(n: number, digits: number): string {
   let out = String(n);
-  while (out.length < digits) out = '0' + out;
+  while (out.length < digits) out = `0${out}`;
   return out;
 }
 

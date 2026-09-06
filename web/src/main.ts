@@ -66,7 +66,7 @@ run('version', {}).then(
 // Indicador de capacidades: el mismo proyecto tarda muy distinto según el
 // navegador enderece los escaneos en la GPU o en WebAssembly, y eso no se ve
 // por ningún lado. Aquí se dice, sin tener que abrir la fase ②.
-(async () => {
+void (async () => {
   const badge = document.getElementById('capbadge');
   const text = document.getElementById('capbadge-text');
   if (!badge || !text) return;

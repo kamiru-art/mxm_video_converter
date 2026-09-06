@@ -143,7 +143,7 @@ function parseProbeLog(log: string): ProbeInfo {
 
 async function probeLoaded(ff: FFmpeg, path: string): Promise<ProbeInfo> {
   let log = '';
-  const onLog = ({ message }: LogEvent): void => { log += message + '\n'; };
+  const onLog = ({ message }: LogEvent): void => { log += `${message}\n`; };
   ff.on('log', onLog);
   try {
     await ff.exec(['-hide_banner', '-i', path, '-frames:v', '0', '-f', 'null', 'out']);

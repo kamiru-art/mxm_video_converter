@@ -1,0 +1,81 @@
+// Biome: linter y formateador de la web, en una sola herramienta.
+//
+// Por qué Biome y no ESLint + Prettier: la web compila con TypeScript 7, que
+// ya no trae la API de JavaScript del compilador (`lib/typescript.js`), y
+// typescript-eslint la necesita para analizar (su peer dependency es
+// `typescript <6.1`). Biome trae su propio analizador y no depende de
+// `typescript`. Las reglas de abajo son las convenciones que ya seguía el
+// código (docs/codebase/CONVENTIONS.md), ahora comprobadas por CI:
+//   npm run lint          comprueba lint + formato (lo que corre CI)
+//   npm run lint:fix      aplica los arreglos seguros
+//   npm run format        formatea
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    // src/wasm lo genera wasm-pack; public/ffmpeg lo copia prepare-ffmpeg.mts;
+    // el HTML se queda fuera porque el formateador de HTML de Biome aún es
+    // experimental y son dos archivos escritos a mano.
+    "includes": ["**", "!src/wasm", "!dist", "!public/ffmpeg", "!**/*.html"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "css": {
+    // style.css está escrito a propósito con varias declaraciones por línea,
+    // agrupadas por componente y comentadas; el formateador lo expandiría a
+    // una declaración por línea y triplicaría el archivo. Se lintea, no se
+    // formatea.
+    "formatter": { "enabled": false }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        // Convención: nada de `any` ni de `@ts-ignore`. Un valor de
+        // JSON.parse se estrecha con un `as` a la interfaz de types.ts.
+        "noExplicitAny": "error",
+        "noTsIgnore": "error"
+      },
+      "style": {
+        // Convención: sólo exportaciones con nombre, y `import type` para
+        // los tipos (verbatimModuleSyntax ya lo exige en tsc).
+        "noDefaultExport": "error",
+        "useImportType": "error",
+        "noNonNullAssertion": "error",
+        // style.css es una hoja compacta escrita a mano; reordenar reglas
+        // para satisfacer la especificidad descendente no aporta nada.
+        "noDescendingSpecificity": "off"
+      },
+      "complexity": {
+        // El único `!important` es el de prefers-reduced-motion, que es el
+        // uso canónico: tiene que ganar a cualquier animación declarada.
+        "noImportantStyles": "off"
+      },
+      "nursery": {
+        // Convención: todo manejador async termina en un catch que hace
+        // toast. Una promesa que se deja correr a propósito (una función
+        // que ya captura sus errores) se marca con `void`.
+        "noFloatingPromises": "error"
+      }
+    }
+  },
+  "overrides": [
+    {
+      // Vite sólo acepta la configuración como exportación por defecto.
+      "includes": ["vite.config.ts"],
+      "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
+    }
+  ]
+}

@@ -77,7 +77,7 @@ sw.addEventListener('fetch', (e) => {
       try {
         const net = await fetch(req);
         const ok = isUsable(SHELL, net);
-        put(SHELL, '/', ok ? net.clone() : null, ok);
+        void put(SHELL, '/', ok ? net.clone() : null, ok);
         return net;
       } catch {
         return (await caches.match('/')) ?? (await caches.match(req)) ?? Response.error();
@@ -101,7 +101,7 @@ sw.addEventListener('fetch', (e) => {
     const network = fetch(req)
       .then((res) => {
         const ok = isUsable(cacheName, res);
-        put(cacheName, req, ok ? res.clone() : null, ok);
+        void put(cacheName, req, ok ? res.clone() : null, ok);
         // Un asset con hash que llega como HTML es el index.html que el
         // sitio devuelve en lugar de un 404: el archivo es de una versión
         // anterior y ya no existe. Se contesta 404, que es la verdad, en

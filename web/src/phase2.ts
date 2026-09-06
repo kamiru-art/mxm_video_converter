@@ -162,7 +162,7 @@ export function mountPhase2(root: HTMLElement): void {
   reprocessBtn.addEventListener('click', () => {
     if (!loadedScans.size) return;
     clearReport(true); // borra resultados y frames; conserva las hojas puestas a mano
-    processScans([...loadedScans.values()]);
+    void processScans([...loadedScans.values()]);
   });
 
   const scansDz = dropzone({
@@ -178,7 +178,7 @@ export function mountPhase2(root: HTMLElement): void {
         toast('A batch is already running. The new files were added to the loaded list; press Reprocess when it finishes.', 'err');
         return;
       }
-      processScans(files);
+      void processScans(files);
     },
   });
 
@@ -774,7 +774,7 @@ export function mountPhase2(root: HTMLElement): void {
       ajustes.sheets_include = '';
       ajustes.sheets_exclude = '';
       ajustes.page_num_start = 1;
-      ajustes.page_num_prefix = (ajustes.page_num_prefix || '') + 'R';
+      ajustes.page_num_prefix = `${ajustes.page_num_prefix || ''}R`;
       const frames: GenFrame[] = [];
       for (const { file } of found) {
         const isTiff = /\.(tif|tiff)$/i.test(file.name);

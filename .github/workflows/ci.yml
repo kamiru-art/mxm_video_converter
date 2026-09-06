@@ -7,7 +7,8 @@
 #              frames), then clippy with warnings as errors, natively and for wasm32 (the
 #              only target that compiles api.rs, the WebAssembly boundary).
 #   2. web   — compiles the core to WebAssembly, type-checks the TypeScript
-#              (tsc, strict, three projects), builds the site, runs the
+#              (tsc, strict, three projects), lints and checks formatting
+#              (biome), builds the site, runs the
 #              browser end-to-end test (real Chrome, workers + WASM) and
 #              deploys that exact build to Cloudflare (mxm.sebastianlopez.me),
 #              Pages-style. The deploy step is the only one gated to main.
@@ -156,6 +157,14 @@ jobs:
       # builds; here it stands alone so a failure reads as what it is.
       - name: Type check (tsc)
         run: npm run typecheck
+        working-directory: web
+      # Biome: lint and formatting in one pass, against web/biome.jsonc. It
+      # replaces ESLint + Prettier because the web compiles with TypeScript 7,
+      # whose npm package no longer ships the JavaScript compiler API that
+      # typescript-eslint needs. `biome check` fails on any lint error and on
+      # any file that is not formatted; `npm run lint:fix` repairs both.
+      - name: Lint and formatting (biome)
+        run: npm run lint
         working-directory: web
       - name: Install ffmpeg (generates the WebCodecs E2E sample video)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
