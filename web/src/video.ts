@@ -698,6 +698,9 @@ async function framesToMov(
         '/frames',
       );
       await ff.exec([
+        // sin `-threads`: la prueba del multihilo solo cubre DEcodificar, y
+        // un codificador con hilos se cuelga en Chrome (ver avi.ts); ffmpeg
+        // decide solo según el núcleo que corre
         '-hide_banner',
         '-loglevel',
         'error',

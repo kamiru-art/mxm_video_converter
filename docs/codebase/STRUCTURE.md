@@ -40,7 +40,8 @@
 | `web/src/worker.ts` | A command name to core function table. | Business rules. |
 | `web/src/phase*.ts` | The DOM of one phase and its event handling. | Direct WebAssembly calls; everything goes through `run()`. |
 | `web/src/project.ts` | The state shared between phases, in memory, and the on-demand decoding of frames that live in their video. | Persistence. |
-| `web/src/opfs.ts` | The only writer of the browser's private file system: the PNG cache of frames decoded by `ffmpeg.wasm`. | Anything else. |
+| `web/src/opfs.ts` | The only writer of the browser's private file system: the PNG cache of frames decoded by `ffmpeg.wasm`, and the output files (the ZIP and the PDF) written chunk by chunk. | Anything else. |
+| `web/src/zip.ts` | The streaming ZIP writer (`ZipSink`) and `makeZip` on top of it. | Deciding what goes in. |
 | `web/src/store.ts` | The only `localStorage` reader and writer. | Anything else. |
 
 ## 4) Naming and Organization Rules

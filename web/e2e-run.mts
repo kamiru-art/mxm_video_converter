@@ -82,10 +82,17 @@ const MIME: Record<string, string> = {
 // rompa la aplicación falle en este test y no en producción, que es donde una
 // CSP mal puesta se descubre tarde y sin señal: el navegador bloquea en
 // silencio y la página aparece simplemente vacía.
-const CSP = (await readFile(new URL('./public/_headers', import.meta.url), 'utf8'))
-  .match(/^[ \t]+Content-Security-Policy:[ \t]*(.+)$/m)?.[1]
-  ?.trim();
+const HEADERS_FILE = await readFile(new URL('./public/_headers', import.meta.url), 'utf8');
+const CSP = HEADERS_FILE.match(/^[ \t]+Content-Security-Policy:[ \t]*(.+)$/m)?.[1]?.trim();
 if (!CSP) throw new Error('No Content-Security-Policy in web/public/_headers');
+// Y el resto de cabeceras del bloque `/*` (COOP/COEP para el ffmpeg con
+// hilos): el test corre bajo las mismas que el sitio, así que una que
+// rompa la aplicación falla aquí y no en producción.
+const SITE_HEADERS: Record<string, string> = {};
+for (const line of HEADERS_FILE.split('\n')) {
+  const m = /^[ \t]+([A-Za-z-]+):[ \t]*(.+)$/.exec(line);
+  if (m && !/^Cache-Control$/i.test(m[1])) SITE_HEADERS[m[1]] = m[2];
+}
 
 const server = createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
@@ -95,7 +102,7 @@ const server = createServer(async (req, res) => {
     const data = await readFile(file);
     res.writeHead(200, {
       'Content-Type': MIME[extname(file)] ?? 'application/octet-stream',
-      'Content-Security-Policy': CSP,
+      ...SITE_HEADERS,
     });
     res.end(data);
   } catch {

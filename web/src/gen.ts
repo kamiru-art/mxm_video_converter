@@ -2,12 +2,13 @@
 // Orquesta al núcleo WASM página a página para no cargar todos los
 // fotogramas a resolución completa a la vez.
 
+import { openOutput } from './opfs.ts';
 import { recycleIdle, run, run0 } from './pool.ts';
 import type { RgbaImage, VideoRef } from './project.ts';
 import { isCyanotype } from './settings.ts';
 import type { Bytes, LayoutInfo, Settings, TimelineItem, VideoMeta } from './types.ts';
 import { context2d, sanitizeLabel, selectIndices } from './ui.ts';
-import type { ZipEntryData } from './zip.ts';
+import type { ZipEntryData, ZipSink } from './zip.ts';
 
 const NUM_FIELDS = [
   'dpi',
@@ -174,14 +175,14 @@ export interface GenFrame {
   w: number;
   h: number;
   hasAlpha: boolean;
-  /** El archivo original, para la copia de `_originals/`; nulo si no hay. */
+  /** El archivo original, para la copia de `_frames/`; nulo si no hay. */
   blob: Blob | null;
   getImageData: (full: boolean) => Promise<RgbaImage>;
   /** Fotograma que vive en su video (ProjectFrame.video): `prefetch` lo
    *  decodifica con los demás de su página. */
   video?: VideoRef;
-  /** Sin `blob`: produce el PNG para `_originals/` y `_frames/` al armar el
-   *  ZIP, y solo entonces. */
+  /** Sin `blob`: produce el PNG para `_frames/` al armar el ZIP, y solo
+   *  entonces. */
   encodePng?: () => Promise<Blob>;
 }
 
@@ -195,16 +196,27 @@ export interface GenerateArgs {
   pageNumbers?: number[] | null;
   timeline?: TimelineItem[];
   videoMeta?: VideoMeta;
-  keepOriginals?: boolean;
-  exportFrames?: boolean;
+  /** Incluir cada fotograma como archivo en `<nombre>_frames/`. Es UNA
+   *  cosa: la fase ② los necesita para las hojas de rescate (el layout apunta
+   *  a ellos) y de paso quedan para cualquier otro uso. Antes eran dos
+   *  opciones, "originals" y "export", que escribían los mismos archivos dos
+   *  veces y nadie sabía distinguir. */
+  includeFrames?: boolean;
   /** Antes de cada página seleccionada, con sus fotogramas: decodificar
    *  de golpe los que viven en un video (project.ts). */
   prefetch?: (frames: GenFrame[]) => Promise<void>;
+  /** Con un ZipSink, cada archivo entra en el ZIP en cuanto existe (hoja
+   *  a hoja) y `files` queda vacío; sin él, todo se devuelve en `files`
+   *  para que quien llama lo empaquete (hojas de rescate, pruebas). */
+  sink?: ZipSink;
   onProgress?: (done: number, total: number, note: string) => void;
 }
 
 export interface GenerateResult {
+  /** Vacío cuando se dio un `sink`. */
   files: Map<string, ZipEntryData>;
+  /** El ZIP terminado, cuando se dio un `sink`. */
+  zip?: Blob;
   /** PNG de cada hoja generada (solo proyectos cortos, para simular escaneos). */
   sheetImages: Map<string, Blob>;
   layoutJson: string | null;
@@ -245,9 +257,9 @@ async function generateSheetsInner({
   pageNumbers = null,
   timeline = [],
   videoMeta = {},
-  keepOriginals = true,
-  exportFrames = false,
+  includeFrames = true,
   prefetch = async () => {},
+  sink,
   onProgress = () => {},
 }: GenerateArgs): Promise<GenerateResult> {
   const s: Settings = { ...settings };
@@ -260,31 +272,32 @@ async function generateSheetsInner({
 
   const files = new Map<string, ZipEntryData>();
   const sheetImages = new Map<string, Blob>();
-  const originalesDir = s.registration_on && keepOriginals ? `${safeName}_originals` : '';
+  const originalesDir = includeFrames ? `${safeName}_frames` : '';
+  // al ZIP en cuanto existe, o a `files` para quien empaqueta después
+  const emit = async (name: string, data: ZipEntryData): Promise<void> => {
+    if (sink) await sink.add(name, data);
+    else files.set(name, data);
+  };
 
-  // copiar originales (para hojas de rescate); la ruta de cada copia va al
-  // layout, en el registro del fotograma
+  // los fotogramas como archivos; la ruta de cada uno va al layout, en el
+  // registro del fotograma, y es lo que la fase ② busca para el rescate. Se
+  // nombran ahora y se escriben al final, detrás de las hojas
   const origFiles: (string | undefined)[] = frames.map(() => undefined);
+  const frameEntries: [string, ZipEntryData][] = [];
   if (originalesDir) {
     const usados = new Set<string>();
     for (let i = 0; i < frames.length; i++) {
       const cand = uniqueName(sanitizeLabel(labels[i]), usados);
-      const ext = (frames[i].name?.match(/\.[a-z0-9]+$/i)?.[0] ?? '.png').toLowerCase();
+      // una imagen de carpeta conserva su formato; un fotograma de video es PNG
+      const ext = frames[i].blob
+        ? (frames[i].name?.match(/\.[a-z0-9]+$/i)?.[0] ?? '.png').toLowerCase()
+        : '.png';
       const data: ZipEntryData | undefined = frames[i].blob ?? frames[i].encodePng;
       if (data) {
         const path = `${originalesDir}/${cand}${ext}`;
-        files.set(path, data);
+        frameEntries.push([path, data]);
         origFiles[i] = path;
       }
-    }
-  }
-  if (exportFrames) {
-    const dir = `${safeName}_frames`;
-    const usados = new Set<string>();
-    for (let i = 0; i < frames.length; i++) {
-      const cand = uniqueName(sanitizeLabel(labels[i]), usados);
-      const data: ZipEntryData | undefined = frames[i].blob ?? frames[i].encodePng;
-      if (data) files.set(`${dir}/${cand}.png`, data);
     }
   }
 
@@ -298,13 +311,17 @@ async function generateSheetsInner({
   const fileDigits = Math.max(s.page_num_zeros ?? 1, String(maxPnum).length);
 
   if (s.fmt_pdf) await run0('pdf_new', { dpi: s.dpi });
-  // el PDF llega por bloques (uno por página y el cierre): como Blobs, el
-  // navegador puede sacarlos del heap; el núcleo no retiene ninguna página
-  const pdfParts: Blob[] = [];
+  // el PDF llega por bloques (uno por página y el cierre) y se escribe a un
+  // archivo de salida según llega: ni el núcleo ni la pestaña retienen páginas
+  const pdfOut = s.fmt_pdf
+    ? await openOutput(`${safeName}-${Date.now()}.pdf`, 'application/pdf')
+    : null;
 
   const records: Record<string, unknown>[] = [];
   let done = 0;
-  const totalSel = Math.max(1, pagesSelected.size);
+  // la barra cuenta hojas Y archivos de fotogramas: con un sink, escribirlos
+  // es la segunda mitad del trabajo, y antes la barra estaba al 100 % ahí
+  const totalSel = Math.max(1, pagesSelected.size + (sink ? frameEntries.length : 0));
   const coreSettings = settingsForCore(s);
 
   try {
@@ -370,14 +387,14 @@ async function generateSheetsInner({
         records.push(rec);
       }
       if (selected && res.png) {
-        if (s.fmt_pdf) pdfParts.push(new Blob([await run0('pdf_add', { png: res.png })]));
+        if (pdfOut) await pdfOut.write(await run0('pdf_add', { png: res.png }));
         if (s.fmt_tiff) {
           const tif = await run('encode_tiff', { png: res.png });
-          files.set(`${pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
+          await emit(`${pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
         }
         // como Blob: el navegador puede sacarlo del heap de JS hasta el ZIP
         const sheetBlob = new Blob([res.png], { type: 'image/png' });
-        if (s.fmt_png) files.set(`${pageBase}.png`, sheetBlob);
+        if (s.fmt_png) await emit(`${pageBase}.png`, sheetBlob);
         // proyectos cortos: se retienen para poder simular escaneos en la
         // fase ② sin imprimir (en uno largo serían cientos de megas)
         if (numPages <= DEMO_SHEET_LIMIT) sheetImages.set(`${pageBase}.png`, sheetBlob);
@@ -386,14 +403,16 @@ async function generateSheetsInner({
       }
     }
 
-    if (s.fmt_pdf) {
-      pdfParts.push(new Blob([await run0('pdf_finish', {})]));
-      files.set(`${safeName}.pdf`, new Blob(pdfParts, { type: 'application/pdf' }));
+    if (pdfOut) {
+      await pdfOut.write(await run0('pdf_finish', {}));
+      await emit(`${safeName}.pdf`, await pdfOut.close());
     }
   } catch (e) {
     // sin esto, un fallo a mitad de generación dejaría el PDF a medias vivo
-    // en el worker 0 (pinned para siempre, memoria retenida)
+    // en el worker 0 (pinned para siempre, memoria retenida), y su archivo
+    // de salida a medias en el disco
     if (s.fmt_pdf) await run0('pdf_abort', {}).catch(() => {});
+    await pdfOut?.abort();
     throw e;
   }
 
@@ -408,12 +427,32 @@ async function generateSheetsInner({
       video: JSON.stringify(videoMeta),
       originalesDir,
     });
-    files.set(`${safeName}_layout.json`, new TextEncoder().encode(layoutJson));
+    await emit(`${safeName}_layout.json`, new TextEncoder().encode(layoutJson));
   }
+
+  // los fotogramas, al final: con un sink es la parte larga del empaquetado
+  // (los de video se codifican ahora, en los workers)
+  const sheetsDone = done;
+  for (let i = 0; i < frameEntries.length; i++) {
+    const [name, data] = frameEntries[i];
+    await emit(name, data);
+    if (sink && (i % 10 === 9 || i === frameEntries.length - 1)) {
+      onProgress(sheetsDone + i + 1, totalSel, `frame files ${i + 1}/${frameEntries.length}`);
+    }
+  }
+  const zip = sink ? await sink.finish() : undefined;
 
   const layoutInfo = JSON.parse(
     await run('compute_layout', { settings: coreSettings, firstW, firstH }),
   ) as LayoutInfo;
   recycleIdle(); // devolver al sistema la memoria WASM que infló la generación
-  return { files, sheetImages, layoutJson, avisos: layoutInfo.avisos ?? [], numPages, layoutInfo };
+  return {
+    files,
+    zip,
+    sheetImages,
+    layoutJson,
+    avisos: layoutInfo.avisos ?? [],
+    numPages,
+    layoutInfo,
+  };
 }

@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
+const ISOLATION_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
 export default defineConfig({
   base: '/',
   build: {
@@ -23,4 +28,8 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  // las mismas cabeceras que public/_headers pone en el sitio: sin ellas el
+  // servidor de desarrollo no aísla el origen y ffmpeg corre en un hilo
+  server: { headers: ISOLATION_HEADERS },
+  preview: { headers: ISOLATION_HEADERS },
 });

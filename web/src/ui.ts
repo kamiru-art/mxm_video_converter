@@ -64,13 +64,34 @@ export function download(
   filename: string,
   mime = 'application/octet-stream',
 ): void {
+  revokeOldDownloads();
   const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = el('a', { href: url, download: filename });
   document.body.append(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  // La URL se queda viva: revocarla a los 30 s cortaba la descarga de un
+  // ZIP grande (Safari la cancelaba al instante, error -999, y dejaba un
+  // hojas.zip.download vacío). Se revocan las de hace más de diez minutos
+  // al pedir otra descarga (una segunda descarga no debe matar la primera,
+  // que en la fase ② es fácil), y todas al cerrar la página.
+  downloadUrls.push({ url, at: Date.now() });
+}
+
+const downloadUrls: { url: string; at: number }[] = [];
+const DOWNLOAD_URL_TTL = 10 * 60e3;
+function revokeOldDownloads(all = false): void {
+  const now = Date.now();
+  for (let i = downloadUrls.length - 1; i >= 0; i--) {
+    if (all || now - downloadUrls[i].at > DOWNLOAD_URL_TTL) {
+      URL.revokeObjectURL(downloadUrls[i].url);
+      downloadUrls.splice(i, 1);
+    }
+  }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => revokeOldDownloads(true));
 }
 
 /** Tiempo transcurrido y estimación de lo que falta, para una barra de

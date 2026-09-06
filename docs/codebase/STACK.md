@@ -30,8 +30,8 @@ a native `cargo test` run does not hold in the browser. See `CONCERNS.md`.
 | `console_error_panic_hook` | 0.1 | Sends a Rust panic to the browser console. `wasm32` target only. |
 
 The ArUco marker generation and detection, the RANSAC homography, the warp,
-the cyanotype curves and the PDF writer have no dependency: they are written
-in this repository.
+the cyanotype curves, the PDF writer and the ZIP writer (`web/src/zipwriter.ts`,
+ZIP64, store only) have no dependency: they are written in this repository.
 
 ### Web application (`web/package.json`)
 
@@ -39,7 +39,6 @@ in this repository.
 |------------|---------|----------------|
 | `mediabunny` | ^1.55.3 | Demuxes and muxes video with WebCodecs. It is the first decode path and the MP4/WebM encode path. |
 | `@ffmpeg/ffmpeg`, `@ffmpeg/core`, `@ffmpeg/util` | ^0.12 | The fallback decoder for files WebCodecs refuses, and the muxer for the two MOV exports. About 32 MB, loaded only when needed. |
-| `fflate` | ^0.8.3 | Builds the result ZIP files in the browser. |
 
 There is no UI framework. The interface is built with `document.createElement`
 through the `el()` helper in `web/src/ui.ts`.

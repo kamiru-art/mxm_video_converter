@@ -8,13 +8,22 @@ import type { Bytes, DecodedImage, RenderSheetOutput, ScanOutput } from './types
 /** Un fotograma de video tal como sale del decodificador: un ImageBitmap
  *  (WebCodecs) o RGBA de 8 bits sin comprimir (ffmpeg.wasm). Los dos son
  *  transferibles: el fotograma se mueve al worker, no se copia. */
-export type FrameSource = ImageBitmap | { rgba: Bytes; w: number; h: number };
+export type FrameSource = ImageBitmap | RawRgba;
+
+/** Píxeles RGBA de 8 bits sin comprimir, con su tamaño. */
+export interface RawRgba {
+  rgba: Bytes;
+  w: number;
+  h: number;
+}
 
 /** Lo que devuelve encode_frame: el PNG sin pérdida a resolución nativa (si
- *  se pidió) y la miniatura (si se pidió), que se transfiere de vuelta. */
+ *  se pidió) y la miniatura (si se pidió), como píxeles crudos. Crudos y no
+ *  como ImageBitmap a propósito: Safari dibujaba basura con un ImageBitmap
+ *  transferido desde un worker, y 147 KB de RGBA no tienen nada que fallar. */
 export interface EncodedFrame {
   png: Blob | null;
-  thumb: ImageBitmap | null;
+  thumb: RawRgba | null;
   w: number;
   h: number;
 }

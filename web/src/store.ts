@@ -33,6 +33,9 @@ interface StoreData {
   cianotipia?: Record<string, Stored<CyanProfile>>;
   cianotipia_color?: Record<string, Stored<ColorProfile>>;
   ajustes?: Partial<Settings>;
+  /** Resultados de pruebas del navegador que no cambian entre sesiones (la
+   *  del ffmpeg multihilo): evitan repetirlas en cada carga. */
+  flags?: Record<string, string>;
 }
 
 function loadAll(): StoreData {
@@ -122,6 +125,21 @@ export function importAll(json: string): void {
 }
 
 // último estado de ajustes de la fase ① (comodidad entre sesiones)
+export function loadFlag(name: string): string | null {
+  return loadAll().flags?.[name] ?? null;
+}
+
+/** Guarda una bandera. No lanza: perderla solo cuesta repetir la prueba. */
+export function saveFlag(name: string, value: string): void {
+  try {
+    const all = loadAll();
+    all.flags = { ...all.flags, [name]: value };
+    saveAll(all);
+  } catch {
+    /* sin almacenamiento: se probará otra vez la próxima vez */
+  }
+}
+
 export function loadSettings(): Partial<Settings> | null {
   return loadAll().ajustes ?? null;
 }
