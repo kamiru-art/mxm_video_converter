@@ -5,6 +5,20 @@
 
 import type { Bytes, DecodedImage, RenderSheetOutput, ScanOutput } from './types.ts';
 
+/** Un fotograma de video tal como sale del decodificador: un ImageBitmap
+ *  (WebCodecs) o RGBA de 8 bits sin comprimir (ffmpeg.wasm). Los dos son
+ *  transferibles: el fotograma se mueve al worker, no se copia. */
+export type FrameSource = ImageBitmap | { rgba: Bytes; w: number; h: number };
+
+/** Lo que devuelve encode_frame: el PNG sin pérdida a resolución nativa y la
+ *  miniatura, que se transfiere de vuelta. */
+export interface EncodedFrame {
+  png: Blob;
+  thumb: ImageBitmap;
+  w: number;
+  h: number;
+}
+
 export interface Commands {
   version: { args: Record<string, never>; result: string };
   compute_layout: {
@@ -106,6 +120,8 @@ export interface Commands {
     result: Bytes;
   };
   analyze_colorblocker: { args: { bytes: Bytes; paper: string; dpi: number }; result: string };
+  // Sin núcleo: PNG y miniatura de un fotograma de video (ver frames.ts)
+  encode_frame: { args: { image: FrameSource; thumbW: number }; result: EncodedFrame };
   // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
   pdf_new: { args: { dpi: number }; result: null };
   pdf_add: { args: { png: Bytes }; result: null };

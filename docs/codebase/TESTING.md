@@ -43,7 +43,10 @@ sample media with `ffmpeg` when `ffmpeg` is present: an MP4 for the WebCodecs
 path and an MPEG-4 ASP AVI, chosen because WebCodecs will not decode it and it
 therefore exercises the `ffmpeg.wasm` fallback. If `ffmpeg` is absent the page
 skips the video section instead of failing. CI installs `ffmpeg` so the
-section always runs there.
+section always runs there. Each decoder is also stopped half-way through an
+`AbortSignal`: the test requires `cancelled: true`, fewer frames than the
+clip has, and consecutive frame indices, because the PNGs are encoded in
+parallel and must still come out in order.
 
 `CHROME_PATH` selects the browser binary (`.github/workflows/ci.yml`).
 

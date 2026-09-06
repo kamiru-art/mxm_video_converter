@@ -40,6 +40,9 @@ Between phase 1 and phase 2, you do the manual work:
 
 ### Contact sheets
 
+- You can stop a long extraction with one button. The frames extracted so
+  far stay loaded, so you can change the range or the frame rate and extract
+  again.
 - You can set the grid, the paper size and the resolution in dots per inch.
 - The application selects the page orientation that fits best.
 - You can add labels and a sheet number.

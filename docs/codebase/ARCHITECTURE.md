@@ -45,9 +45,12 @@ Six steps, with evidence:
    the pixels are moved and not copied (`web/src/worker.ts`, the `transfer`
    arrays).
 
-The video path is separate and does not use the core: `web/src/video.ts` uses
-WebCodecs through `mediabunny`, and falls back to `ffmpeg.wasm` when the
-browser refuses a file.
+The video decoders are separate and do not use the core: `web/src/video.ts`
+uses WebCodecs through `mediabunny`, and falls back to `ffmpeg.wasm`
+(`web/src/avi.ts`) when the browser refuses a file. Both hand every decoded
+frame to `web/src/frames.ts`, which sends it through the same pool to an
+`encode_frame` command: the worker encodes the PNG and makes the thumbnail,
+several frames at a time, and the queue delivers them to the phase in order.
 
 ## 3) Layer/Module Responsibilities
 
@@ -74,6 +77,8 @@ browser refuses a file.
 | Module-level singleton | `web/src/project.ts` | One shared project object, imported by every phase. |
 | Adapter over storage | `web/src/store.ts` | Every read and write of `localStorage` is wrapped in `try`/`catch` in one place. |
 | Explicit buffer transfer | `web/src/worker.ts` | Pixel buffers are moved between threads instead of copied. |
+| Ordered encode queue | `web/src/frames.ts` (`FrameQueue`) | Encoding a 4K frame to PNG costs about 160 ms, and it used to run on the main thread one frame at a time while the hardware decoder waited. The queue sends each frame to a pool worker as an `ImageBitmap` or raw RGBA, keeps at most one job per worker plus one in flight, and emits the results in order, so the frame index is stable and the memory is bounded. Measured on a 4K HEVC clip of 56 s at 4 fps: 36 s before, 11 s after, with byte-identical PNGs. |
+| Cancellation by `AbortSignal` | `web/src/video.ts`, `web/src/avi.ts` | The two extractors accept a `signal`. WebCodecs checks it between frames; `ffmpeg.wasm` cannot be interrupted inside `exec`, so the abort terminates the instance and the rejected call is read as the stop, not as a failure. Both return what was delivered so far with `cancelled: true`, and the phase keeps those frames. |
 | Network-first document, cache-first assets | `web/src/sw.ts` | Vite hashes the asset names on each build, so a hand-written precache list would go stale. The service worker caches what the browser actually asks for. A hit under `/assets/` is final (the URL cannot change); everything else is refreshed in the background. |
 | Immutable cache for hashed files | `web/public/_headers` | Cloudflare serves static assets with `max-age=0, must-revalidate` by default. The files under `/assets/` are content-addressed, so the browser may keep them for a year. |
 
@@ -89,8 +94,12 @@ browser refuses a file.
   `rust-core/src/sheet.rs` receive attacker-shaped input, but the validation
   lives in scattered guards rather than in one place.
 - **Two decode paths must agree.** `web/src/video.ts` (WebCodecs) and
-  `web/src/avi.ts` (ffmpeg.wasm) both produce frames, and the frame naming has
-  to match between them, because the sheet labels depend on it.
+  `web/src/avi.ts` (ffmpeg.wasm) both produce frames. Since the PNG, the
+  thumbnail and the frame index all come from `web/src/frames.ts`, the two
+  paths can no longer disagree on those; what remains theirs is the sampling
+  of timestamps and the frame size. `avi.ts` reads the output size from
+  ffmpeg's log, because a raw frame carries no header and ffmpeg rotates
+  phone clips on its own.
 - **The core is one crate.** `rust-core/src/sheet.rs` and `scanproc.rs` are
   about 50 KB each and hold the layout rules, the render and the scan
   pipeline together.
@@ -99,4 +108,4 @@ browser refuses a file.
 
 - `web/src/main.ts`, `web/src/pool.ts`, `web/src/worker.ts`, `web/src/project.ts`
 - `rust-core/src/api.rs`, `rust-core/src/lib.rs`
-- `web/src/sw.ts`, `web/src/video.ts`, `web/src/avi.ts`
+- `web/src/sw.ts`, `web/src/video.ts`, `web/src/avi.ts`, `web/src/frames.ts`

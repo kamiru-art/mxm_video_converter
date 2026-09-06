@@ -384,6 +384,29 @@ async function main(): Promise<void> {
         });
         log(`video: ${meta.count} frames extraídos a 2 fps (nativo ${meta.fps.toFixed(1)} fps)`);
         if (got.length < 5) throw new Error('incomplete video extraction');
+        if (meta.cancelled) throw new Error('extraction reported cancelled without a signal');
+
+        // parar a mitad (todos los fotogramas: 36): el AbortSignal corta la
+        // extracción y devuelve lo ya entregado, en orden y con índices
+        // consecutivos; lo que estaba en los workers se entrega, no se pierde
+        const ctl = new AbortController();
+        let seen = 0;
+        const partial = await extractFrames(vblob, {
+          start: 0,
+          end: 3,
+          fps: null,
+          signal: ctl.signal,
+          onFrame: async (_b, _thumb, _t, i) => {
+            if (i !== seen) throw new Error(`frame ${i} arrived out of order (expected ${seen})`);
+            seen++;
+            if (seen === 2) ctl.abort();
+          },
+        });
+        log(
+          `video: parada a mitad tras ${partial.count} fotogramas (cancelled=${partial.cancelled})`,
+        );
+        if (!partial.cancelled || partial.count < 2 || partial.count >= 30)
+          throw new Error(`abort did not stop the extraction (${partial.count} frames)`);
         const getters = got.map((b) => () => createImageBitmap(b));
         const out2 = await buildVideo(getters, 2);
         log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
@@ -473,6 +496,28 @@ async function main(): Promise<void> {
           `AVI: ${meta.count} frames extraídos vía ffmpeg.wasm (${meta.fps} fps nativo detectado)`,
         );
         if (got.length < 5) throw new Error(`incomplete AVI extraction (${got.length})`);
+
+        // parar a mitad con ffmpeg.wasm: la parada termina la instancia en
+        // plena tanda (24 fotogramas) y la extracción devuelve lo entregado
+        const ctl = new AbortController();
+        let seen = 0;
+        const partial = await extractFrames(ablob, {
+          start: 0,
+          end: 2,
+          fps: null,
+          signal: ctl.signal,
+          onFrame: async (_b, _thumb, _t, i) => {
+            if (i !== seen)
+              throw new Error(`AVI frame ${i} arrived out of order (expected ${seen})`);
+            seen++;
+            if (seen === 2) ctl.abort();
+          },
+        });
+        log(
+          `AVI: parada a mitad tras ${partial.count} fotogramas (cancelled=${partial.cancelled})`,
+        );
+        if (!partial.cancelled || partial.count < 2 || partial.count >= 20)
+          throw new Error(`abort did not stop the AVI extraction (${partial.count} frames)`);
       } else {
         log('· (sin muestra AVI: prueba del decodificador de respaldo omitida)');
       }

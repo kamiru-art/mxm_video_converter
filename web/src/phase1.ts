@@ -223,10 +223,26 @@ export function mountPhase1(root: HTMLElement): void {
   const videoInfo = el('div', { class: 'hint' });
 
   const extractBtn = el('button', { class: 'btn blue small', disabled: '' }, 'Extract frames');
+  // Parar a mitad: un clip 4K largo son minutos, y muchas veces lo que se
+  // quiere es cambiar el rango o los fps y volver a empezar. Lo ya extraído
+  // se queda en pantalla: sirve para decidir con qué ajustes repetir.
+  const stopBtn = el('button', { class: 'btn ghost small' }, 'Stop');
+  stopBtn.style.display = 'none';
+  let extracting: AbortController | null = null;
+  stopBtn.addEventListener('click', () => {
+    extracting?.abort();
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping…';
+  });
   extractBtn.addEventListener('click', async () => {
     if (!pendingVideo) return;
     const video = pendingVideo;
+    const ctl = new AbortController();
+    extracting = ctl;
     extractBtn.disabled = true;
+    stopBtn.disabled = false;
+    stopBtn.textContent = 'Stop';
+    stopBtn.style.display = '';
     extractProg.show();
     clearFrames();
     try {
@@ -234,6 +250,7 @@ export function mountPhase1(root: HTMLElement): void {
         start: parseFloat(startIn.value) || 0,
         end: endIn.value ? parseFloat(endIn.value) : undefined,
         fps: allFrames.input.checked ? null : parseFloat(fpsIn.value) || null,
+        signal: ctl.signal,
         onFrame: async (blob, thumb, _t, i, w, h) => {
           // se guarda el origen (video + posición): la etiqueta "Original
           // file name" se construye después con el control de dígitos
@@ -253,7 +270,15 @@ export function mountPhase1(root: HTMLElement): void {
           extractProg.set(est ? i / est : 0.5, `frame ${i}${est ? ` of ~${est}` : ''}`),
       });
       project.videoMeta = { fps_extraccion: meta.fps, origen: meta.origen };
-      toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
+      if (meta.cancelled) {
+        toast(
+          meta.count
+            ? `Stopped after ${meta.count} frame(s). They stay loaded: change the range or the fps and extract again.`
+            : 'Stopped before the first frame.',
+        );
+      } else {
+        toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
+      }
       // sin await, un fallo del refresco escapaba del try y no se veía; y
       // dentro del catch de abajo se anunciaría como "Extraction failed",
       // que es justo lo contrario de lo que pasó
@@ -266,7 +291,9 @@ export function mountPhase1(root: HTMLElement): void {
     } catch (e) {
       toast(`Extraction failed: ${errMsg(e)}`, 'err');
     } finally {
+      extracting = null;
       extractBtn.disabled = false;
+      stopBtn.style.display = 'none';
       extractProg.hide();
     }
   });
@@ -1134,7 +1161,7 @@ export function mountPhase1(root: HTMLElement): void {
       field('fps', fpsIn),
     ),
     allFrames.label,
-    extractBtn,
+    el('div', { class: 'btn-row' }, extractBtn, stopBtn),
     extractProg.root,
 
     el('h3', {}, 'Selection & names'),

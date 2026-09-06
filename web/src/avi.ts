@@ -7,7 +7,8 @@
 import type { LogEvent } from '@ffmpeg/ffmpeg';
 import { FFFSType, FFmpeg } from '@ffmpeg/ffmpeg';
 import { BadRangeError } from './errors.ts';
-import { context2d } from './ui.ts';
+import { FrameQueue } from './frames.ts';
+import type { Bytes } from './types.ts';
 import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
 
 // video.ts monta sus PNG por WORKERFS con la misma instancia: el enum sale de
@@ -195,15 +196,36 @@ export function probeFallback(file: File): Promise<ProbeResult> {
   });
 }
 
+/** Tamaño real de la salida, del log de ffmpeg. Hace falta porque ffmpeg
+ *  endereza solo los clips con rotación en los metadatos (un móvil en
+ *  vertical): el flujo dice 1920×1080 y los fotogramas salen de 1080×1920,
+ *  y un fotograma crudo no lleva cabecera que lo diga. */
+function parseOutputSize(message: string): [number, number] | null {
+  const m = /Video: rawvideo[^\n]*?,\s*(\d{2,5})x(\d{2,5})/.exec(message);
+  return m ? [+m[1], +m[2]] : null;
+}
+
 /**
- * Extrae fotogramas como PNG por tandas (la memoria WASM solo retiene una
- * tanda a la vez). Misma interfaz que extractFrames de video.ts.
+ * Extrae fotogramas por tandas (la memoria de ffmpeg solo retiene una tanda
+ * a la vez). ffmpeg entrega RGBA crudo y el PNG lo hacen los workers del
+ * pool (frames.ts), como en el camino de WebCodecs: el codificador PNG de
+ * ffmpeg.wasm tardaba ~600 ms por fotograma 4K, uno detrás de otro, y el
+ * hilo principal volvía a decodificar cada PNG solo para sacar la miniatura.
+ * Misma interfaz que extractFrames de video.ts.
  */
 export function extractFramesFallback(
   file: File,
   opts: ExtractOptions = {},
 ): Promise<ExtractResult> {
   return withFF(async (ff) => {
+    // Parar = terminar la instancia: exec bloquea el worker de ffmpeg y no
+    // hay otra forma de interrumpirlo. La llamada pendiente se rechaza, y el
+    // bucle de abajo reconoce la parada por `signal.aborted`. release()
+    // deja ffPromise a null, así que la siguiente sesión arranca otra.
+    const onAbort = (): void => {
+      void release();
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     const path = await mountInput(ff, file);
     try {
       const probe = await probeLoaded(ff, path);
@@ -224,68 +246,94 @@ export function extractFramesFallback(
       const fps = opts.fps || probe.fps || 12;
       const dt = 1 / fps;
       const est = Math.max(1, Math.round((end - start) * fps));
-      // los PNG de cada tanda viven en la memoria WASM: tandas cortas en 4K/6K
+      // los fotogramas crudos de cada tanda (w×h×4 bytes cada uno: 33 MB en
+      // 4K) viven en el sistema de archivos de ffmpeg hasta que se leen:
+      // tandas cortas en 4K/6K. Cada tanda vuelve a buscar desde el fotograma
+      // clave anterior, así que tampoco conviene que sean minúsculas.
       const BATCH = Math.max(
         4,
         Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * 4))),
       );
-      let count = 0;
-      let t = start;
-      while (t < end - 1e-9) {
-        if (opts.cancelled?.()) break;
-        const want = Math.min(BATCH, Math.max(1, Math.round((end - t) * fps)));
-        await ff.exec([
-          '-hide_banner',
-          '-loglevel',
-          'error',
-          '-ss',
-          t.toFixed(4),
-          '-i',
-          path,
-          '-vf',
-          `fps=${fps}`,
-          '-frames:v',
-          String(want),
-          // rgb24: el resto del pipeline es de 8 bits; PNG de 16 bits solo
-          // duplicaría la memoria (fuentes de 10 bits incluidas)
-          '-pix_fmt',
-          'rgb24',
-          '-f',
-          'image2',
-          'f_%03d.png',
-        ]);
-        let got = 0;
-        for (let i = 1; i <= want; i++) {
-          const name = `f_${String(i).padStart(3, '0')}.png`;
-          let data: Uint8Array | string;
-          try {
-            data = await ff.readFile(name);
-          } catch {
+      const queue = new FrameQueue(opts, est);
+      let outSize: [number, number] | null = null;
+      const onLog = ({ message }: LogEvent): void => {
+        outSize ??= parseOutputSize(message);
+      };
+      ff.on('log', onLog);
+      let cancelled = false;
+      try {
+        let t = start;
+        while (t < end - 1e-9) {
+          if (opts.signal?.aborted) {
+            cancelled = true;
             break;
           }
-          await ff.deleteFile(name);
-          if (typeof data === 'string')
-            throw new Error('The video decoder returned text instead of image bytes.');
-          got++;
-          // readFile copia el PNG fuera de la memoria WASM: ArrayBuffer propio
-          const blob = new Blob([data as Uint8Array<ArrayBuffer>], { type: 'image/png' });
-          const bmp = await createImageBitmap(blob);
-          const tw = 256;
-          const th = Math.max(1, Math.round((bmp.height / bmp.width) * tw));
-          const thumb = new OffscreenCanvas(tw, th);
-          context2d(thumb).drawImage(bmp, 0, 0, tw, th);
-          const { width: w, height: h } = bmp;
-          bmp.close();
-          await opts.onFrame?.(blob, thumb, t + (i - 1) * dt, count, w, h);
-          count++;
-          opts.onProgress?.(count, est);
-          if (opts.cancelled?.()) break;
+          const want = Math.min(BATCH, Math.max(1, Math.round((end - t) * fps)));
+          await ff.exec([
+            '-hide_banner',
+            // info, no error: la línea "Output … rawvideo … WxH" es la que
+            // dice el tamaño real de los fotogramas (ver parseOutputSize)
+            '-loglevel',
+            'info',
+            '-nostats',
+            '-ss',
+            t.toFixed(4),
+            '-i',
+            path,
+            '-vf',
+            `fps=${fps}`,
+            '-frames:v',
+            String(want),
+            // RGBA de 8 bits, sin comprimir: es lo que el worker vuelca en el
+            // lienzo tal cual. El resto del pipeline es de 8 bits (fuentes
+            // de 10 bits incluidas), y el PNG lo hace el navegador.
+            '-c:v',
+            'rawvideo',
+            '-pix_fmt',
+            'rgba',
+            '-f',
+            'image2',
+            'f_%03d.raw',
+          ]);
+          const [w, h] = outSize ?? [probe.width, probe.height];
+          let got = 0;
+          for (let i = 1; i <= want; i++) {
+            const name = `f_${String(i).padStart(3, '0')}.raw`;
+            let data: Uint8Array | string;
+            try {
+              data = await ff.readFile(name);
+            } catch {
+              break;
+            }
+            await ff.deleteFile(name);
+            if (typeof data === 'string')
+              throw new Error('The video decoder returned text instead of image bytes.');
+            got++;
+            // readFile copia el fotograma fuera de ffmpeg: ArrayBuffer
+            // propio, que se transfiere al worker sin otra copia
+            await queue.push({ rgba: data as Bytes, w, h }, t + (i - 1) * dt);
+          }
+          if (!got) break; // fin del archivo antes de lo estimado
+          t += got * dt;
         }
-        if (!got) break; // fin del archivo antes de lo estimado
-        t += got * dt;
+      } catch (e) {
+        // la instancia terminada por onAbort rechaza el exec o el readFile
+        // en curso: no es un fallo, es la parada
+        if (!opts.signal?.aborted) throw e;
+        cancelled = true;
+      } finally {
+        ff.off('log', onLog);
       }
-      return { count, fps, duration: probe.duration, origen: file.name };
+      // lo que ya estaba en los workers se entrega igual, en orden
+      await queue.finish();
+      return { count: queue.count, fps, duration: probe.duration, origen: file.name, cancelled };
+    } catch (e) {
+      // parada durante el sondeo (probeLoaded traga el exec rechazado y
+      // dice "could not be decoded"): tampoco es un fallo
+      if (!opts.signal?.aborted) throw e;
+      return { count: 0, fps: opts.fps || 12, duration: 0, origen: file.name, cancelled: true };
     } finally {
+      opts.signal?.removeEventListener('abort', onAbort);
       // withFF libera la instancia (~350 MB) al no quedar sesiones en cola
       await unmountInput(ff);
     }
