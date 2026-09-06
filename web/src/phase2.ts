@@ -614,10 +614,10 @@ export function mountPhase2(root: HTMLElement): void {
     assignSlot.append(el('div', { class: 'assign-box' },
       el('strong', {}, `${pending.length} scan${pending.length > 1 ? 's' : ''} with no sheet identified`),
       el('div', { class: 'hint assign-hint' },
-        'The markers straightened the sheet, but nothing said WHICH sheet it is: the QR is painted over, '
-        + 'unreadable, or the project identifies sheets by QR only. '
-        + `${whereTheSheetNumberIs()}, or recognise the drawings in the thumbnails below, and pick the sheet here. `
-        + 'The scan is reprocessed on the spot and its frames come out with their real labels.'),
+        'The markers straightened the sheet, but nothing identified it: the QR is painted over or unreadable, '
+        + 'or the project identifies sheets by QR only. '
+        + `${whereTheSheetNumberIs()}, or recognise the drawings in the thumbnails, and pick the sheet here. `
+        + 'The scan is reprocessed at once with the right labels.'),
       ...pending.map((e) => el('div', { class: 'assign-row' },
         el('span', { class: 'mono' }, e.result.scan),
         assignControl(e.result.scan))),
@@ -723,7 +723,7 @@ export function mountPhase2(root: HTMLElement): void {
   const rescueInfo = el('div', { class: 'hint' });
   const rescueDz = dropzone({
     label: 'Drop the project originals folder (…_originals/)',
-    sublabel: 'The copies phase ① saved next to the layout. They let you reprint ONLY the failed frames.',
+    sublabel: 'The copies phase ① saved next to the layout, to reprint only the failed frames.',
     accept: 'image/*,.tif,.tiff', multiple: true, dark: true,
     onFiles: (files) => {
       for (const f of files) rescueOriginals.set(f.name.replace(/\.[^.]+$/, ''), f);
@@ -878,7 +878,7 @@ export function mountPhase2(root: HTMLElement): void {
 
   const paper = el('div', { class: 'paper' },
     el('h2', {}, '② Process scans'),
-    el('div', { class: 'hint' }, 'The app straightens each sheet with the markers, identifies it by its marker IDs (or its QRs, on older projects) and crops every frame. If nothing identifies a sheet, you can tell the app which one it is in the report. No Photoshop.'),
+    el('div', { class: 'hint' }, 'Straightens each sheet with its markers, identifies it by marker IDs (or QRs on older projects) and crops every frame. A sheet nothing identifies can be assigned by hand in the report.'),
     layoutDz, useCurrentBtn, layoutInfo,
     el('h3', {}, 'Options'),
     // campos apilados: con hints de largos distintos, en fila quedaban
@@ -886,7 +886,7 @@ export function mountPhase2(root: HTMLElement): void {
     field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
     field('Minimum markers', minMarkersIn),
     field('Detection mode', modeSel),
-    field('Machine RAM (GB)', ramIn, 'Browsers cap what they report at 8 GB. Your real value lets more scans run in parallel.'),
+    field('Machine RAM (GB)', ramIn, 'Browsers report at most 8 GB. The real value lets more scans run in parallel.'),
     resizeCheck.label, patchesCheck.label, fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,

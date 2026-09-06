@@ -93,8 +93,8 @@ export function mountPhase3(root: HTMLElement): void {
   let aResult: PrinterProfile | null = null;
   const aOut = el('div');
   const cardA = calibCard('Printer profile',
-    'Measures your printer’s real scale, its tonal response and the smallest marker and QR it still prints readably. '
-    + 'Print the page at 100 %, scan it whole and drop it back here. Start with this one: phase ① uses it to compensate the paper.',
+    'Measures the real print scale, the tonal response and the smallest marker and QR your printer still prints legibly. '
+    + 'Print at 100 %, scan the whole page and drop it here. Phase ① uses this profile to correct the scale.',
     el('div', { class: 'row' },
       field('Paper', aPaper), field('DPI', aDpi),
       field('Scan DPI', aScanDpi, 'The DPI you scanned at.'),
@@ -149,8 +149,8 @@ export function mountPhase3(root: HTMLElement): void {
   const bCanvas = el('canvas', { class: 'curveplot', width: 360, height: 240, style: 'width:100%; max-width:380px; margin-top:8px' });
   bCanvas.style.display = 'none';
   const cardB = calibCard('Cyanotype curve',
-    'Measures the real response of YOUR process (printer + film + chemistry + sun) and builds the compensation curve '
-    + '(Easy Digital Negatives method built in). Expose the chart the way you expose your work, or the curve measures a different process.',
+    'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve '
+    + '(Easy Digital Negatives method). Expose the chart exactly as you expose your work.',
     el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
     field('Chart', bTarget),
     el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
@@ -203,8 +203,8 @@ export function mountPhase3(root: HTMLElement): void {
   let cResult: ColorProfile | null = null;
   const cOut = el('div');
   const cardC = calibCard('EDN ColorBlocker',
-    '36 hues × 21 variants: finds which ink color blocks UV best on YOUR printer (black doesn’t always win) and builds a 3-stop gradient. '
-    + 'Print it at maximum quality; this chart is the one that suffers most from a draft setting.',
+    '36 hues × 21 variants: finds the ink color that blocks UV best on your printer (not always black) and builds a 3-stop gradient. '
+    + 'Print at maximum quality: a draft setting ruins this chart.',
     el('div', { class: 'row' }, field('Paper', cPaper), field('DPI', cDpi)),
     cMirror.label,
     el('button', {
@@ -253,8 +253,8 @@ export function mountPhase3(root: HTMLElement): void {
 
   // ── exportar/importar perfiles ────────────────────────────
   const cardD = calibCard('Your profiles & presets',
-    'They live in this browser, not in a server, so clearing site data takes them with it. Export a JSON to move them to '
-    + 'another machine, to keep them beside the project, or simply to have a copy of an afternoon you cannot repeat.',
+    'Stored in this browser only: clearing site data deletes them. Export a JSON to move them to another machine '
+    + 'or to keep a copy with the project.',
     // rotuladas como los campos de las otras tarjetas: así las cuatro
     // arrancan su primer control a la misma altura
     el('div', { class: 'row' },
