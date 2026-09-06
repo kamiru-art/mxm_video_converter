@@ -4,9 +4,7 @@
 use crate::aruco_dicts as dicts;
 use crate::geometry::{find_homography_dlt, Pt};
 use crate::img::Gray;
-use crate::imgproc::{
-    adaptive_threshold_inv, approx_poly, find_contours, is_convex, polygon_area,
-};
+use crate::imgproc::{adaptive_threshold_inv, approx_poly, find_contours, is_convex, polygon_area};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -54,7 +52,9 @@ pub fn marker_bits(dict: Dict, id: usize) -> Vec<u8> {
     let n = dict.n();
     let word = dict.markers()[id];
     let total = n * n;
-    (0..total).map(|i| ((word >> (total - 1 - i)) & 1) as u8).collect()
+    (0..total)
+        .map(|i| ((word >> (total - 1 - i)) & 1) as u8)
+        .collect()
 }
 
 fn rotate_bits(bits: &[u8], n: usize) -> Vec<u8> {
@@ -87,7 +87,11 @@ pub fn generate_marker(dict: Dict, id: usize, size_px: usize) -> Gray {
                 0
             } else {
                 let bit = bits[(my - 1) * n + (mx - 1)];
-                if bit == 1 { 255 } else { 0 }
+                if bit == 1 {
+                    255
+                } else {
+                    0
+                }
             };
             out.data[y * size_px + x] = v;
         }
@@ -231,9 +235,10 @@ fn identify(cells: &[f64], dict: Dict, params: &DetectorParams) -> Option<(usize
     for r in 0..modules {
         for c in 0..modules {
             if (r == 0 || c == 0 || r == modules - 1 || c == modules - 1)
-                && bin[r * modules + c] == 1 {
-                    bad_border += 1;
-                }
+                && bin[r * modules + c] == 1
+            {
+                bad_border += 1;
+            }
         }
     }
     if bad_border as f32 > params.max_bad_border_rate * border_total as f32 {
@@ -378,7 +383,13 @@ pub fn detect_markers(gray: &Gray, dict: Dict, params: &DetectorParams) -> Vec<D
                     refine_corner(gray, q[2], win_r),
                     refine_corner(gray, q[3], win_r),
                 ];
-                found.insert(id, Detection { id, corners: refined });
+                found.insert(
+                    id,
+                    Detection {
+                        id,
+                        corners: refined,
+                    },
+                );
             }
         }
     }
@@ -435,8 +446,14 @@ mod tests {
             for (nombre, params) in [("normal", PARAMS_NORMAL), ("cyano", PARAMS_CYANO)] {
                 let allowed = allowed_correction(dict, params.error_correction_rate);
                 assert!(allowed >= 1, "{dict:?}/{nombre}: corrección desactivada");
-                assert!(allowed <= cap, "{dict:?}/{nombre}: allowed={allowed} > cap={cap}");
-                assert!(2 * allowed < tau, "{dict:?}/{nombre}: allowed={allowed} tau={tau}");
+                assert!(
+                    allowed <= cap,
+                    "{dict:?}/{nombre}: allowed={allowed} > cap={cap}"
+                );
+                assert!(
+                    2 * allowed < tau,
+                    "{dict:?}/{nombre}: allowed={allowed} tau={tau}"
+                );
             }
             // Sin corrección pedida, sin corrección aplicada.
             assert_eq!(allowed_correction(dict, 0.0), 0);
@@ -508,7 +525,11 @@ mod tests {
         assert_eq!(dets[0].id, 5);
         // TL canónica del marcador girado 90° horario queda en la esquina TR de la imagen
         let c = dets[0].corners;
-        assert!((c[0].0 - 220.0).abs() < 3.0 && (c[0].1 - 100.0).abs() < 3.0, "{:?}", c);
+        assert!(
+            (c[0].0 - 220.0).abs() < 3.0 && (c[0].1 - 100.0).abs() < 3.0,
+            "{:?}",
+            c
+        );
     }
 
     #[test]

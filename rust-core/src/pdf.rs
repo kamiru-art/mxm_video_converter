@@ -15,7 +15,10 @@ pub struct PdfBuilder {
 
 impl PdfBuilder {
     pub fn new(dpi: u32) -> Self {
-        PdfBuilder { dpi: dpi as f64, pages: Vec::new() }
+        PdfBuilder {
+            dpi: dpi as f64,
+            pages: Vec::new(),
+        }
     }
 
     pub fn add_page(&mut self, img: &Rgb) {
@@ -36,7 +39,12 @@ impl PdfBuilder {
         let kids: Vec<String> = (0..n_pages).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
         objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
         objects.push(
-            format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), n_pages).into_bytes(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {} >>",
+                kids.join(" "),
+                n_pages
+            )
+            .into_bytes(),
         );
         for (i, (w, h, data)) in self.pages.iter().enumerate() {
             let pw = *w as f64 * 72.0 / self.dpi;

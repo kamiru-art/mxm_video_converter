@@ -73,7 +73,9 @@ fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
         l.max_alloc = Some(MAX_DECODE_BYTES);
         l
     });
-    let img = reader.decode().map_err(|e| format!("Could not decode the image: {e}"))?;
+    let img = reader
+        .decode()
+        .map_err(|e| format!("Could not decode the image: {e}"))?;
     let (w, h) = (img.width() as u64, img.height() as u64);
     if w * h > MAX_DECODE_PIXELS {
         return Err(format!("Image too large ({w}×{h})."));
@@ -82,8 +84,14 @@ fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
     let has_alpha = color.has_alpha();
     let sixteen = color.bits_per_pixel() / color.channel_count() as u16 > 8;
     let already_rgb = matches!(color, image::ColorType::Rgb8 | image::ColorType::Rgb16);
-    let peak =
-        decode_peak_bytes(w, h, color.bytes_per_pixel() as u64, if sixteen { 6 } else { 3 }, has_alpha, already_rgb);
+    let peak = decode_peak_bytes(
+        w,
+        h,
+        color.bytes_per_pixel() as u64,
+        if sixteen { 6 } else { 3 },
+        has_alpha,
+        already_rgb,
+    );
     if peak > MAX_DECODE_BYTES {
         return Err(format!(
             "Image too heavy to decode ({w}×{h} at {} bits per channel needs about {} MB, and the \
@@ -93,7 +101,11 @@ fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
             MAX_CORE_BYTES / (1024 * 1024)
         ));
     }
-    Ok(Decoded { img, sixteen, has_alpha })
+    Ok(Decoded {
+        img,
+        sixteen,
+        has_alpha,
+    })
 }
 
 /// Decodifica bytes de un archivo de imagen a DynImg (8 o 16 bits RGB),
@@ -101,7 +113,11 @@ fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
 /// Es el camino de los ESCANEOS: un escaneo no tiene transparencia, y si la
 /// trae es ruido del formato, así que blanco (el papel) es la respuesta.
 pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
-    let Decoded { img, sixteen, has_alpha } = decode_checked(bytes)?;
+    let Decoded {
+        img,
+        sixteen,
+        has_alpha,
+    } = decode_checked(bytes)?;
 
     // Camino rápido, y es el de TODOS los escaneos: sin alfa no hay nada que
     // aplanar, así que into_rgb16/into_rgb8 se LLEVA el búfer en vez de
@@ -114,11 +130,19 @@ pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
             if sixteen {
                 let b = img.into_rgb16();
                 let (w, h) = (b.width() as usize, b.height() as usize);
-                DynImg::U16(Rgb16 { w, h, data: b.into_raw() })
+                DynImg::U16(Rgb16 {
+                    w,
+                    h,
+                    data: b.into_raw(),
+                })
             } else {
                 let b = img.into_rgb8();
                 let (w, h) = (b.width() as usize, b.height() as usize);
-                DynImg::U8(Rgb { w, h, data: b.into_raw() })
+                DynImg::U8(Rgb {
+                    w,
+                    h,
+                    data: b.into_raw(),
+                })
             },
             false,
         ));
@@ -161,7 +185,11 @@ pub fn decode(bytes: &[u8]) -> Result<(DynImg, bool), String> {
 /// con su alfa intacto: el mismo ajuste funcionaba o no según el formato.
 /// Devuelve (rgba, w, h, era_de_16_bits, tenía_alfa).
 pub fn decode_rgba8(bytes: &[u8]) -> Result<(Vec<u8>, usize, usize, bool, bool), String> {
-    let Decoded { img, sixteen, has_alpha } = decode_checked(bytes)?;
+    let Decoded {
+        img,
+        sixteen,
+        has_alpha,
+    } = decode_checked(bytes)?;
     // into_ y no to_: la imagen es nuestra, así que un RGBA8 de origen se
     // mueve en vez de duplicarse
     let rgba = img.into_rgba8();
@@ -184,9 +212,12 @@ pub fn encode_png_dyn(img: &DynImg) -> Vec<u8> {
     match img {
         DynImg::U8(i) => encode_png_rgb(i),
         DynImg::U16(i) => {
-            let buf =
-                image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_raw(i.w as u32, i.h as u32, i.data.clone())
-                    .unwrap();
+            let buf = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_raw(
+                i.w as u32,
+                i.h as u32,
+                i.data.clone(),
+            )
+            .unwrap();
             let mut out = Vec::new();
             DynamicImage::ImageRgb16(buf)
                 .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Png)
@@ -228,7 +259,8 @@ pub fn encode_jpeg_rgb(img: &Rgb, quality: u8) -> Vec<u8> {
     {
         let mut cursor = std::io::Cursor::new(&mut out);
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
-        enc.encode_image(&DynamicImage::ImageRgb8(buf)).expect("JPEG en memoria");
+        enc.encode_image(&DynamicImage::ImageRgb8(buf))
+            .expect("JPEG en memoria");
     }
     out
 }
@@ -262,7 +294,11 @@ mod tests {
 
     #[test]
     fn png_roundtrip_16bit() {
-        let img = Rgb16 { w: 8, h: 8, data: vec![0x1234; 8 * 8 * 3] };
+        let img = Rgb16 {
+            w: 8,
+            h: 8,
+            data: vec![0x1234; 8 * 8 * 3],
+        };
         let png = encode_png_dyn(&DynImg::U16(img));
         let (dec, _) = decode(&png).unwrap();
         match dec {
@@ -288,7 +324,11 @@ mod tests {
         let png = rgba8_png([10, 20, 30, 0]);
         let (rgba, w, h, sixteen, alpha) = decode_rgba8(&png).unwrap();
         assert!(alpha && !sixteen && w == 4 && h == 4);
-        assert_eq!(&rgba[0..4], &[10, 20, 30, 0], "el alfa tiene que llegar vivo");
+        assert_eq!(
+            &rgba[0..4],
+            &[10, 20, 30, 0],
+            "el alfa tiene que llegar vivo"
+        );
 
         // y el camino de escaneos sigue aplanando sobre blanco
         match decode(&png).unwrap().0 {
@@ -328,22 +368,34 @@ mod tests {
         let (w, h) = (9921u64, 14031u64);
         let una_copia = w * h * 6;
         assert_eq!(decode_peak_bytes(w, h, 6, 6, false, true), una_copia);
-        assert!(decode_peak_bytes(w, h, 6, 6, false, true) <= MAX_DECODE_BYTES, "A4@1200 16 bits tiene que entrar");
+        assert!(
+            decode_peak_bytes(w, h, 6, 6, false, true) <= MAX_DECODE_BYTES,
+            "A4@1200 16 bits tiene que entrar"
+        );
         // Y así es como se rechazaba antes: el cálculo viejo suponía un RGBA
         // intermedio SIEMPRE (20 B/px en 16 bits) contra un tope de 1 GiB.
         const TOPE_VIEJO: u64 = 1024 * 1024 * 1024;
-        assert!(w * h * 20 > TOPE_VIEJO, "2,59 GiB pedidos contra 1 GiB de tope");
+        assert!(
+            w * h * 20 > TOPE_VIEJO,
+            "2,59 GiB pedidos contra 1 GiB de tope"
+        );
         assert!(una_copia <= TOPE_VIEJO, "y solo hacían falta 0,78 GiB");
 
         // A3 a 600 dpi en 16 bits, que también se rechazaba, ahora entra
         assert!(decode_peak_bytes(7016, 9921, 6, 6, false, true) <= MAX_DECODE_BYTES);
 
         // el alfa sí paga el aplanado: original + RGBA + salida
-        assert_eq!(decode_peak_bytes(10, 10, 8, 6, true, false), 100 * (8 + 8 + 6));
+        assert_eq!(
+            decode_peak_bytes(10, 10, 8, 6, true, false),
+            100 * (8 + 8 + 6)
+        );
         // y una conversión sin alfa paga origen + destino, no más
         assert_eq!(decode_peak_bytes(10, 10, 2, 6, false, false), 100 * (2 + 6));
 
         // lo que sigue sin caber, porque wasm32 no lo puede direccionar
-        assert!(decode_peak_bytes(23386, 33071, 6, 6, false, true) > MAX_DECODE_BYTES, "A3@2000 16 bits no cabe");
+        assert!(
+            decode_peak_bytes(23386, 33071, 6, 6, false, true) > MAX_DECODE_BYTES,
+            "A3@2000 16 bits no cabe"
+        );
     }
 }

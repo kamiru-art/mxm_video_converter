@@ -133,9 +133,21 @@ mod tests {
         let white = Rgb::new(64, 48, [255, 255, 255]);
         let red = Rgb::new(64, 48, [255, 0, 0]);
         let (hb, hw, hr) = (dhash(&black), dhash(&white), dhash(&red));
-        assert!(hamming(&hb, &hw) > 4, "negro vs blanco: {}", hamming(&hb, &hw));
-        assert!(hamming(&hb, &hr) > 4, "negro vs rojo: {}", hamming(&hb, &hr));
-        assert!(hamming(&hr, &hw) > 4, "rojo vs blanco: {}", hamming(&hr, &hw));
+        assert!(
+            hamming(&hb, &hw) > 4,
+            "negro vs blanco: {}",
+            hamming(&hb, &hw)
+        );
+        assert!(
+            hamming(&hb, &hr) > 4,
+            "negro vs rojo: {}",
+            hamming(&hb, &hr)
+        );
+        assert!(
+            hamming(&hr, &hw) > 4,
+            "rojo vs blanco: {}",
+            hamming(&hr, &hw)
+        );
 
         let (reps, rep_of) = find_duplicates(&[hb, hw, hr], 4);
         assert_eq!(reps.len(), 3, "los tres planos son fotogramas distintos");

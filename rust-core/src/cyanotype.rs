@@ -34,7 +34,10 @@ pub fn ink_ramp(ink_color: &str, stops: Option<&[InkStop]>) -> [[u8; 3]; 256] {
     match stops {
         Some(ss) if !ss.is_empty() => {
             for &(d, col) in ss {
-                anchors.push((d.clamp(0.0, 255.0), [col[0] as f64, col[1] as f64, col[2] as f64]));
+                anchors.push((
+                    d.clamp(0.0, 255.0),
+                    [col[0] as f64, col[1] as f64, col[2] as f64],
+                ));
             }
             anchors.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             if anchors[0].0 > 0.5 {
@@ -63,7 +66,11 @@ pub fn ink_ramp(ink_color: &str, stops: Option<&[InkStop]>) -> [[u8; 3]; 256] {
         }
         let (x0, c0) = anchors[i];
         let (x1, c1) = anchors[(i + 1).min(anchors.len() - 1)];
-        let t = if x1 > x0 { ((x - x0) / (x1 - x0)).clamp(0.0, 1.0) } else { 0.0 };
+        let t = if x1 > x0 {
+            ((x - x0) / (x1 - x0)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         for ch in 0..3 {
             ramp[d][ch] = (c0[ch] + (c1[ch] - c0[ch]) * t).round().clamp(0.0, 255.0) as u8;
         }
@@ -91,7 +98,9 @@ pub fn effective_lut(
         Some(l) if l.len() == 256 => l.iter().map(|&v| v.clamp(0.0, 255.0)).collect(),
         _ => ident.clone(),
     };
-    let base: Vec<f64> = (0..256).map(|i| ident[i] * (1.0 - a) + cal[i] * a).collect();
+    let base: Vec<f64> = (0..256)
+        .map(|i| ident[i] * (1.0 - a) + cal[i] * a)
+        .collect();
 
     let b = (adapt.clamp(0.0, 100.0)) / 100.0;
     let mut out = base.clone();
@@ -140,7 +149,10 @@ pub fn effective_lut(
             }
         }
     }
-    let is_ident = out.iter().enumerate().all(|(i, &v)| (v - i as f64).abs() < 1e-9);
+    let is_ident = out
+        .iter()
+        .enumerate()
+        .all(|(i, &v)| (v - i as f64).abs() < 1e-9);
     if is_ident {
         None
     } else {
@@ -186,7 +198,11 @@ pub fn make_negative(
         let di = d.round().clamp(0.0, 255.0) as usize;
         out.extend_from_slice(&ramp[di]);
     }
-    Rgb { w: gray.w, h: gray.h, data: out }
+    Rgb {
+        w: gray.w,
+        h: gray.h,
+        data: out,
+    }
 }
 
 /// Colorea un parche gris interpretándolo como densidad INVERTIDA
@@ -197,7 +213,11 @@ pub fn colorize_gray_patch(img: &Gray, ink_color: &str, stops: Option<&[InkStop]
     for &v in &img.data {
         out.extend_from_slice(&ramp[v as usize]);
     }
-    Rgb { w: img.w, h: img.h, data: out }
+    Rgb {
+        w: img.w,
+        h: img.h,
+        data: out,
+    }
 }
 
 /// Densidad estimada de un negativo YA COLOREADO: proyección de cada píxel
@@ -209,7 +229,11 @@ fn density_from_pixels(neg: &Rgb, ink_color: Option<&str>, stops: Option<&[InkSt
     }
     let ramp = ink_ramp(ink_color.unwrap_or("#000000"), stops);
     let r0 = [ramp[0][0] as f64, ramp[0][1] as f64, ramp[0][2] as f64];
-    let r255 = [ramp[255][0] as f64, ramp[255][1] as f64, ramp[255][2] as f64];
+    let r255 = [
+        ramp[255][0] as f64,
+        ramp[255][1] as f64,
+        ramp[255][2] as f64,
+    ];
     let eje = [r255[0] - r0[0], r255[1] - r0[1], r255[2] - r0[2]];
     let norma = eje[0] * eje[0] + eje[1] * eje[1] + eje[2] * eje[2];
     if norma < 1e-6 {
@@ -218,7 +242,8 @@ fn density_from_pixels(neg: &Rgb, ink_color: Option<&str>, stops: Option<&[InkSt
     let mut t_ramp = [0.0f64; 256];
     for d in 0..256 {
         let c = [ramp[d][0] as f64, ramp[d][1] as f64, ramp[d][2] as f64];
-        t_ramp[d] = ((c[0] - r0[0]) * eje[0] + (c[1] - r0[1]) * eje[1] + (c[2] - r0[2]) * eje[2]) / norma;
+        t_ramp[d] =
+            ((c[0] - r0[0]) * eje[0] + (c[1] - r0[1]) * eje[1] + (c[2] - r0[2]) * eje[2]) / norma;
     }
     // estrictamente creciente para que la inversa exista
     for i in 1..256 {
@@ -305,7 +330,11 @@ pub fn simulate_print(
             out.push(v.round().clamp(0.0, 255.0) as u8);
         }
     }
-    Rgb { w: neg.w, h: neg.h, data: out }
+    Rgb {
+        w: neg.w,
+        h: neg.h,
+        data: out,
+    }
 }
 
 /// Diagnóstico de una respuesta medida: rango, invertida, plana.
@@ -375,11 +404,15 @@ mod tests {
     #[test]
     fn response_diagnostics() {
         // invertida: más densidad → más oscuro
-        let resp: Vec<(f64, f64)> = (0..21).map(|i| (i as f64 * 12.75, 250.0 - i as f64 * 10.0)).collect();
+        let resp: Vec<(f64, f64)> = (0..21)
+            .map(|i| (i as f64 * 12.75, 250.0 - i as f64 * 10.0))
+            .collect();
         let (_, inv, _) = response_summary(&resp);
         assert!(inv);
         // sana
-        let resp: Vec<(f64, f64)> = (0..21).map(|i| (i as f64 * 12.75, 30.0 + i as f64 * 10.0)).collect();
+        let resp: Vec<(f64, f64)> = (0..21)
+            .map(|i| (i as f64 * 12.75, 30.0 + i as f64 * 10.0))
+            .collect();
         let (rango, inv, plana) = response_summary(&resp);
         assert!(!inv && !plana && rango > 0.5);
     }

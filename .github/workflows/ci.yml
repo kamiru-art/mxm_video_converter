@@ -2,9 +2,9 @@
 #
 # Every push to main or to a feat/** branch, and every pull request, runs
 # the full test pyramid:
-#   1. rust  — native tests of the core (includes synthetic end-to-end
-#              roundtrips: sheet → simulated scan → recovered frames), then
-#              clippy with warnings as errors, natively and for wasm32 (the
+#   1. rust  — rustfmt check, native tests of the core (includes synthetic
+#              end-to-end roundtrips: sheet → simulated scan → recovered
+#              frames), then clippy with warnings as errors, natively and for wasm32 (the
 #              only target that compiles api.rs, the WebAssembly boundary).
 #   2. web   — compiles the core to WebAssembly, type-checks the TypeScript
 #              (tsc, strict, three projects), builds the site, runs the
@@ -69,11 +69,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: ${{ steps.rust.outputs.channel }}
-          components: clippy
+          components: clippy, rustfmt
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust-core
+      # Formatting first: it is the cheapest check and the one that fails
+      # for the most boring reason. rustfmt.toml keeps the default style.
+      - name: Formatting (rustfmt)
+        run: cargo fmt --check
+        working-directory: rust-core
       - name: Tests (native, includes e2e roundtrips)
         run: cargo test --release
         working-directory: rust-core

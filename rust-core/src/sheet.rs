@@ -48,101 +48,224 @@ pub fn page_size_px(paper: &str, dpi: u32, landscape: bool, cw: f64, ch: f64) ->
     (mm_to_px(w, dpi), mm_to_px(h, dpi))
 }
 
-fn default_true() -> bool { true }
-fn d_paper() -> String { "A4".into() }
-fn d_orientation() -> String { "portrait".into() }
-fn d_dpi() -> u32 { 300 }
-fn d_custom_w() -> f64 { 210.0 }
-fn d_custom_h() -> f64 { 297.0 }
-fn d_margin() -> f64 { 10.0 }
-fn d_gutter() -> f64 { 5.0 }
-fn d_white() -> String { "#FFFFFF".into() }
-fn d_black() -> String { "#000000".into() }
-fn d_alpha_mode() -> String { "none".into() }
-fn d_alpha_border_mm() -> f64 { 0.5 }
-fn d_cols() -> u32 { 4 }
-fn d_rows() -> u32 { 5 }
-fn d_base_name() -> String { "abc".into() }
-fn d_sep() -> String { "_".into() }
-fn d_one() -> i64 { 1 }
-fn d_font_pt() -> f64 { 9.0 }
-fn d_label_gap() -> f64 { 1.5 }
-fn d_corner() -> String { "Bottom right".into() }
-fn d_page_pt() -> f64 { 11.0 }
-fn d_marker_count() -> u32 { 8 }
-fn d_marker_mm() -> f64 { 8.0 }
-fn d_marker_margin() -> f64 { 4.0 }
-fn d_dict() -> String { "DICT_4X4_50".into() }
-fn d_qr_mm() -> f64 { 10.0 }
-fn d_mode() -> String { "normal".into() }
-fn d_100() -> f64 { 100.0 }
-fn d_cyan_bg() -> String { "saving".into() }
-fn d_halo() -> f64 { 5.0 }
-fn d_frame_border() -> f64 { 0.8 }
-fn d_scale() -> f64 { 1.0 }
-fn d_out_name() -> String { "contact_sheet".into() }
+fn default_true() -> bool {
+    true
+}
+fn d_paper() -> String {
+    "A4".into()
+}
+fn d_orientation() -> String {
+    "portrait".into()
+}
+fn d_dpi() -> u32 {
+    300
+}
+fn d_custom_w() -> f64 {
+    210.0
+}
+fn d_custom_h() -> f64 {
+    297.0
+}
+fn d_margin() -> f64 {
+    10.0
+}
+fn d_gutter() -> f64 {
+    5.0
+}
+fn d_white() -> String {
+    "#FFFFFF".into()
+}
+fn d_black() -> String {
+    "#000000".into()
+}
+fn d_alpha_mode() -> String {
+    "none".into()
+}
+fn d_alpha_border_mm() -> f64 {
+    0.5
+}
+fn d_cols() -> u32 {
+    4
+}
+fn d_rows() -> u32 {
+    5
+}
+fn d_base_name() -> String {
+    "abc".into()
+}
+fn d_sep() -> String {
+    "_".into()
+}
+fn d_one() -> i64 {
+    1
+}
+fn d_font_pt() -> f64 {
+    9.0
+}
+fn d_label_gap() -> f64 {
+    1.5
+}
+fn d_corner() -> String {
+    "Bottom right".into()
+}
+fn d_page_pt() -> f64 {
+    11.0
+}
+fn d_marker_count() -> u32 {
+    8
+}
+fn d_marker_mm() -> f64 {
+    8.0
+}
+fn d_marker_margin() -> f64 {
+    4.0
+}
+fn d_dict() -> String {
+    "DICT_4X4_50".into()
+}
+fn d_qr_mm() -> f64 {
+    10.0
+}
+fn d_mode() -> String {
+    "normal".into()
+}
+fn d_100() -> f64 {
+    100.0
+}
+fn d_cyan_bg() -> String {
+    "saving".into()
+}
+fn d_halo() -> f64 {
+    5.0
+}
+fn d_frame_border() -> f64 {
+    0.8
+}
+fn d_scale() -> f64 {
+    1.0
+}
+fn d_out_name() -> String {
+    "contact_sheet".into()
+}
 
 /// Ajustes de generación. Mismos nombres que el snapshot del layout.json
 /// original, para compatibilidad bidireccional (hojas de rescate incluidas).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
-    #[serde(default = "d_paper")] pub paper: String,
-    #[serde(default = "d_orientation")] pub orientation: String,
-    #[serde(default = "d_dpi")] pub dpi: u32,
-    #[serde(default = "d_custom_w")] pub custom_w_mm: f64,
-    #[serde(default = "d_custom_h")] pub custom_h_mm: f64,
-    #[serde(default = "d_margin")] pub margin_mm: f64,
-    #[serde(default = "d_gutter")] pub gutter_mm: f64,
-    #[serde(default = "d_white")] pub bg_color: String,
-    #[serde(default = "d_alpha_mode")] pub alpha_mode: String,
-    #[serde(default = "d_black")] pub alpha_bg_color: String,
-    #[serde(default = "d_black")] pub alpha_border_color: String,
-    #[serde(default = "d_alpha_border_mm")] pub alpha_border_mm: f64,
-    #[serde(default = "d_cols")] pub cols: u32,
-    #[serde(default = "d_rows")] pub rows: u32,
-    #[serde(default = "default_true")] pub labels_on: bool,
-    #[serde(default = "d_base_name")] pub base_name: String,
-    #[serde(default = "d_sep")] pub separator: String,
-    #[serde(default = "d_one")] pub leading_zeros: i64,
-    #[serde(default = "d_one")] pub start_index: i64,
-    #[serde(default)] pub font_path: Option<String>, // ignorado (fuente incrustada)
-    #[serde(default = "d_font_pt")] pub font_size_pt: f64,
-    #[serde(default = "d_label_gap")] pub label_gap_mm: f64,
-    #[serde(default = "d_black")] pub label_color: String,
-    #[serde(default = "default_true")] pub page_num_on: bool,
-    #[serde(default = "d_corner")] pub page_num_corner: String,
-    #[serde(default)] pub page_num_prefix: String,
-    #[serde(default = "d_one")] pub page_num_start: i64,
-    #[serde(default = "d_one")] pub page_num_zeros: i64,
-    #[serde(default = "d_page_pt")] pub page_num_size_pt: f64,
-    #[serde(default = "d_black")] pub page_num_color: String,
-    #[serde(default)] pub registration_on: bool,
-    #[serde(default = "d_marker_count")] pub marker_count: u32,
-    #[serde(default = "d_marker_mm")] pub marker_size_mm: f64,
-    #[serde(default = "d_marker_margin")] pub marker_margin_mm: f64,
-    #[serde(default = "d_dict")] pub marker_dict: String,
-    #[serde(default = "default_true")] pub qr_on: bool,
-    #[serde(default = "d_qr_mm")] pub qr_size_mm: f64,
-    #[serde(default)] pub gray_patch_on: bool,
-    #[serde(default)] pub project_name: String,
-    #[serde(default = "d_mode")] pub mode: String,
-    #[serde(default = "default_true")] pub cyan_mirror: bool,
-    #[serde(default = "d_black")] pub cyan_ink: String,
-    #[serde(default)] pub cyan_curve: Option<Vec<f64>>,
-    #[serde(default = "d_100")] pub cyan_curve_strength: f64,
-    #[serde(default)] pub cyan_adaptive: f64,
-    #[serde(default)] pub cyan_clarity: f64,
-    #[serde(default = "d_cyan_bg")] pub cyan_bg: String,
-    #[serde(default = "d_halo")] pub cyan_halo_mm: f64,
-    #[serde(default = "d_frame_border")] pub cyan_frame_border_mm: f64,
-    #[serde(default)] pub cyan_block_color: Option<String>,
-    #[serde(default)] pub cyan_ink_stops: Option<Vec<(f64, String)>>,
-    #[serde(default = "d_scale")] pub print_scale_x: f64,
-    #[serde(default = "d_scale")] pub print_scale_y: f64,
-    #[serde(default = "d_out_name")] pub out_name: String,
-    #[serde(default = "default_true")] pub fmt_png: bool,
-    #[serde(default = "default_true")] pub fmt_pdf: bool,
-    #[serde(default)] pub fmt_tiff: bool,
+    #[serde(default = "d_paper")]
+    pub paper: String,
+    #[serde(default = "d_orientation")]
+    pub orientation: String,
+    #[serde(default = "d_dpi")]
+    pub dpi: u32,
+    #[serde(default = "d_custom_w")]
+    pub custom_w_mm: f64,
+    #[serde(default = "d_custom_h")]
+    pub custom_h_mm: f64,
+    #[serde(default = "d_margin")]
+    pub margin_mm: f64,
+    #[serde(default = "d_gutter")]
+    pub gutter_mm: f64,
+    #[serde(default = "d_white")]
+    pub bg_color: String,
+    #[serde(default = "d_alpha_mode")]
+    pub alpha_mode: String,
+    #[serde(default = "d_black")]
+    pub alpha_bg_color: String,
+    #[serde(default = "d_black")]
+    pub alpha_border_color: String,
+    #[serde(default = "d_alpha_border_mm")]
+    pub alpha_border_mm: f64,
+    #[serde(default = "d_cols")]
+    pub cols: u32,
+    #[serde(default = "d_rows")]
+    pub rows: u32,
+    #[serde(default = "default_true")]
+    pub labels_on: bool,
+    #[serde(default = "d_base_name")]
+    pub base_name: String,
+    #[serde(default = "d_sep")]
+    pub separator: String,
+    #[serde(default = "d_one")]
+    pub leading_zeros: i64,
+    #[serde(default = "d_one")]
+    pub start_index: i64,
+    #[serde(default)]
+    pub font_path: Option<String>, // ignorado (fuente incrustada)
+    #[serde(default = "d_font_pt")]
+    pub font_size_pt: f64,
+    #[serde(default = "d_label_gap")]
+    pub label_gap_mm: f64,
+    #[serde(default = "d_black")]
+    pub label_color: String,
+    #[serde(default = "default_true")]
+    pub page_num_on: bool,
+    #[serde(default = "d_corner")]
+    pub page_num_corner: String,
+    #[serde(default)]
+    pub page_num_prefix: String,
+    #[serde(default = "d_one")]
+    pub page_num_start: i64,
+    #[serde(default = "d_one")]
+    pub page_num_zeros: i64,
+    #[serde(default = "d_page_pt")]
+    pub page_num_size_pt: f64,
+    #[serde(default = "d_black")]
+    pub page_num_color: String,
+    #[serde(default)]
+    pub registration_on: bool,
+    #[serde(default = "d_marker_count")]
+    pub marker_count: u32,
+    #[serde(default = "d_marker_mm")]
+    pub marker_size_mm: f64,
+    #[serde(default = "d_marker_margin")]
+    pub marker_margin_mm: f64,
+    #[serde(default = "d_dict")]
+    pub marker_dict: String,
+    #[serde(default = "default_true")]
+    pub qr_on: bool,
+    #[serde(default = "d_qr_mm")]
+    pub qr_size_mm: f64,
+    #[serde(default)]
+    pub gray_patch_on: bool,
+    #[serde(default)]
+    pub project_name: String,
+    #[serde(default = "d_mode")]
+    pub mode: String,
+    #[serde(default = "default_true")]
+    pub cyan_mirror: bool,
+    #[serde(default = "d_black")]
+    pub cyan_ink: String,
+    #[serde(default)]
+    pub cyan_curve: Option<Vec<f64>>,
+    #[serde(default = "d_100")]
+    pub cyan_curve_strength: f64,
+    #[serde(default)]
+    pub cyan_adaptive: f64,
+    #[serde(default)]
+    pub cyan_clarity: f64,
+    #[serde(default = "d_cyan_bg")]
+    pub cyan_bg: String,
+    #[serde(default = "d_halo")]
+    pub cyan_halo_mm: f64,
+    #[serde(default = "d_frame_border")]
+    pub cyan_frame_border_mm: f64,
+    #[serde(default)]
+    pub cyan_block_color: Option<String>,
+    #[serde(default)]
+    pub cyan_ink_stops: Option<Vec<(f64, String)>>,
+    #[serde(default = "d_scale")]
+    pub print_scale_x: f64,
+    #[serde(default = "d_scale")]
+    pub print_scale_y: f64,
+    #[serde(default = "d_out_name")]
+    pub out_name: String,
+    #[serde(default = "default_true")]
+    pub fmt_png: bool,
+    #[serde(default = "default_true")]
+    pub fmt_pdf: bool,
+    #[serde(default)]
+    pub fmt_tiff: bool,
 }
 
 impl Default for Settings {
@@ -158,9 +281,9 @@ impl Settings {
         m.starts_with("cyan") || m.starts_with("cian")
     }
     pub fn ink_stops(&self) -> Option<Vec<cyan::InkStop>> {
-        self.cyan_ink_stops.as_ref().map(|ss| {
-            ss.iter().map(|(d, c)| (*d, cyan::hex_to_rgb(c))).collect()
-        })
+        self.cyan_ink_stops
+            .as_ref()
+            .map(|ss| ss.iter().map(|(d, c)| (*d, cyan::hex_to_rgb(c))).collect())
     }
     pub fn format_page_label(&self, num: i64) -> String {
         let mut s = num.to_string();
@@ -196,7 +319,10 @@ pub fn normalized_marker_count(count: u32) -> u32 {
     if [4u32, 8, 12].contains(&count) {
         count
     } else {
-        *[4u32, 8, 12].iter().min_by_key(|&&c| (c as i64 - count as i64).abs()).unwrap()
+        *[4u32, 8, 12]
+            .iter()
+            .min_by_key(|&&c| (c as i64 - count as i64).abs())
+            .unwrap()
     }
 }
 
@@ -217,7 +343,9 @@ pub fn sheet_marker_ids(dict: Dict, count: u32, sheet_num: i64) -> Vec<u32> {
     let (m, cap) = marker_id_scheme(dict, count);
     let idx = (sheet_num - 1).rem_euclid(cap.max(1) as i64) as u32;
     let (d0, d1) = (idx % m, (idx / m) % m);
-    (0..count).map(|j| j * m + if j % 2 == 0 { d0 } else { d1 }).collect()
+    (0..count)
+        .map(|j| j * m + if j % 2 == 0 { d0 } else { d1 })
+        .collect()
 }
 
 /// Capacidad de hojas distinguibles del esquema (None si la identidad va por QR).
@@ -303,9 +431,9 @@ pub struct Layout {
     pub margin: i64,
     pub gutter: i64,
     pub label_gap: i64,
-    pub label_px: f32,   // tamaño de fuente de etiquetas en px
+    pub label_px: f32, // tamaño de fuente de etiquetas en px
     pub label_h: i64,
-    pub page_px: f32,    // tamaño de fuente del numerador en px
+    pub page_px: f32, // tamaño de fuente del numerador en px
     pub landscape: bool,
     pub page_w: i64,
     pub page_h: i64,
@@ -377,7 +505,11 @@ fn frame_fit_area(
     }
     let cell_w = (content_w - ((cols - 1) as i64 * gutter) as f64) / cols as f64;
     let cell_h = (content_h - ((rows - 1) as i64 * gutter) as f64) / rows as f64;
-    let meta_area = if meta_h > 0 { (meta_h + label_gap) as f64 } else { 0.0 };
+    let meta_area = if meta_h > 0 {
+        (meta_h + label_gap) as f64
+    } else {
+        0.0
+    };
     let img_area_h = cell_h - meta_area;
     if cell_w <= 1.0 || img_area_h <= 1.0 || src_w <= 0.0 || src_h <= 0.0 {
         return -1.0;
@@ -462,14 +594,23 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     let page_px = pt_to_px(s.page_num_size_pt, dpi) as f32;
 
     let meta_h = meta_content_height(s, label_h, dpi);
-    let mut label_gap = if meta_h > 0 { mm_to_px(s.label_gap_mm, dpi) } else { 0 };
+    let mut label_gap = if meta_h > 0 {
+        mm_to_px(s.label_gap_mm, dpi)
+    } else {
+        0
+    };
     let halo_px = mm_to_px(s.cyan_halo_mm.max(0.0), dpi);
-    let meta_halo = if cyan_saving(s) && meta_h > 0 { halo_px } else { 0 };
+    let meta_halo = if cyan_saving(s) && meta_h > 0 {
+        halo_px
+    } else {
+        0
+    };
     if meta_halo > 0 {
         label_gap = label_gap.max(meta_halo + mm_to_px(0.5, dpi));
     }
 
-    let (landscape, cols, rows) = resolve_page_layout(s, first_frame, meta_h + meta_halo, label_gap);
+    let (landscape, cols, rows) =
+        resolve_page_layout(s, first_frame, meta_h + meta_halo, label_gap);
     if cols == 0 || rows == 0 {
         return Err("The sheet needs at least one column and one row.".into());
     }
@@ -489,7 +630,11 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     }
     let cell_w = (content_w - ((cols - 1) as i64 * gutter) as f64) / cols as f64;
     let cell_h = (content_h - ((rows - 1) as i64 * gutter) as f64) / rows as f64;
-    let label_area = if meta_h > 0 { meta_h + meta_halo + label_gap } else { 0 };
+    let label_area = if meta_h > 0 {
+        meta_h + meta_halo + label_gap
+    } else {
+        0
+    };
     let img_area_h = cell_h - label_area as f64;
     if !cell_w.is_finite() || !img_area_h.is_finite() || cell_w <= 1.0 || img_area_h <= 1.0 {
         return Err(
@@ -503,7 +648,11 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
     // no cabrá ninguno. Se comprueba aquí porque build_layout corre antes de
     // dibujar nada y su error sí llega a la interfaz.
     if s.registration_on && s.qr_on {
-        let project = if s.project_name.is_empty() { &s.out_name } else { &s.project_name };
+        let project = if s.project_name.is_empty() {
+            &s.out_name
+        } else {
+            &s.project_name
+        };
         qr::check_payload_fits(&qr::qr_payload(project, 1, 0, ""))?;
     }
 
@@ -525,7 +674,11 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
         label_area,
         img_area_h,
         meta_h,
-        qr_px: if s.registration_on && s.qr_on { mm_to_px(s.qr_size_mm, dpi) } else { 0 },
+        qr_px: if s.registration_on && s.qr_on {
+            mm_to_px(s.qr_size_mm, dpi)
+        } else {
+            0
+        },
         halo_px,
         marker_side: 0,
         marker_quiet: 0,
@@ -542,8 +695,22 @@ pub fn build_layout(s: &Settings, first_frame: (f64, f64)) -> Result<Layout, Str
         l.marker_quiet = quiet;
         l.marker_patch = patch;
         l.marker_margin = mmargin;
-        l.marker_positions = Some(marker_layout(page_w, page_h, s.marker_count, side, mmargin, quiet));
-        l.marker_bboxes = Some(marker_bboxes(page_w, page_h, s.marker_count, side, mmargin, quiet));
+        l.marker_positions = Some(marker_layout(
+            page_w,
+            page_h,
+            s.marker_count,
+            side,
+            mmargin,
+            quiet,
+        ));
+        l.marker_bboxes = Some(marker_bboxes(
+            page_w,
+            page_h,
+            s.marker_count,
+            side,
+            mmargin,
+            quiet,
+        ));
         if s.gray_patch_on {
             l.patch_strip = patch_strip_geometry(s, &l);
         }
@@ -600,15 +767,31 @@ fn label_text_color(s: &Settings) -> [u8; 3] {
 
 fn halo_rect(canvas: &mut Rgb, s: &Settings, bbox: [i64; 4], halo: i64) {
     let c = ink_full_color(s);
-    canvas.fill_rect(bbox[0] - halo, bbox[1] - halo, bbox[2] + halo, bbox[3] + halo, c);
+    canvas.fill_rect(
+        bbox[0] - halo,
+        bbox[1] - halo,
+        bbox[2] + halo,
+        bbox[3] + halo,
+        c,
+    );
 }
 
 /// Relleno de un triángulo por prueba de semi-planos (áreas pequeñas).
 fn fill_triangle(canvas: &mut Rgb, pts: [(i64, i64); 3], color: [u8; 3]) {
     let min_x = pts.iter().map(|p| p.0).min().unwrap().max(0);
-    let max_x = pts.iter().map(|p| p.0).max().unwrap().min(canvas.w as i64 - 1);
+    let max_x = pts
+        .iter()
+        .map(|p| p.0)
+        .max()
+        .unwrap()
+        .min(canvas.w as i64 - 1);
     let min_y = pts.iter().map(|p| p.1).min().unwrap().max(0);
-    let max_y = pts.iter().map(|p| p.1).max().unwrap().min(canvas.h as i64 - 1);
+    let max_y = pts
+        .iter()
+        .map(|p| p.1)
+        .max()
+        .unwrap()
+        .min(canvas.h as i64 - 1);
     let edge = |a: (i64, i64), b: (i64, i64), p: (i64, i64)| {
         (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0)
     };
@@ -643,7 +826,11 @@ fn gray_to_rgb(g: &Gray) -> Rgb {
     for &v in &g.data {
         data.extend_from_slice(&[v, v, v]);
     }
-    Rgb { w: g.w, h: g.h, data }
+    Rgb {
+        w: g.w,
+        h: g.h,
+        data,
+    }
 }
 
 fn draw_registration_frame(s: &Settings, l: &Layout, canvas: &mut Rgb, sheet_num: i64) {
@@ -657,7 +844,12 @@ fn draw_registration_frame(s: &Settings, l: &Layout, canvas: &mut Rgb, sheet_num
             let patch = marker_patch_gray(dict, mid, l.marker_side, l.marker_quiet);
             let rgb = if s.is_cyanotype() {
                 if saving {
-                    halo_rect(canvas, s, [px, py, px + patch.w as i64, py + patch.h as i64], l.halo_px);
+                    halo_rect(
+                        canvas,
+                        s,
+                        [px, py, px + patch.w as i64, py + patch.h as i64],
+                        l.halo_px,
+                    );
                 }
                 cyan::colorize_gray_patch(&patch, &s.cyan_ink, stops.as_deref())
             } else {
@@ -677,7 +869,11 @@ fn draw_registration_frame(s: &Settings, l: &Layout, canvas: &mut Rgb, sheet_num
             let tri = if s.cyan_mirror {
                 [(x0, y0), (x0 + tri_h, y0 + tri_h / 2), (x0, y0 + tri_h)]
             } else {
-                [(x0 + tri_h, y0), (x0, y0 + tri_h / 2), (x0 + tri_h, y0 + tri_h)]
+                [
+                    (x0 + tri_h, y0),
+                    (x0, y0 + tri_h / 2),
+                    (x0 + tri_h, y0 + tri_h),
+                ]
             };
             fill_triangle(canvas, tri, [255, 255, 255]);
         }
@@ -706,7 +902,12 @@ fn draw_registration_frame(s: &Settings, l: &Layout, canvas: &mut Rgb, sheet_num
 // ────────────────────────────────────────────────────────────────
 
 /// (texto_visible, px_fuente, tw, th, reducido)
-fn fit_meta_text(s: &Settings, dpi: u32, text_str: &str, avail_w: i64) -> (String, f32, i64, i64, bool) {
+fn fit_meta_text(
+    s: &Settings,
+    dpi: u32,
+    text_str: &str,
+    avail_w: i64,
+) -> (String, f32, i64, i64, bool) {
     if avail_w <= 0 {
         return (String::new(), 0.0, 0, 0, true);
     }
@@ -749,7 +950,13 @@ struct MetaRow {
     total_w: i64,
 }
 
-fn meta_row_geometry(s: &Settings, l: &Layout, text_str: &str, cell_x: f64, meta_top: f64) -> MetaRow {
+fn meta_row_geometry(
+    s: &Settings,
+    l: &Layout,
+    text_str: &str,
+    cell_x: f64,
+    meta_top: f64,
+) -> MetaRow {
     let margen = if cyan_saving(s) { l.halo_px } else { 0 };
     let avail = ((l.cell_w as i64) - 2 * margen).max(8);
     let qr_px = l.qr_px.min(avail);
@@ -895,7 +1102,14 @@ pub fn render_page(
 
             if s.is_cyanotype() && s.cyan_frame_border_mm > 0.0 {
                 let bw = mm_to_px(s.cyan_frame_border_mm, l.dpi).max(1);
-                canvas.stroke_rect(px - bw, py - bw, px + new_w + bw, py + new_h + bw, bw, ink_full_color(s));
+                canvas.stroke_rect(
+                    px - bw,
+                    py - bw,
+                    px + new_w + bw,
+                    py + new_h + bw,
+                    bw,
+                    ink_full_color(s),
+                );
             } else if frame.has_alpha
                 && !s.is_cyanotype()
                 && alpha_border_mode(s)
@@ -913,7 +1127,10 @@ pub fn render_page(
             }
         }
 
-        let text_str = labels.get(cell_idx).cloned().unwrap_or_else(|| format!("frame_{cell_idx}"));
+        let text_str = labels
+            .get(cell_idx)
+            .cloned()
+            .unwrap_or_else(|| format!("frame_{cell_idx}"));
         let clave = if record.is_some() {
             unique_key(&mut claves, &text_str)
         } else {
@@ -922,12 +1139,20 @@ pub fn render_page(
 
         let meta_top = (py + new_h + l.label_gap) as f64;
         if l.qr_px > 0 && record.is_some() {
-            let project = if s.project_name.is_empty() { &s.out_name } else { &s.project_name };
+            let project = if s.project_name.is_empty() {
+                &s.out_name
+            } else {
+                &s.project_name
+            };
             let payload = qr::qr_payload(project, sheet_num, cell_idx as i64, &text_str);
             // Se comprueba también cuando solo se mide: una etiqueta que no cabe
             // debe detenerse antes de imprimir, no al escanear.
             if let Err(e) = qr::check_payload_fits(&payload) {
-                return PageResult { image: None, record: None, error: Some(e) };
+                return PageResult {
+                    image: None,
+                    record: None,
+                    error: Some(e),
+                };
             }
             let fila = meta_row_geometry(s, l, &text_str, cell_x, meta_top);
             if let Some(canvas) = canvas.as_mut() {
@@ -935,13 +1160,24 @@ pub fn render_page(
                     halo_rect(
                         canvas,
                         s,
-                        [fila.qx, meta_top as i64, fila.qx + fila.total_w, meta_top as i64 + l.meta_h],
+                        [
+                            fila.qx,
+                            meta_top as i64,
+                            fila.qx + fila.total_w,
+                            meta_top as i64 + l.meta_h,
+                        ],
                         l.halo_px,
                     );
                 }
                 let qr_gray = match qr::try_qr_image(&payload, fila.qr_px as usize, false) {
                     Ok(g) => g,
-                    Err(e) => return PageResult { image: None, record: None, error: Some(e) },
+                    Err(e) => {
+                        return PageResult {
+                            image: None,
+                            record: None,
+                            error: Some(e),
+                        }
+                    }
                 };
                 let qr_rgb = if s.is_cyanotype() {
                     cyan::colorize_gray_patch(&qr_gray, &s.cyan_ink, stops.as_deref())
@@ -950,7 +1186,14 @@ pub fn render_page(
                 };
                 canvas.paste(&qr_rgb, fila.qx, fila.qy);
                 if fila.tw > 0 {
-                    text::draw_text(canvas, &fila.texto, fila.tx, fila.ty, fila.font_px, label_color);
+                    text::draw_text(
+                        canvas,
+                        &fila.texto,
+                        fila.tx,
+                        fila.ty,
+                        fila.font_px,
+                        label_color,
+                    );
                 }
             }
             if let Some(rec) = record.as_mut() {
@@ -978,7 +1221,10 @@ pub fn render_page(
         }
 
         if let Some(rec) = record.as_mut() {
-            let orig = frame.orig_file.clone().unwrap_or_else(|| frame.orig_name.clone());
+            let orig = frame
+                .orig_file
+                .clone()
+                .unwrap_or_else(|| frame.orig_name.clone());
             rec["frames"][&clave] = json!({
                 "bbox": [px, py, px + new_w, py + new_h],
                 "celda": cell_idx,
@@ -1001,8 +1247,14 @@ pub fn render_page(
                 let mut clear = l.marker_margin + l.marker_patch + sep;
                 if s.is_cyanotype() && (corner == "Superior izquierda" || corner == "Top left") {
                     let tri_h = (l.marker_side / 2).max(8);
-                    clear = l.marker_margin + l.marker_patch + 2 * l.halo_px + l.marker_quiet.max(6)
-                        + tri_h + l.halo_px + (l.halo_px / 2).max(4) + l.marker_quiet.max(8);
+                    clear = l.marker_margin
+                        + l.marker_patch
+                        + 2 * l.halo_px
+                        + l.marker_quiet.max(6)
+                        + tri_h
+                        + l.halo_px
+                        + (l.halo_px / 2).max(4)
+                        + l.marker_quiet.max(8);
                 }
                 let y_top = l.marker_margin + (l.marker_patch - th) / 2;
                 let y_bot = l.page_h - l.marker_margin - l.marker_patch + (l.marker_patch - th) / 2;
@@ -1015,21 +1267,36 @@ pub fn render_page(
             } else {
                 let pad = (l.margin / 3).max(mm_to_px(3.0, l.dpi));
                 match corner {
-                    "Inferior derecha" | "Bottom right" => (l.page_w - pad - tw, l.page_h - pad - th),
+                    "Inferior derecha" | "Bottom right" => {
+                        (l.page_w - pad - tw, l.page_h - pad - th)
+                    }
                     "Inferior izquierda" | "Bottom left" => (pad, l.page_h - pad - th),
                     "Superior derecha" | "Top right" => (l.page_w - pad - tw, pad),
                     _ => (pad, pad),
                 }
             };
             if saving {
-                halo_rect(canvas, s, [pos.0, pos.1, pos.0 + tw, pos.1 + th], (l.halo_px / 2).max(4));
+                halo_rect(
+                    canvas,
+                    s,
+                    [pos.0, pos.1, pos.0 + tw, pos.1 + th],
+                    (l.halo_px / 2).max(4),
+                );
             }
-            let color = if s.is_cyanotype() { [255, 255, 255] } else { cyan::hex_to_rgb(&s.page_num_color) };
+            let color = if s.is_cyanotype() {
+                [255, 255, 255]
+            } else {
+                cyan::hex_to_rgb(&s.page_num_color)
+            };
             text::draw_text(canvas, &pno, pos.0, pos.1, l.page_px, color);
         }
     }
 
-    PageResult { image: canvas, record, error: None }
+    PageResult {
+        image: canvas,
+        record,
+        error: None,
+    }
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1049,7 +1316,17 @@ pub fn finish_page(s: &Settings, img: Rgb) -> Rgb {
         let (cx, cy) = (w / 2.0, h / 2.0);
         // src→dst: escala 1/sx alrededor del centro
         let (fx, fy) = (1.0 / s.print_scale_x, 1.0 / s.print_scale_y);
-        let m: H3 = [fx, 0.0, cx * (1.0 - fx), 0.0, fy, cy * (1.0 - fy), 0.0, 0.0, 1.0];
+        let m: H3 = [
+            fx,
+            0.0,
+            cx * (1.0 - fx),
+            0.0,
+            fy,
+            cy * (1.0 - fy),
+            0.0,
+            0.0,
+            1.0,
+        ];
         let (ow, oh) = (out.w, out.h);
         out = warp_rgb_fill(&out, &m, ow, oh, page_bg_color(s));
     }
@@ -1065,11 +1342,19 @@ pub fn scale_bbox(bbox: [i64; 4], s: &Settings, page_w: i64, page_h: i64) -> [i6
     }
     let (cx, cy) = (page_w as f64 / 2.0, page_h as f64 / 2.0);
     let sp = |x: f64, y: f64| {
-        (cx + (x - cx) / s.print_scale_x, cy + (y - cy) / s.print_scale_y)
+        (
+            cx + (x - cx) / s.print_scale_x,
+            cy + (y - cy) / s.print_scale_y,
+        )
     };
     let (x1, y1) = sp(bbox[0] as f64, bbox[1] as f64);
     let (x2, y2) = sp(bbox[2] as f64, bbox[3] as f64);
-    [x1.round() as i64, y1.round() as i64, x2.round() as i64, y2.round() as i64]
+    [
+        x1.round() as i64,
+        y1.round() as i64,
+        x2.round() as i64,
+        y2.round() as i64,
+    ]
 }
 
 /// Ensambla el layout.json v2 (idéntico al de la app original).
@@ -1093,7 +1378,10 @@ pub fn build_layout_json(
     if let Some(bb) = &l.marker_bboxes {
         for (pos_idx, bbox) in bb {
             let sb = scale_bbox(*bbox, s, l.page_w, l.page_h);
-            let id = first_ids.get(*pos_idx as usize).copied().unwrap_or(*pos_idx);
+            let id = first_ids
+                .get(*pos_idx as usize)
+                .copied()
+                .unwrap_or(*pos_idx);
             marker_bb.insert(id.to_string(), json!(sb));
             bboxes_pos.push(json!(sb));
         }
@@ -1157,7 +1445,8 @@ pub fn scale_record_bboxes(s: &Settings, l: &Layout, record: &mut Value) {
                 if let Some(bb) = v["bbox"].as_array() {
                     let b: Vec<i64> = bb.iter().map(|x| x.as_i64().unwrap_or(0)).collect();
                     if b.len() == 4 {
-                        v["bbox"] = json!(scale_bbox([b[0], b[1], b[2], b[3]], s, l.page_w, l.page_h));
+                        v["bbox"] =
+                            json!(scale_bbox([b[0], b[1], b[2], b[3]], s, l.page_w, l.page_h));
                     }
                 }
             }
@@ -1217,7 +1506,14 @@ mod tests {
         for _ in 0..w * h {
             rgba.extend_from_slice(&[color[0], color[1], color[2], 255]);
         }
-        FrameInput { w, h, rgba: Some(rgba), has_alpha: false, orig_name: "f.png".into(), orig_file: None }
+        FrameInput {
+            w,
+            h,
+            rgba: Some(rgba),
+            has_alpha: false,
+            orig_name: "f.png".into(),
+            orig_file: None,
+        }
     }
 
     fn base_settings() -> Settings {
@@ -1292,8 +1588,13 @@ mod tests {
     fn layout_and_render_normal() {
         let s = base_settings();
         let l = build_layout(&s, (16.0, 9.0)).unwrap();
-        assert_eq!((l.page_w, l.page_h), (mm_to_px(210.0, 150), mm_to_px(297.0, 150)));
-        let frames: Vec<FrameInput> = (0..5).map(|i| test_frame(160, 90, [(i * 40) as u8, 100, 200])).collect();
+        assert_eq!(
+            (l.page_w, l.page_h),
+            (mm_to_px(210.0, 150), mm_to_px(297.0, 150))
+        );
+        let frames: Vec<FrameInput> = (0..5)
+            .map(|i| test_frame(160, 90, [(i * 40) as u8, 100, 200]))
+            .collect();
         let labels: Vec<String> = (0..5).map(|i| format!("abc_{:03}", i + 1)).collect();
         let res = render_page(&s, &l, &frames, &labels, 1, true);
         let img = res.image.unwrap();
@@ -1303,7 +1604,12 @@ mod tests {
         assert_eq!(rec["qrs"].as_object().unwrap().len(), 5);
         // el QR de la celda 0 debe decodificarse desde la propia hoja
         let q = &rec["qrs"]["abc_001"];
-        let bb: Vec<i64> = q["bbox"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+        let bb: Vec<i64> = q["bbox"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
         let crop = img.crop(
             (bb[0] - 6).max(0) as usize,
             (bb[1] - 6).max(0) as usize,
@@ -1321,7 +1627,14 @@ mod tests {
         let frames: Vec<FrameInput> = (0..4).map(|_| test_frame(160, 90, [50, 50, 50])).collect();
         let mut geo_frames: Vec<FrameInput> = frames
             .iter()
-            .map(|f| FrameInput { w: f.w, h: f.h, rgba: None, has_alpha: false, orig_name: f.orig_name.clone(), orig_file: None })
+            .map(|f| FrameInput {
+                w: f.w,
+                h: f.h,
+                rgba: None,
+                has_alpha: false,
+                orig_name: f.orig_name.clone(),
+                orig_file: None,
+            })
             .collect();
         geo_frames[0].orig_name = "f.png".into();
         let labels: Vec<String> = (0..4).map(|i| format!("x_{i}")).collect();
@@ -1343,13 +1656,21 @@ mod tests {
         let img = res.image.unwrap();
         // un frame blanco en negativo → tinta plena (negro) en el centro del frame
         let rec = res.record.unwrap();
-        let bb: Vec<i64> = rec["frames"]["cy_001"]["bbox"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+        let bb: Vec<i64> = rec["frames"]["cy_001"]["bbox"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
         let cxp = ((bb[0] + bb[2]) / 2) as usize;
         let cyp = ((bb[1] + bb[3]) / 2) as usize;
         assert_eq!(img.px(cxp, cyp), [0, 0, 0]);
         // fondo en modo ahorro = blanco (transparente); punto libre de halos:
         // centro horizontal, a 3/4 de la altura (celdas vacías de la fila 2)
-        assert_eq!(img.px((l.page_w / 2) as usize, (l.page_h * 3 / 4) as usize), [255, 255, 255]);
+        assert_eq!(
+            img.px((l.page_w / 2) as usize, (l.page_h * 3 / 4) as usize),
+            [255, 255, 255]
+        );
         let fin = finish_page(&s, img);
         assert_eq!(fin.w as i64, l.page_w); // espejada, mismo tamaño
     }
@@ -1373,7 +1694,11 @@ mod tests {
             assert!(sets.insert(ids), "hoja {n} repite IDs");
         }
         // con QR (legado) los IDs son la posición
-        let s = Settings { qr_on: true, marker_count: 8, ..Default::default() };
+        let s = Settings {
+            qr_on: true,
+            marker_count: 8,
+            ..Default::default()
+        };
         assert_eq!(marker_ids_for_sheet(&s, 5), (0..8).collect::<Vec<u32>>());
     }
 
@@ -1385,13 +1710,23 @@ mod tests {
         s.rows = 2;
         // frames muy anchos → mejor ajuste debería elegir algo distinto a 4×2 vertical
         let l = build_layout(&s, (32.0, 9.0)).unwrap();
-        let manual: Vec<(bool, u32, u32)> = vec![(false, 4, 2), (true, 4, 2), (false, 2, 4), (true, 2, 4)];
+        let manual: Vec<(bool, u32, u32)> =
+            vec![(false, 4, 2), (true, 4, 2), (false, 2, 4), (true, 2, 4)];
         let mut best_area = -1.0;
         for (land, c, r) in manual {
             let a = frame_fit_area(&s, land, 32.0, 9.0, l.meta_h, l.label_gap, c, r);
             best_area = f64::max(best_area, a);
         }
-        let got = frame_fit_area(&s, l.landscape, 32.0, 9.0, l.meta_h, l.label_gap, l.cols, l.rows);
+        let got = frame_fit_area(
+            &s,
+            l.landscape,
+            32.0,
+            9.0,
+            l.meta_h,
+            l.label_gap,
+            l.cols,
+            l.rows,
+        );
         assert!((got - best_area).abs() < 1.0, "got={got} best={best_area}");
     }
 

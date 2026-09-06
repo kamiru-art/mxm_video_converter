@@ -16,8 +16,14 @@ pub fn normalize(data: Value) -> Value {
 
 fn from_v1(data: Value) -> Value {
     let lienzo = data.get("lienzo").cloned().unwrap_or(json!({}));
-    let w = lienzo.get("ancho_px").and_then(|v| v.as_i64()).unwrap_or(2480);
-    let h = lienzo.get("alto_px").and_then(|v| v.as_i64()).unwrap_or(3508);
+    let w = lienzo
+        .get("ancho_px")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(2480);
+    let h = lienzo
+        .get("alto_px")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(3508);
     let (m, s) = (V1_ARUCO_MARGIN_PX, V1_ARUCO_SIZE_PX);
     let bboxes = json!({
         "0": [m, m, m + s, m + s],
@@ -94,9 +100,11 @@ fn from_v1(data: Value) -> Value {
 }
 
 pub fn sheet_by_number(layout: &Value, numero: i64) -> Option<&Value> {
-    layout.get("hojas")?.as_array()?.iter().find(|h| {
-        h.get("numero").and_then(|n| n.as_i64()) == Some(numero)
-    })
+    layout
+        .get("hojas")?
+        .as_array()?
+        .iter()
+        .find(|h| h.get("numero").and_then(|n| n.as_i64()) == Some(numero))
 }
 
 pub fn bbox_of(v: &Value) -> Option<[f64; 4]> {

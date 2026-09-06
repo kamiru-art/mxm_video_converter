@@ -40,7 +40,12 @@ pub fn parse_qr_payload(text: &str) -> Option<QrIdentity> {
         return None;
     }
     // QRs v1: solo el nombre del frame
-    Some(QrIdentity { proyecto: None, hoja: None, celda: None, etiqueta: text.to_string() })
+    Some(QrIdentity {
+        proyecto: None,
+        hoja: None,
+        celda: None,
+        etiqueta: text.to_string(),
+    })
 }
 
 /// Bytes que caben en un QR de versión 40 con corrección H: el tope real del
@@ -263,7 +268,11 @@ mod debug_tests {
         // y con padding blanco alrededor (como el crop del análisis)
         let img = try_qr_image("KQR|8", 47, false).unwrap();
         let mut padded = Gray::new(75, 75, 255);
-        for y in 0..47 { for x in 0..47 { padded.data[(y+14)*75 + (x+14)] = img.at(x, y); } }
+        for y in 0..47 {
+            for x in 0..47 {
+                padded.data[(y + 14) * 75 + (x + 14)] = img.at(x, y);
+            }
+        }
         println!("padded 47 -> {:?}", decode_qr(&padded));
         let up = resize_gray(&padded, 300, 300, Filter::Triangle);
         println!("upscaled -> {:?}", decode_qr(&up));
@@ -281,7 +290,12 @@ mod debug_tests {
                 (bbox[2] + pad) as usize,
                 (bbox[3] + pad) as usize,
             );
-            println!("{mmv} mm ({}x{}) -> {:?} (esperado {texto})", crop.w, crop.h, decode_qr_rgb(&crop));
+            println!(
+                "{mmv} mm ({}x{}) -> {:?} (esperado {texto})",
+                crop.w,
+                crop.h,
+                decode_qr_rgb(&crop)
+            );
         }
     }
 

@@ -20,7 +20,14 @@ fn synth_frame(w: usize, h: usize, base: [u8; 3]) -> (FrameInput, [u8; 3]) {
         }
     }
     (
-        FrameInput { w, h, rgba: Some(rgba), has_alpha: false, orig_name: "f.png".into(), orig_file: None },
+        FrameInput {
+            w,
+            h,
+            rgba: Some(rgba),
+            has_alpha: false,
+            orig_name: "f.png".into(),
+            orig_file: None,
+        },
         base,
     )
 }
@@ -49,11 +56,7 @@ fn simulate_scan(sheet_img: &Rgb, scale: f64, seed: u64) -> Rgb {
     // rotación de ~2° + un toque de perspectiva + traslación
     let ang: f64 = 0.035;
     let (c, sn) = (ang.cos() * scale, ang.sin() * scale);
-    let m: H3 = [
-        c, -sn, 40.0,
-        sn, c, 30.0,
-        0.000004, 0.000002, 1.0,
-    ];
+    let m: H3 = [c, -sn, 40.0, sn, c, 30.0, 0.000004, 0.000002, 1.0];
     let minv = invert_h(&m).unwrap();
     let mut rng = Rng::new(seed);
     let mut out = Rgb::new(out_w, out_h, [180, 180, 175]);
@@ -103,7 +106,12 @@ fn normal_mode_full_roundtrip() {
     let l = build_layout(&s, (16.0, 9.0)).unwrap();
     let mut frames = Vec::new();
     let mut colors = Vec::new();
-    for base in [[200u8, 60, 60], [60, 180, 60], [60, 60, 200], [180, 160, 40]] {
+    for base in [
+        [200u8, 60, 60],
+        [60, 180, 60],
+        [60, 60, 200],
+        [180, 160, 40],
+    ] {
         let (f, c) = synth_frame(320, 180, base);
         frames.push(f);
         colors.push(c);
@@ -117,10 +125,20 @@ fn normal_mode_full_roundtrip() {
 
     // escaneo simulado a 1.4× con rotación y perspectiva
     let scan = simulate_scan(&img, 1.4, 99);
-    let out = process_scan(DynImg::U8(scan), "scan1.png", &layout, &ScanOptions::default(), &HashMap::new());
+    let out = process_scan(
+        DynImg::U8(scan),
+        "scan1.png",
+        &layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
     assert_eq!(out.result["ok"], json!(true), "resultado: {}", out.result);
     assert_eq!(out.result["hoja_numero"], json!(1));
-    assert!(out.result["marcadores"].as_i64().unwrap() >= 6, "{}", out.result);
+    assert!(
+        out.result["marcadores"].as_i64().unwrap() >= 6,
+        "{}",
+        out.result
+    );
     assert_eq!(out.frames.len(), 4, "faltan frames: {}", out.result);
     // la escala medida debe rondar 1.4
     let esc = out.result["escala"].as_f64().unwrap();
@@ -131,7 +149,10 @@ fn normal_mode_full_roundtrip() {
         let rgb = crop.to_rgb8();
         let m = mean_rgb(&rgb);
         // color base con franjas blancas ~20 %: media esperada = 0.8·base + 0.2·blanco
-        let expect: Vec<f64> = colors[idx].iter().map(|&c| 0.8 * c as f64 + 0.2 * 255.0).collect();
+        let expect: Vec<f64> = colors[idx]
+            .iter()
+            .map(|&c| 0.8 * c as f64 + 0.2 * 255.0)
+            .collect();
         for ch in 0..3 {
             assert!(
                 (m[ch] - expect[ch]).abs() < 28.0,
@@ -156,7 +177,13 @@ fn scan_mirrored_is_auto_corrected() {
     let layout = build_layout_json(&s, &l, &[record], json!([]), json!({}), None);
 
     let scan = simulate_scan(&img, 1.2, 7).flip_horizontal();
-    let out = process_scan(DynImg::U8(scan), "esp.png", &layout, &ScanOptions::default(), &HashMap::new());
+    let out = process_scan(
+        DynImg::U8(scan),
+        "esp.png",
+        &layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
     assert_eq!(out.result["ok"], json!(true), "{}", out.result);
     assert_eq!(out.result["espejado"], json!(true));
     assert_eq!(out.frames.len(), 1);
@@ -192,11 +219,20 @@ fn markers_identify_sheet_without_qr() {
     }
     let layout = build_layout_json(&s, &l, &records, json!([]), json!({}), None);
     let iph = &layout["marcadores"]["ids_por_hoja"];
-    assert!(iph.is_object(), "el layout sin QR debe llevar ids_por_hoja: {iph}");
+    assert!(
+        iph.is_object(),
+        "el layout sin QR debe llevar ids_por_hoja: {iph}"
+    );
     assert_ne!(iph["1"], iph["2"], "cada hoja debe tener IDs distintos");
 
     let scan = simulate_scan(&page2_img.unwrap(), 1.3, 21);
-    let out = process_scan(DynImg::U8(scan), "s2.png", &layout, &ScanOptions::default(), &HashMap::new());
+    let out = process_scan(
+        DynImg::U8(scan),
+        "s2.png",
+        &layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
     assert_eq!(out.result["ok"], json!(true), "resultado: {}", out.result);
     assert_eq!(out.result["hoja_numero"], json!(2), "{}", out.result);
     let via = out.result["via"].as_str().unwrap();
@@ -208,7 +244,8 @@ fn markers_identify_sheet_without_qr() {
     // descartes venían de releer marcadores propios como IDs de otras hojas)
     let adv = out.result["advertencias"].as_array().unwrap();
     assert!(
-        adv.iter().all(|a| !a.as_str().unwrap_or("").contains("discarded")),
+        adv.iter()
+            .all(|a| !a.as_str().unwrap_or("").contains("discarded")),
         "descartes inesperados: {adv:?}"
     );
     let mut labs: Vec<&str> = out.frames.iter().map(|(l2, _)| l2.as_str()).collect();
@@ -245,8 +282,17 @@ fn cyanotype_full_roundtrip() {
     let azul = cyanotype::simulate_print(&copia_derecha, None, Some(&s.cyan_ink), None);
 
     let scan = simulate_scan(&azul, 1.3, 42);
-    let opts = ScanOptions { mode: "auto".into(), ..Default::default() }; // el layout dice "cianotipia"
-    let out = process_scan(DynImg::U8(scan), "cyan1.png", &layout, &opts, &HashMap::new());
+    let opts = ScanOptions {
+        mode: "auto".into(),
+        ..Default::default()
+    }; // el layout dice "cianotipia"
+    let out = process_scan(
+        DynImg::U8(scan),
+        "cyan1.png",
+        &layout,
+        &opts,
+        &HashMap::new(),
+    );
     assert_eq!(out.result["ok"], json!(true), "resultado: {}", out.result);
     assert_eq!(out.frames.len(), 2, "{}", out.result);
     // el frame oscuro y el rojizo deben distinguirse en la copia azul:
@@ -255,7 +301,12 @@ fn cyanotype_full_roundtrip() {
     let f2 = out.frames.iter().find(|(l2, _)| l2 == "cy_002").unwrap();
     let m1 = mean_rgb(&f1.1.to_rgb8());
     let m2 = mean_rgb(&f2.1.to_rgb8());
-    assert!(m1[0] > m2[0] + 10.0, "rojo claro {} vs oscuro {}", m1[0], m2[0]);
+    assert!(
+        m1[0] > m2[0] + 10.0,
+        "rojo claro {} vs oscuro {}",
+        m1[0],
+        m2[0]
+    );
 }
 
 #[test]
@@ -271,9 +322,23 @@ fn sixteen_bit_scan_keeps_depth() {
 
     let scan8 = simulate_scan(&page.image.unwrap(), 1.1, 3);
     // subir a 16 bits
-    let data16: Vec<u16> = scan8.data.iter().map(|&v| (v as u16) << 8 | v as u16).collect();
-    let scan16 = DynImg::U16(mxm_core::img::Rgb16 { w: scan8.w, h: scan8.h, data: data16 });
-    let out = process_scan(scan16, "s16.tif", &layout, &ScanOptions::default(), &HashMap::new());
+    let data16: Vec<u16> = scan8
+        .data
+        .iter()
+        .map(|&v| (v as u16) << 8 | v as u16)
+        .collect();
+    let scan16 = DynImg::U16(mxm_core::img::Rgb16 {
+        w: scan8.w,
+        h: scan8.h,
+        data: data16,
+    });
+    let out = process_scan(
+        scan16,
+        "s16.tif",
+        &layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
     assert_eq!(out.result["ok"], json!(true), "{}", out.result);
     match &out.frames[0].1 {
         DynImg::U16(_) => {}
@@ -309,7 +374,10 @@ fn manual_sheet_assignment_when_the_qr_is_unreadable() {
         }
     }
     let mut layout = build_layout_json(&s, &l, &records, json!([]), json!({}), None);
-    assert!(layout["marcadores"]["ids_por_hoja"].is_null(), "con QR no debe haber ids_por_hoja");
+    assert!(
+        layout["marcadores"]["ids_por_hoja"].is_null(),
+        "con QR no debe haber ids_por_hoja"
+    );
     // simular que ningún QR se puede leer: se quitan del layout
     for hoja in layout["hojas"].as_array_mut().unwrap() {
         hoja["qrs"] = json!({});
@@ -327,10 +395,16 @@ fn manual_sheet_assignment_when_the_qr_is_unreadable() {
     );
     assert_eq!(auto.result["ok"], json!(false), "{}", auto.result);
     assert!(auto.frames.is_empty());
-    assert!(!auto.unidentified.is_empty(), "debe dejar los recortes sin identificar");
+    assert!(
+        !auto.unidentified.is_empty(),
+        "debe dejar los recortes sin identificar"
+    );
 
     // 2. Con asignación manual a la hoja 2: recortes con sus etiquetas.
-    let opts = ScanOptions { forced_sheet: Some(2), ..ScanOptions::default() };
+    let opts = ScanOptions {
+        forced_sheet: Some(2),
+        ..ScanOptions::default()
+    };
     let out = process_scan(DynImg::U8(scan), "s2.png", &layout, &opts, &HashMap::new());
     assert_eq!(out.result["ok"], json!(true), "{}", out.result);
     assert_eq!(out.result["hoja_numero"], json!(2), "{}", out.result);
@@ -341,9 +415,16 @@ fn manual_sheet_assignment_when_the_qr_is_unreadable() {
     assert_eq!(labs, vec!["demo_003", "demo_004"]);
 
     // 3. Un número de hoja inexistente no rompe: vuelve a lo automático.
-    let opts = ScanOptions { forced_sheet: Some(99), ..ScanOptions::default() };
+    let opts = ScanOptions {
+        forced_sheet: Some(99),
+        ..ScanOptions::default()
+    };
     let bad = process_scan(
-        DynImg::U8(simulate_scan(&render_page(&s, &l, &[], &[], 1, true).image.unwrap(), 1.3, 34)),
+        DynImg::U8(simulate_scan(
+            &render_page(&s, &l, &[], &[], 1, true).image.unwrap(),
+            1.3,
+            34,
+        )),
         "s1.png",
         &layout,
         &opts,
@@ -351,7 +432,8 @@ fn manual_sheet_assignment_when_the_qr_is_unreadable() {
     );
     let adv = bad.result["advertencias"].as_array().unwrap();
     assert!(
-        adv.iter().any(|a| a.as_str().unwrap_or("").contains("does not exist")),
+        adv.iter()
+            .any(|a| a.as_str().unwrap_or("").contains("does not exist")),
         "debe avisar del número inválido: {adv:?}"
     );
 }
@@ -375,7 +457,12 @@ fn transparent_frames_take_the_chosen_alpha_colour() {
         orig_file: None,
     };
     let count = |img: &Rgb, c: [u8; 3]| {
-        img.data.as_chunks::<3>().0.iter().filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2]).count()
+        img.data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2])
+            .count()
     };
     let labels: Vec<String> = (1..=4).map(|i| format!("demo_{i:03}")).collect();
     let sheet_with = |mode: &str| {
@@ -384,14 +471,26 @@ fn transparent_frames_take_the_chosen_alpha_colour() {
         s.alpha_bg_color = "#0000FF".into();
         let l = build_layout(&s, (16.0, 9.0)).unwrap();
         let frames: Vec<FrameInput> = (0..4).map(|_| transparent(320, 180)).collect();
-        render_page(&s, &l, &frames, &labels, 1, true).image.unwrap()
+        render_page(&s, &l, &frames, &labels, 1, true)
+            .image
+            .unwrap()
     };
 
     let blue = count(&sheet_with("color"), [0, 0, 255]);
-    assert!(blue > 10_000, "el color elegido tiene que llegar a la hoja (azules: {blue})");
+    assert!(
+        blue > 10_000,
+        "el color elegido tiene que llegar a la hoja (azules: {blue})"
+    );
 
     // y con el ajuste por defecto lo transparente sigue siendo papel
     let white = sheet_with("none");
-    assert_eq!(count(&white, [0, 0, 255]), 0, "sin el ajuste no debe aparecer azul");
-    assert!(count(&white, [255, 255, 255]) > 10_000, "lo transparente debe quedar blanco");
+    assert_eq!(
+        count(&white, [0, 0, 255]),
+        0,
+        "sin el ajuste no debe aparecer azul"
+    );
+    assert!(
+        count(&white, [255, 255, 255]) > 10_000,
+        "lo transparente debe quedar blanco"
+    );
 }
