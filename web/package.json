@@ -3,14 +3,20 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "node prepare-ffmpeg.mjs && vite build",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
+    "build": "npm run typecheck && node prepare-ffmpeg.mts && vite build",
     "preview": "vite preview",
-    "test:e2e": "node prepare-ffmpeg.mjs && MXM_E2E=1 vite build && node e2e-run.mjs"
+    "test:e2e": "node prepare-ffmpeg.mts && MXM_E2E=1 vite build && node e2e-run.mts"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
     "puppeteer-core": "^25.9.0",
+    "typescript": "^7.0.2",
     "vite": "^8.2.2"
   },
   "dependencies": {

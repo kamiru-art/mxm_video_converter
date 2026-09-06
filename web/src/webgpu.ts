@@ -8,14 +8,18 @@
 // mitad. Si WebGPU no está disponible (o la imagen excede los límites de la
 // GPU), el llamador cae al camino todo-en-WASM sin pérdida de funcionalidad.
 
-let devicePromise = null;
+import type { Bytes } from './types.ts';
 
-async function initDevice() {
+let devicePromise: Promise<GPUDevice | null> | null = null;
+
+type LimitKey = 'maxStorageBufferBindingSize' | 'maxBufferSize' | 'maxTextureDimension2D';
+
+async function initDevice(): Promise<GPUDevice | null> {
   if (!navigator.gpu) return null;
   try {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) return null;
-    const want = (k, v) => Math.min(adapter.limits[k] ?? v, v);
+    const want = (k: LimitKey, v: number): number => Math.min(adapter.limits[k] ?? v, v);
     const device = await adapter.requestDevice({
       requiredLimits: {
         maxStorageBufferBindingSize: want('maxStorageBufferBindingSize', 1 << 30),
@@ -30,7 +34,7 @@ async function initDevice() {
   }
 }
 
-export function getGpuDevice() {
+export function getGpuDevice(): Promise<GPUDevice | null> {
   if (!devicePromise) devicePromise = initDevice();
   return devicePromise;
 }
@@ -98,9 +102,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
-let pipelineCache = null;
+interface PipelineCache {
+  device: GPUDevice;
+  pipeline: GPUComputePipeline;
+}
 
-function getPipeline(device) {
+let pipelineCache: PipelineCache | null = null;
+
+function getPipeline(device: GPUDevice): GPUComputePipeline {
   if (!pipelineCache || pipelineCache.device !== device) {
     const module = device.createShaderModule({ code: SHADER });
     pipelineCache = {
@@ -114,7 +123,7 @@ function getPipeline(device) {
   return pipelineCache.pipeline;
 }
 
-function invert3x3(m) {
+function invert3x3(m: number[]): number[] | null {
   const [a, b, c, d, e, f, g, h, i] = m;
   const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
   const det = a * A + b * B + c * C;
@@ -126,13 +135,16 @@ function invert3x3(m) {
   ];
 }
 
+/** Lo que la GPU acepta como origen del warp. */
+export type WarpSource = ImageBitmap | OffscreenCanvas;
+
 /**
  * Endereza `source` (ImageBitmap/OffscreenCanvas) con la homografía `m`
  * (escaneo→layout, la que devuelve scan_detect) al tamaño outW×outH.
  * `flipped`: el escaneo llegó espejado (la homografía se calculó sobre la
  * imagen volteada). Devuelve RGBA (Uint8Array) o null si la GPU no puede.
  */
-export async function gpuWarpPerspective(source, m, flipped, outW, outH) {
+export async function gpuWarpPerspective(source: WarpSource, m: number[], flipped: boolean, outW: number, outH: number): Promise<Bytes | null> {
   const device = await getGpuDevice();
   if (!device) return null;
   const minv = invert3x3(m);
@@ -143,7 +155,10 @@ export async function gpuWarpPerspective(source, m, flipped, outW, outH) {
   if (srcW > lim.maxTextureDimension2D || srcH > lim.maxTextureDimension2D) return null;
   if (outBytes > lim.maxStorageBufferBindingSize || outBytes > lim.maxBufferSize) return null;
 
-  let tex, outBuf, readBuf, uni;
+  let tex: GPUTexture | undefined;
+  let outBuf: GPUBuffer | undefined;
+  let readBuf: GPUBuffer | undefined;
+  let uni: GPUBuffer | undefined;
   try {
     tex = device.createTexture({
       size: [srcW, srcH],

@@ -1,8 +1,12 @@
 // Fase ③ — Calibración: perfil de impresora, curva de cianotipia, ColorBlocker.
 
-import { run } from './pool.js';
-import { el, toast, download, dropzone, field, numberInput, select, check, pngUrl } from './ui.js';
-import * as store from './store.js';
+import { run } from './pool.ts';
+import { el, toast, download, dropzone, field, numberInput, select, check } from './ui.ts';
+import { errMsg } from './errors.ts';
+import * as store from './store.ts';
+import type { ProfileKind, ProfileMap } from './store.ts';
+import type { ColorProfile, CyanProfile, PrinterProfile } from './types.ts';
+import type { Child } from './ui.ts';
 
 const PAPERS = ['A4', 'A3', 'A5', 'Letter'];
 
@@ -11,7 +15,7 @@ const PAPERS = ['A4', 'A3', 'A5', 'Letter'];
  *  (ver .calib-card), y por eso el primer control de cada una arranca a la
  *  altura de sus vecinas aunque las entradillas ocupen distinto número de
  *  líneas al estrechar la ventana. */
-function calibCard(title, intro, ...body) {
+function calibCard(title: string, intro: string, ...body: Child[]): HTMLDivElement {
   return el('div', { class: 'paper calib-card' },
     el('h2', {}, title),
     el('div', { class: 'hint' }, intro),
@@ -19,7 +23,7 @@ function calibCard(title, intro, ...body) {
   );
 }
 
-function profileSaver(kind, getData) {
+function profileSaver<K extends ProfileKind>(kind: K, getData: () => ProfileMap[K] | null): HTMLDivElement {
   const name = el('input', { type: 'text', placeholder: 'profile name' });
   const btn = el('button', {
     class: 'btn blue small', onclick: () => {
@@ -31,7 +35,7 @@ function profileSaver(kind, getData) {
       } catch (e) {
         // el perfil es el resultado de imprimir, exponer, secar y escanear:
         // decir "guardado" cuando no lo está cuesta toda esa tarde otra vez
-        toast(`Profile “${n}” was NOT saved. ${e.message ?? e}`, 'err');
+        toast(`Profile “${n}” was NOT saved. ${errMsg(e)}`, 'err');
         return;
       }
       toast(`Profile “${n}” saved. You can now use it in phase ①.`, 'ok');
@@ -41,8 +45,9 @@ function profileSaver(kind, getData) {
 }
 
 /** Dibuja respuesta medida + curva en un canvas. */
-function drawCurve(canvas, { respuesta = [], lut = [] }) {
+function drawCurve(canvas: HTMLCanvasElement, { respuesta = [], lut = [] }: { respuesta?: [number, number][]; lut?: number[] }): void {
   const ctx = canvas.getContext('2d');
+  if (!ctx) return;
   const W = canvas.width, H = canvas.height;
   ctx.fillStyle = '#F4F0E4';
   ctx.fillRect(0, 0, W, H);
@@ -61,7 +66,7 @@ function drawCurve(canvas, { respuesta = [], lut = [] }) {
     ctx.beginPath();
     respuesta.forEach(([d, y], i) => {
       const px = (d / 255) * W, py = H - (y / 255) * H;
-      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
     });
     ctx.stroke();
   }
@@ -71,7 +76,7 @@ function drawCurve(canvas, { respuesta = [], lut = [] }) {
     ctx.beginPath();
     lut.forEach((d, g) => {
       const px = (g / 255) * W, py = H - (d / 255) * H;
-      g ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      if (g) ctx.lineTo(px, py); else ctx.moveTo(px, py);
     });
     ctx.stroke();
   }
@@ -80,12 +85,12 @@ function drawCurve(canvas, { respuesta = [], lut = [] }) {
   ctx.fillText('red: measured response · blue: compensation curve', 8, 14);
 }
 
-export function mountPhase3(root) {
+export function mountPhase3(root: HTMLElement): void {
   // ── A. Impresora ──────────────────────────────────────────
   const aPaper = select(PAPERS, 'A4');
   const aDpi = numberInput(300, { min: 150, max: 600 });
   const aScanDpi = numberInput(300, { min: 0 });
-  let aResult = null;
+  let aResult: PrinterProfile | null = null;
   const aOut = el('div');
   const cardA = calibCard('Printer profile',
     'Measures your printer’s real scale, its tonal response and the smallest marker and QR it still prints readably. '
@@ -102,7 +107,7 @@ export function mountPhase3(root) {
           toast('Print the page at 100 % (no “fit to page”), scan it whole and drop it here.', 'ok');
         } catch (e) {
           console.error(e);
-          toast(`Could not build the test page: ${e.message ?? e}`, 'err');
+          toast(`Could not build the test page: ${errMsg(e)}`, 'err');
         }
       },
     }, 'Download test page'),
@@ -116,16 +121,17 @@ export function mountPhase3(root) {
             bytes, paper: aPaper.value, dpi: parseInt(aDpi.value, 10),
             scanDpi: parseFloat(aScanDpi.value) || 0,
           }, [bytes.buffer]);
-          aResult = JSON.parse(res);
+          const result = JSON.parse(res) as PrinterProfile;
+          aResult = result;
           aOut.replaceChildren(
             el('div', { class: 'allok-box' },
-              el('div', {}, `Measured scale: ${(aResult.scale_x * 100).toFixed(2)} % × ${(aResult.scale_y * 100).toFixed(2)} %`),
-              el('div', {}, `Smallest detected marker: ${aResult.marker_min_mm ?? '—'} mm → use ≥ ${aResult.marker_recomendado_mm} mm`),
-              el('div', {}, `Smallest readable QR: ${aResult.qr_min_mm ?? '—'} mm → use ≥ ${aResult.qr_recomendado_mm} mm`),
+              el('div', {}, `Measured scale: ${(result.scale_x * 100).toFixed(2)} % × ${(result.scale_y * 100).toFixed(2)} %`),
+              el('div', {}, `Smallest detected marker: ${result.marker_min_mm ?? '—'} mm → use ≥ ${result.marker_recomendado_mm} mm`),
+              el('div', {}, `Smallest readable QR: ${result.qr_min_mm ?? '—'} mm → use ≥ ${result.qr_recomendado_mm} mm`),
             ),
-            aResult.notas?.length ? el('ul', { class: 'warnlist' }, aResult.notas.map((n) => el('li', {}, n))) : '',
+            result.notas?.length ? el('ul', { class: 'warnlist' }, result.notas.map((n) => el('li', {}, n))) : '',
           );
-        } catch (e) { toast(String(e.message ?? e), 'err'); }
+        } catch (e) { toast(errMsg(e), 'err'); }
       },
     })),
     aOut,
@@ -138,7 +144,7 @@ export function mountPhase3(root) {
   const bTarget = select([['kamiru21', '21-patch strip (quick)'], ['edn256', 'EDN 2.2 chart, 256 tones (fine)']], 'kamiru21');
   const bInk = el('input', { type: 'color', value: '#000000' });
   const bMirror = check('Mirrored (like your real negatives)', true);
-  let bResult = null;
+  let bResult: CyanProfile | null = null;
   const bOut = el('div');
   const bCanvas = el('canvas', { class: 'curveplot', width: 360, height: 240, style: 'width:100%; max-width:380px; margin-top:8px' });
   bCanvas.style.display = 'none';
@@ -159,7 +165,7 @@ export function mountPhase3(root) {
           toast('Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).', 'ok');
         } catch (e) {
           console.error(e);
-          toast(`Could not build the chart: ${e.message ?? e}`, 'err');
+          toast(`Could not build the chart: ${errMsg(e)}`, 'err');
         }
       },
     }, 'Download chart (negative for film)'),
@@ -173,16 +179,17 @@ export function mountPhase3(root) {
             bytes, paper: bPaper.value, dpi: parseInt(bDpi.value, 10),
             target: bTarget.value, ink: bInk.value,
           }, [bytes.buffer]);
-          bResult = JSON.parse(res);
-          bResult.respuesta = bResult.respuesta ?? [];
+          const result = JSON.parse(res) as CyanProfile;
+          result.respuesta = result.respuesta ?? [];
+          bResult = result;
           bCanvas.style.display = '';
-          drawCurve(bCanvas, { respuesta: bResult.respuesta, lut: bResult.lut });
+          drawCurve(bCanvas, { respuesta: result.respuesta, lut: result.lut });
           bOut.replaceChildren(
             el('div', { class: 'allok-box' },
-              `Measured dynamic range: ${(bResult.rango_dinamico * 100).toFixed(0)} % · 256-point curve built.`),
-            bResult.notas?.length ? el('ul', { class: 'warnlist' }, bResult.notas.map((n) => el('li', {}, n))) : '',
+              `Measured dynamic range: ${((result.rango_dinamico ?? 0) * 100).toFixed(0)} % · 256-point curve built.`),
+            result.notas?.length ? el('ul', { class: 'warnlist' }, result.notas.map((n) => el('li', {}, n))) : '',
           );
-        } catch (e) { toast(String(e.message ?? e), 'err'); }
+        } catch (e) { toast(errMsg(e), 'err'); }
       },
     })),
     bCanvas, bOut,
@@ -193,7 +200,7 @@ export function mountPhase3(root) {
   const cPaper = select(PAPERS, 'A4');
   const cDpi = numberInput(300, { min: 150, max: 600 });
   const cMirror = check('Mirrored', true);
-  let cResult = null;
+  let cResult: ColorProfile | null = null;
   const cOut = el('div');
   const cardC = calibCard('EDN ColorBlocker',
     '36 hues × 21 variants: finds which ink color blocks UV best on YOUR printer (black doesn’t always win) and builds a 3-stop gradient. '
@@ -210,7 +217,7 @@ export function mountPhase3(root) {
           toast('Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.', 'ok');
         } catch (e) {
           console.error(e);
-          toast(`Could not build the ColorBlocker chart: ${e.message ?? e}`, 'err');
+          toast(`Could not build the ColorBlocker chart: ${errMsg(e)}`, 'err');
         }
       },
     }, 'Download ColorBlocker chart'),
@@ -223,20 +230,21 @@ export function mountPhase3(root) {
           const res = await run('analyze_colorblocker', {
             bytes, paper: cPaper.value, dpi: parseInt(cDpi.value, 10),
           }, [bytes.buffer]);
-          cResult = JSON.parse(res);
-          const sw = (hex) => el('span', {
+          const result = JSON.parse(res) as ColorProfile;
+          cResult = result;
+          const sw = (hex: string): HTMLSpanElement => el('span', {
             style: `display:inline-block; width:22px; height:22px; border-radius:4px; background:${hex}; border:1px solid #0003; vertical-align:middle; margin:0 4px`,
             title: hex,
           });
           cOut.replaceChildren(
             el('div', { class: 'allok-box' },
-              el('div', {}, 'Best UV blocker: ', sw(cResult.mejor_color), el('code', {}, cResult.mejor_color)),
+              el('div', {}, 'Best UV blocker: ', sw(result.mejor_color), el('code', {}, result.mejor_color)),
               el('div', { style: 'margin-top:4px' }, 'Gradient (shadows → highlights): ',
-                ...(cResult.stops ?? []).map((s) => sw(s[1]))),
+                ...(result.stops ?? []).map((s) => sw(s[1]))),
             ),
-            cResult.notas?.length ? el('ul', { class: 'warnlist' }, cResult.notas.map((n) => el('li', {}, n))) : '',
+            result.notas?.length ? el('ul', { class: 'warnlist' }, result.notas.map((n) => el('li', {}, n))) : '',
           );
-        } catch (e) { toast(String(e.message ?? e), 'err'); }
+        } catch (e) { toast(errMsg(e), 'err'); }
       },
     })),
     cOut,
@@ -266,7 +274,7 @@ export function mountPhase3(root) {
           describedBy: 'calib-import-cap',
           onFiles: async ([f]) => {
             try { store.importAll(await f.text()); toast('Profiles imported.', 'ok'); }
-            catch (e) { toast(`Import failed: ${e.message}`, 'err'); }
+            catch (e) { toast(`Import failed: ${errMsg(e)}`, 'err'); }
           },
         })),
     ),

@@ -2,11 +2,14 @@
 // WebCodecs no cubre) desde node_modules a public/ffmpeg. El .wasm de 32 MB
 // se trocea en partes de 20 MB porque Cloudflare limita cada asset estático a
 // 25 MB; el navegador las rearma en un Blob antes de instanciar el módulo.
+//
+// Node ejecuta este archivo tal cual (borrado de tipos, Node 22.18+ / 24).
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const SRC = new URL('./node_modules/@ffmpeg/core/dist/esm', import.meta.url).pathname;
-const DST = new URL('./public/ffmpeg', import.meta.url).pathname;
+const SRC = fileURLToPath(new URL('./node_modules/@ffmpeg/core/dist/esm', import.meta.url));
+const DST = fileURLToPath(new URL('./public/ffmpeg', import.meta.url));
 const PART = 20 * 1024 * 1024;
 
 mkdirSync(DST, { recursive: true });

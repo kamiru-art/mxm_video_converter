@@ -1,110 +1,98 @@
 // Fase ① — Generar hojas de contacto.
 
-import { run } from './pool.js';
-import { el, toast, download, progressBar, dropzone, field, numberInput, select, check,
-         selectIndices, uniquifyLabels, originalPageNumbers, sanitizeLabel, pngUrl } from './ui.js';
-import { project, clearFrames, frameImageData, ensureThumb } from './project.js';
-import { extractFrames, probeVideo } from './video.js';
-import { generateSheets, resolveCyanCurve, packThumbs, packImageData, settingsForCore } from './gen.js';
-import * as store from './store.js';
-import { makeZip } from './zip.js';
+import { run } from './pool.ts';
+import { el, toast, download, progressBar, dropzone, field, numberInput, select, setOptions, check,
+         selectIndices, uniquifyLabels, originalPageNumbers, sanitizeLabel, pngUrl, context2d } from './ui.ts';
+import type { SelectOption } from './ui.ts';
+import { project, clearFrames, frameImageData, ensureThumb } from './project.ts';
+import { extractFrames, probeVideo } from './video.ts';
+import { generateSheets, resolveCyanCurve, packThumbs, packImageData, settingsForCore } from './gen.ts';
+import type { GenFrame, PackItem } from './gen.ts';
+import * as store from './store.ts';
+import { makeZip } from './zip.ts';
+import { defaultSettings, normalizeSettings, isCyanotype } from './settings.ts';
+import { errMsg } from './errors.ts';
+import type {
+  Settings, DedupGroups, LayoutInfo, Phase1Persist,
+  NumberKeys, StringKeys, BooleanKeys,
+} from './types.ts';
 
 const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', 'Letter', 'Legal', 'Tabloid', 'Custom'];
-const ORIENTATIONS = [['auto', 'Best fit (automatic)'], ['portrait', 'Portrait'], ['landscape', 'Landscape']];
+const ORIENTATIONS: SelectOption[] = [['auto', 'Best fit (automatic)'], ['portrait', 'Portrait'], ['landscape', 'Landscape']];
 const CORNERS = ['Bottom right', 'Bottom left', 'Top right', 'Top left'];
 
-// Los ajustes guardados antes de unificar la interfaz en inglés llevan los
-// valores en español. El núcleo Rust sigue aceptando ambos, pero los
-// desplegables solo tienen los nuevos: sin esta tabla, cargar un preset
-// antiguo dejaría el control en la primera opción y cambiaría el proyecto.
-const LEGACY_VALUES = {
-  paper: { 'Carta (Letter)': 'Letter', 'Oficio (Legal)': 'Legal', 'Tabloide (Tabloid)': 'Tabloid', Personalizado: 'Custom' },
-  orientation: { 'Mejor ajuste (automático)': 'auto', 'Mejor ajuste (automatico)': 'auto', Vertical: 'portrait', Horizontal: 'landscape' },
-  page_num_corner: {
-    'Inferior derecha': 'Bottom right', 'Inferior izquierda': 'Bottom left',
-    'Superior derecha': 'Top right', 'Superior izquierda': 'Top left',
-  },
-  alpha_mode: { ninguno: 'none', color: 'color', borde: 'border' },
-  cyan_bg: { ahorro: 'saving', completo: 'full' },
-  mode: { cianotipia: 'cyanotype', normal: 'normal' },
-};
-
-/** Traduce al vocabulario actual los ajustes que vengan de una versión
- *  anterior (localStorage, un preset exportado o el layout de un proyecto). */
-export function normalizeSettings(settings) {
-  const out = { ...settings };
-  for (const [key, table] of Object.entries(LEGACY_VALUES)) {
-    const v = out[key];
-    if (typeof v === 'string' && table[v]) out[key] = table[v];
+/** Lo mismo que normalizeSettings para el estado de la fase (numeración de
+ *  etiquetas y de hojas). */
+function normalizePhase(fase: Partial<Phase1Persist>): Partial<Phase1Persist> {
+  const out: Partial<Phase1Persist> = { ...fase };
+  for (const k of ['numbering', 'pageNumbering'] as const) {
+    if ((out[k] as string | undefined) === 'continua') out[k] = 'sequential';
   }
   return out;
 }
 
-/** Lo mismo para el estado de la fase (numeración de etiquetas y de hojas). */
-function normalizePhase(fase) {
-  const out = { ...fase };
-  for (const k of ['numbering', 'pageNumbering']) {
-    if (out[k] === 'continua') out[k] = 'sequential';
-  }
-  return out;
-}
-
-export function defaultSettings() {
-  return {
-    paper: 'A4', orientation: 'auto', dpi: 300,
-    custom_w_mm: 210, custom_h_mm: 297, margin_mm: 10, gutter_mm: 5,
-    bg_color: '#FFFFFF', alpha_mode: 'none', alpha_bg_color: '#000000',
-    alpha_border_color: '#000000', alpha_border_mm: 0.5,
-    cols: 4, rows: 5, labels_on: true, base_name: 'abc', separator: '_',
-    leading_zeros: 3, start_index: 1, font_size_pt: 9, label_gap_mm: 1.5,
-    label_color: '#000000', page_num_on: true, page_num_corner: 'Bottom right',
-    page_num_prefix: '', page_num_start: 1, page_num_zeros: 1, page_num_size_pt: 11,
-    page_num_color: '#000000', registration_on: true, marker_count: 8,
-    marker_size_mm: 10, marker_margin_mm: 4, marker_dict: 'DICT_5X5_100',
-    qr_on: false, qr_size_mm: 10, gray_patch_on: false, project_name: '',
-    mode: 'normal', cyan_mirror: true, cyan_ink: '#000000', cyan_curve: null,
-    cyan_curve_strength: 100, cyan_adaptive: 0, cyan_clarity: 0,
-    cyan_bg: 'saving', cyan_halo_mm: 5, cyan_frame_border_mm: 0.8,
-    cyan_block_color: null, cyan_ink_stops: null,
-    print_scale_x: 1, print_scale_y: 1, out_name: 'hojas',
-    fmt_png: true, fmt_pdf: true, fmt_tiff: false,
-  };
+export interface Phase1State {
+  settings: Settings;
+  include: string;
+  exclude: string;
+  naming: 'auto' | 'original';           // auto | original (nombre de archivo)
+  numbering: 'sequential' | 'original';  // sequential | original
+  pageNumbering: 'sequential' | 'original';
+  dedupOn: boolean;
+  dedupThreshold: number;
+  dedupGroups: DedupGroups | null;       // {reps, rep_of} sobre la selección actual
+  keepOriginals: boolean;
+  exportFrames: boolean;
+  sheets_include: string;
+  sheets_exclude: string;
+  previewPage: number;
+  previewSimulate: boolean;
+  cyanResponse: [number, number][] | null; // respuesta medida del perfil (soft-proof)
 }
 
 // estado de la fase (persistido en localStorage)
-export const ph1 = {
+export const ph1: Phase1State = {
   settings: normalizeSettings({ ...defaultSettings(), ...(store.loadSettings() ?? {}) }),
   include: '', exclude: '',
-  naming: 'auto',           // auto | original (nombre de archivo)
-  numbering: 'sequential',  // sequential | original
+  naming: 'auto',
+  numbering: 'sequential',
   pageNumbering: 'sequential',
   dedupOn: false, dedupThreshold: 4,
-  dedupGroups: null,        // {reps, rep_of} sobre la selección actual
+  dedupGroups: null,
   keepOriginals: true, exportFrames: false,
   sheets_include: '', sheets_exclude: '',
   previewPage: 0, previewSimulate: false,
-  cyanResponse: null,       // respuesta medida del perfil (soft-proof)
+  cyanResponse: null,
 };
 
-/** El modo cianotipia se guarda como "cyanotype"; los proyectos anteriores
- *  lo llamaban "cianotipia". */
-function isCyanotype(s) {
-  const m = String(s.mode ?? '').toLowerCase();
-  return m.startsWith('cyan') || m.startsWith('cian');
-}
-
-function stem(name) {
+function stem(name: string): string {
   return name.replace(/\.[^.]+$/, '');
 }
 
-function formatLabel(s, num) {
+function formatLabel(s: Settings, num: number): string {
   let str = String(num);
   while (str.length < (s.leading_zeros ?? 1)) str = '0' + str;
   return s.base_name ? `${s.base_name}${s.separator}${str}` : str;
 }
 
+export interface PrintedFrame {
+  frameIdx: number;
+  label: string;
+  pos: number;
+}
+
+export interface Plan {
+  positions: number[];
+  rawLabels: string[];
+  printed: PrintedFrame[];
+  timeline: { pos: number; etiqueta: string; rep: string }[];
+  pageNumbers: number[] | null;
+  numPages: number;
+  perPage: number;
+}
+
 /** Plan de impresión completo (selección → dedup → etiquetas → timeline). */
-export function computePlan() {
+export function computePlan(): Plan {
   const s = ph1.settings;
   const N = project.frames.length;
   const positions = selectIndices(N, ph1.include, ph1.exclude);
@@ -114,7 +102,7 @@ export function computePlan() {
       // frames extraídos de un video no tienen archivo original: se nombran
       // con el video + el número, respetando el control de dígitos
       if (f.videoStem != null) {
-        let n = String(f.seq + 1);
+        let n = String((f.seq ?? 0) + 1);
         while (n.length < (s.leading_zeros ?? 1)) n = '0' + n;
         return `${f.videoStem}${s.separator}${n}`;
       }
@@ -131,12 +119,12 @@ export function computePlan() {
     reps = ph1.dedupGroups.reps;
     repOf = ph1.dedupGroups.rep_of;
   }
-  const printed = reps.map((k) => ({
+  const printed: PrintedFrame[] = reps.map((k) => ({
     frameIdx: positions[k] - 1,
     label: rawLabels[k],
     pos: positions[k],
   }));
-  const timeline = positions.map((pos, k) => ({
+  const timeline = positions.map((_pos, k) => ({
     pos: k + 1, etiqueta: rawLabels[k], rep: rawLabels[repOf[k]],
   }));
   const perPage = Math.max(1, s.cols * s.rows);
@@ -147,15 +135,15 @@ export function computePlan() {
   return { positions, rawLabels, printed, timeline, pageNumbers, numPages, perPage };
 }
 
-async function computeDedup(statusEl) {
+async function computeDedup(statusEl: HTMLElement): Promise<void> {
   const positions = selectIndices(project.frames.length, ph1.include, ph1.exclude);
   if (!positions.length) { ph1.dedupGroups = null; return; }
   statusEl.textContent = 'analyzing repeated drawings…';
-  const thumbs = [];
+  const thumbs: OffscreenCanvas[] = [];
   for (const pos of positions) thumbs.push(await ensureThumb(pos - 1));
   const { meta, pixels } = packThumbs(thumbs);
   const hashes = await run('dedup_hashes', { meta, pixels }, [pixels.buffer]);
-  const groups = JSON.parse(await run('group_duplicates', { hashes, threshold: ph1.dedupThreshold }));
+  const groups = JSON.parse(await run('group_duplicates', { hashes, threshold: ph1.dedupThreshold })) as DedupGroups;
   ph1.dedupGroups = groups;
   const dups = groups.rep_of.filter((r, i) => r !== i).length;
   statusEl.textContent = dups
@@ -165,7 +153,7 @@ async function computeDedup(statusEl) {
 
 // ── Interfaz ──────────────────────────────────────────────────
 
-export function mountPhase1(root) {
+export function mountPhase1(root: HTMLElement): void {
   const s = ph1.settings;
 
   // ---------- panel de origen ----------
@@ -183,24 +171,25 @@ export function mountPhase1(root) {
     fpsIn.disabled = allFrames.input.checked;
   });
 
-  let pendingVideo = null;
+  let pendingVideo: File | null = null;
   const videoInfo = el('div', { class: 'hint' });
 
   const extractBtn = el('button', { class: 'btn blue small', disabled: '' }, 'Extract frames');
   extractBtn.addEventListener('click', async () => {
     if (!pendingVideo) return;
+    const video = pendingVideo;
     extractBtn.disabled = true;
     extractProg.show();
     clearFrames();
     try {
-      const meta = await extractFrames(pendingVideo, {
+      const meta = await extractFrames(video, {
         start: parseFloat(startIn.value) || 0,
         end: endIn.value ? parseFloat(endIn.value) : undefined,
         fps: allFrames.input.checked ? null : (parseFloat(fpsIn.value) || null),
-        onFrame: async (blob, thumb, t, i, w, h) => {
+        onFrame: async (blob, thumb, _t, i, w, h) => {
           // se guarda el origen (video + posición): la etiqueta "Original
           // file name" se construye después con el control de dígitos
-          const videoStem = pendingVideo.name.replace(/\.[^.]+$/, '');
+          const videoStem = video.name.replace(/\.[^.]+$/, '');
           project.frames.push({
             name: `${videoStem}_${String(i + 1).padStart(6, '0')}.png`,
             videoStem, seq: i,
@@ -218,10 +207,10 @@ export function mountPhase1(root) {
         await afterFramesChanged();
       } catch (e) {
         console.error(e);
-        toast(`The frames extracted, but the preview failed: ${e.message ?? e}`, 'err');
+        toast(`The frames extracted, but the preview failed: ${errMsg(e)}`, 'err');
       }
     } catch (e) {
-      toast(`Extraction failed: ${e.message}`, 'err');
+      toast(`Extraction failed: ${errMsg(e)}`, 'err');
     } finally {
       extractBtn.disabled = false;
       extractProg.hide();
@@ -247,7 +236,7 @@ export function mountPhase1(root) {
           extractBtn.disabled = false;
         } catch (e) {
           videoInfo.textContent = '';
-          toast(e.message, 'err');
+          toast(errMsg(e), 'err');
         }
       } else if (images.length) {
         // una carpeta entra entera: si un archivo no se deja decodificar, el
@@ -255,7 +244,7 @@ export function mountPhase1(root) {
         // una carga a medias sin explicación
         clearFrames();
         images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-        const rejected = [];
+        const rejected: string[] = [];
         for (const f of images) {
           const needsWasmDecode = /\.(tif|tiff)$/i.test(f.name);
           let w = 0, h = 0, hasAlpha = false;
@@ -286,7 +275,7 @@ export function mountPhase1(root) {
           await afterFramesChanged();
         } catch (e) {
           console.error(e);
-          toast(`The frames loaded, but the preview failed: ${e.message ?? e}`, 'err');
+          toast(`The frames loaded, but the preview failed: ${errMsg(e)}`, 'err');
         }
       }
     },
@@ -296,11 +285,11 @@ export function mountPhase1(root) {
   // Refrescar la tira decodifica fotogramas, así que puede fallar (un archivo
   // ilegible, el núcleo sin memoria). Estos manejadores no los espera nadie:
   // sin catch, el cambio se quedaba a medias y en silencio.
-  const reportRefreshFailure = (e) => {
+  const reportRefreshFailure = (e: unknown): void => {
     console.error(e);
-    toast(`Could not refresh the frames: ${e.message ?? e}`, 'err');
+    toast(`Could not refresh the frames: ${errMsg(e)}`, 'err');
   };
-  const refreshFrames = () => afterFramesChanged().catch(reportRefreshFailure);
+  const refreshFrames = (): Promise<void> => afterFramesChanged().catch(reportRefreshFailure);
 
   const includeIn = el('input', { type: 'text', placeholder: 'e.g. 1, 3-5 (empty = all)' });
   const excludeIn = el('input', { type: 'text', placeholder: 'e.g. 8, 12' });
@@ -311,10 +300,10 @@ export function mountPhase1(root) {
   const numberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (position in the video)']], ph1.numbering);
   const pageNumberingSel = select([['sequential', 'Sequential (1, 2, 3…)'], ['original', 'Original (based on the frames)']], ph1.pageNumbering);
   // los tres cambian las etiquetas visibles: refrescar también las miniaturas
-  const relabel = () => renderThumbs().then(() => refreshPreview()).catch(reportRefreshFailure);
-  namingSel.addEventListener('change', () => { ph1.naming = namingSel.value; relabel(); });
-  numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value; relabel(); });
-  pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value; refreshPreview(); });
+  const relabel = (): Promise<void> => renderThumbs().then(() => refreshPreview()).catch(reportRefreshFailure);
+  namingSel.addEventListener('change', () => { ph1.naming = namingSel.value === 'original' ? 'original' : 'auto'; relabel(); });
+  numberingSel.addEventListener('change', () => { ph1.numbering = numberingSel.value === 'original' ? 'original' : 'sequential'; relabel(); });
+  pageNumberingSel.addEventListener('change', () => { ph1.pageNumbering = pageNumberingSel.value === 'original' ? 'original' : 'sequential'; refreshPreview(); });
 
   const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
   const dedupStatus = el('div', { class: 'hint' });
@@ -328,41 +317,41 @@ export function mountPhase1(root) {
     } catch (e) {
       console.error(e);
       dedupStatus.textContent = ''; // no dejar colgado el "analyzing…"
-      toast(`Could not analyze the repeated drawings: ${e.message ?? e}`, 'err');
+      toast(`Could not analyze the repeated drawings: ${errMsg(e)}`, 'err');
     }
   });
 
   // ---------- ajustes de hoja (enlace genérico) ----------
-  const binds = [];
-  function bindNum(key, input, { integer = false } = {}) {
-    input.value = s[key];
+  const binds: (() => void)[] = [];
+  function bindNum(key: NumberKeys<Settings>, input: HTMLInputElement, { integer = false }: { integer?: boolean } = {}): HTMLInputElement {
+    input.value = String(s[key]);
     input.addEventListener('change', () => {
       const v = integer ? parseInt(input.value, 10) : parseFloat(input.value);
       if (!Number.isNaN(v)) s[key] = v;
       persist(); refreshPreview();
     });
-    binds.push(() => { input.value = s[key]; });
+    binds.push(() => { input.value = String(s[key]); });
     return input;
   }
-  function bindText(key, input) {
+  function bindText(key: StringKeys<Settings>, input: HTMLInputElement): HTMLInputElement {
     input.value = s[key] ?? '';
     input.addEventListener('change', () => { s[key] = input.value; persist(); refreshPreview(); });
     binds.push(() => { input.value = s[key] ?? ''; });
     return input;
   }
-  function bindSel(key, input) {
+  function bindSel(key: StringKeys<Settings>, input: HTMLSelectElement): HTMLSelectElement {
     input.value = s[key];
     input.addEventListener('change', () => { s[key] = input.value; persist(); refreshPreview(); });
     binds.push(() => { input.value = s[key]; });
     return input;
   }
-  function bindCheck(key, c) {
+  function bindCheck(key: BooleanKeys<Settings>, c: { input: HTMLInputElement; label: HTMLLabelElement }): HTMLLabelElement {
     c.input.checked = !!s[key];
     c.input.addEventListener('change', () => { s[key] = c.input.checked; persist(); refreshPreview(); });
     binds.push(() => { c.input.checked = !!s[key]; });
     return c.label;
   }
-  function bindColor(key, input) {
+  function bindColor(key: StringKeys<Settings>, input: HTMLInputElement): HTMLInputElement {
     input.value = s[key] ?? '#000000';
     input.addEventListener('input', () => { s[key] = input.value.toUpperCase(); persist(); refreshPreviewSoon(); });
     binds.push(() => { input.value = s[key] ?? '#000000'; });
@@ -373,13 +362,13 @@ export function mountPhase1(root) {
   // llamó (se quedaría sin refrescar la vista previa). Se avisa UNA vez: por
   // aquí pasa cada cambio de cada control.
   let persistWarned = false;
-  function persist() {
+  function persist(): void {
     try {
       store.saveSettings(s);
     } catch (e) {
       if (persistWarned) return;
       persistWarned = true;
-      toast(`Your settings will not be remembered for the next session. ${e.message ?? e}`, 'err');
+      toast(`Your settings will not be remembered for the next session. ${errMsg(e)}`, 'err');
     }
   }
 
@@ -388,7 +377,7 @@ export function mountPhase1(root) {
     field('Height (mm)', bindNum('custom_h_mm', numberInput(297, { min: 30 }))),
   );
   const paperSel = bindSel('paper', select(PAPERS, s.paper));
-  const syncCustom = () => { customRow.style.display = paperSel.value === 'Custom' ? '' : 'none'; };
+  const syncCustom = (): void => { customRow.style.display = paperSel.value === 'Custom' ? '' : 'none'; };
   paperSel.addEventListener('change', syncCustom);
   syncCustom();
 
@@ -398,11 +387,12 @@ export function mountPhase1(root) {
   modeCheck.input.addEventListener('change', () => {
     s.mode = modeCheck.input.checked ? 'cyanotype' : 'normal';
     cyanBody.style.display = modeCheck.input.checked ? '' : 'none';
-    simulateToggle.label.parentElement.style.display = modeCheck.input.checked ? '' : 'none';
+    const holder = simulateToggle.label.parentElement;
+    if (holder) holder.style.display = modeCheck.input.checked ? '' : 'none';
     persist(); refreshPreview();
   });
 
-  const curveProfiles = () => [['', '(no curve: linear)'], ...store.listProfiles('cianotipia').map((n) => [n, n])];
+  const curveProfiles = (): SelectOption[] => [['', '(no curve: linear)'], ...store.listProfiles('cianotipia').map((n): SelectOption => [n, n])];
   const curveSel = select(curveProfiles(), '');
   curveSel.addEventListener('change', () => {
     const p = curveSel.value ? store.loadProfile('cianotipia', curveSel.value) : null;
@@ -413,7 +403,7 @@ export function mountPhase1(root) {
     }
     persist(); refreshPreview();
   });
-  const inkProfiles = () => [['', '(plain ink)'], ...store.listProfiles('cianotipia_color').map((n) => [n, n])];
+  const inkProfiles = (): SelectOption[] => [['', '(plain ink)'], ...store.listProfiles('cianotipia_color').map((n): SelectOption => [n, n])];
   const inkProfSel = select(inkProfiles(), '');
   inkProfSel.addEventListener('change', () => {
     const p = inkProfSel.value ? store.loadProfile('cianotipia_color', inkProfSel.value) : null;
@@ -455,7 +445,7 @@ export function mountPhase1(root) {
   cyanBox.append(modeCheck.label, cyanBody);
 
   // ---------- perfil de impresora ----------
-  const printerProfiles = () => [['', '(no compensation)'], ...store.listProfiles('impresora').map((n) => [n, n])];
+  const printerProfiles = (): SelectOption[] => [['', '(no compensation)'], ...store.listProfiles('impresora').map((n): SelectOption => [n, n])];
   const printerSel = select(printerProfiles(), '');
   printerSel.addEventListener('change', () => {
     const p = printerSel.value ? store.loadProfile('impresora', printerSel.value) : null;
@@ -469,12 +459,10 @@ export function mountPhase1(root) {
   });
 
   // ---------- presets ----------
-  const presetSel = select([['', '(choose a preset…)'], ...store.listProfiles('presets').map((n) => [n, n])], '');
+  const presetOptions = (): SelectOption[] => [['', '(choose a preset…)'], ...store.listProfiles('presets').map((n): SelectOption => [n, n])];
+  const presetSel = select(presetOptions(), '');
   const presetName = el('input', { type: 'text', placeholder: 'preset name' });
-  const refreshPresetList = () => {
-    presetSel.replaceChildren(...[['', '(choose a preset…)'], ...store.listProfiles('presets').map((n) => [n, n])]
-      .map(([v, l]) => el('option', { value: v }, l)));
-  };
+  const refreshPresetList = (): void => { setOptions(presetSel, presetOptions()); };
   const presetsRow = el('div', {},
     el('div', { class: 'row tight' },
       field('Saved presets', presetSel),
@@ -497,7 +485,7 @@ export function mountPhase1(root) {
           try {
             store.deleteProfile('presets', presetSel.value);
           } catch (e) {
-            toast(`Preset “${presetSel.value}” was NOT deleted. ${e.message ?? e}`, 'err');
+            toast(`Preset “${presetSel.value}” was NOT deleted. ${errMsg(e)}`, 'err');
             return;
           }
           refreshPresetList();
@@ -516,7 +504,7 @@ export function mountPhase1(root) {
               fase: { naming: ph1.naming, numbering: ph1.numbering, pageNumbering: ph1.pageNumbering, dedupOn: ph1.dedupOn },
             });
           } catch (e) {
-            toast(`Preset “${name}” was NOT saved. ${e.message ?? e}`, 'err');
+            toast(`Preset “${name}” was NOT saved. ${errMsg(e)}`, 'err');
             return;
           }
           refreshPresetList();
@@ -537,12 +525,12 @@ export function mountPhase1(root) {
     genBtn.disabled = true;
     genProg.show();
     try {
-      const thumbs = [];
+      const thumbs: OffscreenCanvas[] = [];
       if (isCyanotype(s) && (s.cyan_adaptive ?? 0) > 0) {
         for (const p of plan.printed) thumbs.push(await ensureThumb(p.frameIdx));
       }
       const settings = await resolveCyanCurve({ ...s, sheets_include: ph1.sheets_include, sheets_exclude: ph1.sheets_exclude }, thumbs);
-      const frames = plan.printed.map((p) => {
+      const frames: GenFrame[] = plan.printed.map((p) => {
         const f = project.frames[p.frameIdx];
         return {
           name: f.name, w: f.w, h: f.h, hasAlpha: f.hasAlpha, blob: f.blob,
@@ -565,7 +553,7 @@ export function mountPhase1(root) {
       toast(`Done: ${out.numPages} sheet(s). Print at 100 % (no “fit to page”).`, 'ok');
     } catch (e) {
       console.error(e);
-      toast(`Generation failed: ${e.message ?? e}`, 'err');
+      toast(`Generation failed: ${errMsg(e)}`, 'err');
     } finally {
       genBtn.disabled = false;
       genProg.hide();
@@ -583,21 +571,22 @@ export function mountPhase1(root) {
   simulateToggle.input.addEventListener('change', () => { ph1.previewSimulate = simulateToggle.input.checked; refreshPreview(); });
   simulateToggle.label.style.color = 'var(--cian-200)';
 
-  let previewBusy = false, previewQueued = false, previewTimer = null;
-  function refreshPreviewSoon() {
-    clearTimeout(previewTimer);
+  let previewBusy = false, previewQueued = false;
+  let previewTimer: ReturnType<typeof setTimeout> | null = null;
+  function refreshPreviewSoon(): void {
+    if (previewTimer) clearTimeout(previewTimer);
     previewTimer = setTimeout(refreshPreview, 300);
   }
   /** Actualiza solo el texto de las etiquetas de las miniaturas (barato):
    *  cambiar dígitos, nombre base o separador se refleja al instante. */
-  function updateThumbLabels() {
+  function updateThumbLabels(): void {
     const plan = computePlan();
     thumbsGrid.querySelectorAll('.tag').forEach((tag, k) => {
       if (plan.rawLabels[k] != null) tag.textContent = plan.rawLabels[k];
     });
   }
 
-  async function refreshPreview() {
+  async function refreshPreview(): Promise<void> {
     if (!project.frames.length) return;
     updateThumbLabels();
     if (previewBusy) { previewQueued = true; return; }
@@ -608,7 +597,7 @@ export function mountPhase1(root) {
       ph1.previewPage = Math.max(0, Math.min(ph1.previewPage, plan.numPages - 1));
       const chunk = plan.printed.slice(ph1.previewPage * plan.perPage, (ph1.previewPage + 1) * plan.perPage);
       const settingsPrev = await resolveCyanCurve({ ...s, dpi: Math.min(s.dpi, 150) }, []);
-      const items = [];
+      const items: PackItem[] = [];
       for (const p of chunk) {
         const d = await frameImageData(p.frameIdx, false);
         items.push({ data: d.data, w: d.w, h: d.h, hasAlpha: project.frames[p.frameIdx].hasAlpha, origName: project.frames[p.frameIdx].name });
@@ -629,7 +618,7 @@ export function mountPhase1(root) {
         previewImg.src = pngUrl(res.png);
         if (old) URL.revokeObjectURL(old);
       }
-      const info = JSON.parse(await run('compute_layout', { settings: settingsForCore(settingsPrev), firstW: first.w, firstH: first.h }));
+      const info = JSON.parse(await run('compute_layout', { settings: settingsForCore(settingsPrev), firstW: first.w, firstH: first.h })) as LayoutInfo;
       pageLabel.textContent = `sheet ${ph1.previewPage + 1} / ${plan.numPages}`;
       previewInfo.textContent = `${info.landscape ? 'landscape' : 'portrait'} · grid ${info.cols}×${info.rows}${info.grid_swapped ? ' (swapped by best fit)' : ''} · ${plan.printed.length} frames on ${plan.numPages} sheet(s)`;
       const avisos = [...(info.avisos ?? [])];
@@ -645,10 +634,10 @@ export function mountPhase1(root) {
     }
   }
 
-  async function renderThumbs() {
+  async function renderThumbs(): Promise<void> {
     thumbsGrid.replaceChildren();
     const plan = computePlan();
-    const dupSet = new Set();
+    const dupSet = new Set<number>();
     if (ph1.dedupOn && ph1.dedupGroups) {
       ph1.dedupGroups.rep_of.forEach((r, i) => { if (r !== i) dupSet.add(i); });
     }
@@ -657,14 +646,14 @@ export function mountPhase1(root) {
       const idx = plan.positions[k] - 1;
       const c = await ensureThumb(idx);
       const img = el('canvas', { width: c.width, height: c.height });
-      img.getContext('2d').drawImage(c, 0, 0);
+      img.getContext('2d')?.drawImage(c, 0, 0);
       thumbsGrid.append(el('div', { class: `thumb${dupSet.has(k) ? ' dup' : ''}` }, img,
         el('div', { class: 'tag' }, plan.rawLabels[k])));
     }
     framesInfo.textContent = `${project.frames.length} frames loaded · ${plan.positions.length} selected · ${plan.printed.length} to print`;
   }
 
-  async function afterFramesChanged() {
+  async function afterFramesChanged(): Promise<void> {
     ph1.dedupGroups = null;
     if (ph1.dedupOn && project.frames.length) await computeDedup(dedupStatus);
     await renderThumbs();
@@ -673,19 +662,19 @@ export function mountPhase1(root) {
 
   // refrescar listas de perfiles al volver a esta vista
   root.addEventListener('mxm:activated', () => {
-    curveSel.replaceChildren(...curveProfiles().map(([v, l]) => el('option', { value: v }, l)));
-    inkProfSel.replaceChildren(...inkProfiles().map(([v, l]) => el('option', { value: v }, l)));
-    printerSel.replaceChildren(...printerProfiles().map(([v, l]) => el('option', { value: v }, l)));
+    setOptions(curveSel, curveProfiles());
+    setOptions(inkProfSel, inkProfiles());
+    setOptions(printerSel, printerProfiles());
     refreshPresetList();
   });
 
   // ---------- proyecto de muestra ----------
   /** Un fotograma del ejemplo: pelota que rebota + cuadrado que gira, con el
    *  número grande para reconocerlo en la hoja impresa y en el escaneo. */
-  function demoFrame(i, n) {
+  function demoFrame(i: number, n: number): OffscreenCanvas {
     const w = 480, h = 270;
     const c = new OffscreenCanvas(w, h);
-    const ctx = c.getContext('2d');
+    const ctx = context2d(c);
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, w, h);
     const t = n > 1 ? i / (n - 1) : 0;
@@ -741,11 +730,22 @@ export function mountPhase1(root) {
       toast(`${DEMO_FRAMES} example frames ready. Press “Generate sheets”, then go to ② and simulate the scans: the whole loop without printing anything.`, 'ok');
     } catch (e) {
       console.error(e);
-      toast(`Could not build the example: ${e.message ?? e}`, 'err');
+      toast(`Could not build the example: ${errMsg(e)}`, 'err');
     } finally {
       demoBtn.disabled = false;
     }
   });
+
+  // ---------- marcadores: número (desplegable sobre un ajuste numérico) ----------
+  // settingsForCore ya coerciona el valor; aquí se guarda como número desde
+  // el principio para que el ajuste no cambie de tipo según el control
+  const markerCountSel = select([['4', '4 (corners)'], ['8', '8 (recommended)'], ['12', '12 (maximum tolerance)']], String(s.marker_count));
+  markerCountSel.addEventListener('change', () => {
+    const v = parseInt(markerCountSel.value, 10);
+    if (!Number.isNaN(v)) s.marker_count = v;
+    persist(); refreshPreview();
+  });
+  binds.push(() => { markerCountSel.value = String(s.marker_count); });
 
   // ---------- montaje ----------
   const paper = el('div', { class: 'paper' },
@@ -810,7 +810,7 @@ export function mountPhase1(root) {
     bindCheck('registration_on', check('ArUco markers with per-sheet identity (required for phase ②)', s.registration_on)),
     el('div', { class: 'hint' }, 'Each sheet gets its own marker IDs, so no QR codes are needed and the drawings get more room.'),
     el('div', { class: 'row' },
-      field('Markers', bindSel('marker_count', select([['4', '4 (corners)'], ['8', '8 (recommended)'], ['12', '12 (maximum tolerance)']], String(s.marker_count)))),
+      field('Markers', markerCountSel),
       field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
       field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
@@ -820,7 +820,7 @@ export function mountPhase1(root) {
         field('QR size (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
       );
       const c = check('Add a QR code per frame (for projects with MANY sheets)', !!s.qr_on);
-      const sync = () => { qrRow.style.display = s.qr_on ? '' : 'none'; };
+      const sync = (): void => { qrRow.style.display = s.qr_on ? '' : 'none'; };
       c.input.addEventListener('change', () => { s.qr_on = c.input.checked; sync(); persist(); refreshPreview(); });
       binds.push(() => { c.input.checked = !!s.qr_on; sync(); });
       sync();
@@ -878,7 +878,4 @@ export function mountPhase1(root) {
   );
 
   root.append(el('div', { class: 'workbench' }, paper, bench));
-
-  ph1._refreshPreview = refreshPreview;
-  ph1._afterFramesChanged = afterFramesChanged;
 }

@@ -1,0 +1,24 @@
+{
+  // Código de la página (hilo principal). El worker y el service worker
+  // viven en tsconfig.worker.json: la biblioteca DOM y la WebWorker no
+  // pueden convivir en un mismo programa. Los scripts de Node van en
+  // tsconfig.node.json. `npm run typecheck` pasa por los tres.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "types": ["vite/client"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/worker.ts", "src/sw.ts"]
+}

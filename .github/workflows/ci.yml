@@ -115,13 +115,23 @@ jobs:
       - name: Compile core to WebAssembly
         run: wasm-pack build --release --target web --out-dir ../web/src/wasm
         working-directory: rust-core
+      # Node 24: los scripts de la web (prepare-ffmpeg.mts, e2e-run.mts) son
+      # TypeScript que Node ejecuta directamente por borrado de tipos, que
+      # está activado sin bandera desde 22.18 y sin aviso desde 24.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
+        working-directory: web
+      # Los tipos se comprueban ANTES de construir nada: Vite solo borra las
+      # anotaciones, no las verifica, así que sin este paso un error de tipos
+      # llegaría al bundle. `npm run build` lo repite por si se construye a
+      # mano; aquí va aparte para que el fallo se lea como lo que es.
+      - name: Type check (tsc)
+        run: npm run typecheck
         working-directory: web
       - name: Install ffmpeg (generates the WebCodecs E2E sample video)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg

@@ -137,7 +137,7 @@ example 10-bit HEVC and ProRes.
 | Directory | Contents |
 |---|---|
 | `rust-core/` | The image processing core. It is written in Rust and compiled to WebAssembly. It makes the sheets, it makes and finds the ArUco markers, it reads the QR codes, and it does the homography, the warp, the cyanotype curves, the calibration and the PDF output. |
-| `web/` | The web application, in HTML, JavaScript and CSS. It uses no framework. The video work uses WebCodecs. The browser does all of the work, in web workers. |
+| `web/` | The web application, in HTML, TypeScript and CSS. It uses no framework. The video work uses WebCodecs. The browser does all of the work, in web workers. |
 | `assets/` | The icons of the application. |
 | `docs/codebase/` | Notes about the codebase: the stack, the structure, the architecture, the conventions, the integrations and the tests. |
 
@@ -160,7 +160,7 @@ You need these tools:
 
 - Rust, with the `wasm32-unknown-unknown` target
 - `wasm-pack`
-- Node.js 22 or later
+- Node.js 24 (22.18 or later also works)
 - Google Chrome and `ffmpeg`, for the end-to-end test only
 
 Then use these commands:
@@ -172,6 +172,7 @@ wasm-pack build --release --target web --out-dir ../web/src/wasm
 
 cd ../web
 npm install
+npm run typecheck                       # type check (tsc); `npm run build` runs it too
 npm run dev                             # development server
 npm run test:e2e                        # end-to-end test in Chrome
 npm run build                           # production build, into web/dist

@@ -10,18 +10,74 @@ import {
   QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH, QUALITY_VERY_HIGH,
   getFirstEncodableVideoCodec,
 } from 'mediabunny';
-import { run, recycleIdle } from './pool.js';
+import type { InputVideoTrack, OutputFormat, Quality, VideoCodec, WrappedCanvas } from 'mediabunny';
+import { run, recycleIdle } from './pool.ts';
+import { BadRangeError } from './errors.ts';
+import type { Bytes } from './types.ts';
+import { context2d } from './ui.ts';
 
 // ffmpeg.wasm cubre lo que WebCodecs no: contenedores que mediabunny no abre
 // (AVI, MPG…) y códecs que el navegador no decodifica aunque el contenedor
 // sea legible (los MOV de cámara: HEVC 10 bits, ProRes, DNxHD…). La detección
 // no va por extensión sino por lo que este navegador pueda decodificar.
 
+export interface ExtractOptions {
+  start?: number;
+  end?: number;
+  /** null/undefined = todos los fotogramas */
+  fps?: number | null;
+  onFrame?: (blob: Blob, thumb: OffscreenCanvas, t: number, i: number, w: number, h: number) => void | Promise<void>;
+  onProgress?: (i: number, est: number | null) => void;
+  cancelled?: () => boolean;
+}
+
+export interface ExtractResult {
+  count: number;
+  fps: number;
+  duration: number;
+  origen: string;
+}
+
+export interface ProbeResult {
+  duration: number;
+  fps: number;
+  width: number;
+  height: number;
+  fallback?: boolean;
+}
+
+export type FrameGetter = () => Promise<ImageBitmap>;
+
+export interface BuildVideoOptions {
+  format?: 'auto' | 'mp4' | 'webm';
+  quality?: string;
+  bitrateMbps?: number;
+  /** 0 = resolución nativa de los frames */
+  targetH?: number;
+}
+
+export interface VideoResult {
+  bytes: Bytes;
+  mime: string;
+  ext: string;
+}
+
+interface MediabunnyProbe {
+  input: Input;
+  track: InputVideoTrack;
+  duration: number;
+  fps: number;
+  width: number;
+  height: number;
+}
+
+type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
+
 // El Input devuelto es del LLAMADOR: `track` cuelga de él y sigue haciendo
 // falta para decodificar, así que quien lo recibe tiene que llamar a
 // input.dispose() (cierra el lector del Blob y los decodificadores abiertos).
 // Si el sondeo falla no lo recibe nadie y se cierra aquí mismo.
-async function probeMediabunny(file) {
+async function probeMediabunny(file: File): Promise<MediabunnyProbe> {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
   try {
     const track = await input.getPrimaryVideoTrack();
@@ -39,7 +95,7 @@ async function probeMediabunny(file) {
   }
 }
 
-export async function probeVideo(file) {
+export async function probeVideo(file: File): Promise<ProbeResult> {
   try {
     const p = await probeMediabunny(file);
     // sondeo y nada más: aquí no decodifica nadie, así que el Input se cierra
@@ -51,7 +107,7 @@ export async function probeVideo(file) {
     // mediabunny no abre el contenedor: que lo intente ffmpeg.wasm; si
     // tampoco puede, el error original es el informativo
     try {
-      const { probeFallback } = await import('./avi.js');
+      const { probeFallback } = await import('./avi.ts');
       return await probeFallback(file);
     } catch {
       throw e;
@@ -63,14 +119,13 @@ export async function probeVideo(file) {
  *  decodificador lo recortaba a su manera (Start 10 con End 5 daba UN
  *  fotograma, Start más allá del final daba cero) y la interfaz lo anunciaba
  *  en verde como una extracción correcta. `duration` es opcional: se conoce
- *  solo después de sondear. Mismo texto en extractFramesFallback (avi.js). */
-function assertRange(start, end, duration = null) {
+ *  solo después de sondear. Mismo texto en extractFramesFallback (avi.ts). */
+function assertRange(start: number, end: number, duration: number | null = null): void {
   if (Number.isFinite(start) && Number.isFinite(end) && end > start) return;
-  const n = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} s` : 'not a number');
-  const e = new Error(`Invalid time range: start (${n(start)}) must come before end (${n(end)}).`
+  const n = (v: number): string => (Number.isFinite(v) ? `${v.toFixed(2)} s` : 'not a number');
+  // lo mira extractFrames para no taparlo (ver abajo)
+  throw new BadRangeError(`Invalid time range: start (${n(start)}) must come before end (${n(end)}).`
     + (duration ? ` This video lasts ${duration.toFixed(2)} s.` : ''));
-  e.badRange = true; // lo mira extractFrames para no taparlo (ver abajo)
-  throw e;
 }
 
 /**
@@ -78,15 +133,15 @@ function assertRange(start, end, duration = null) {
  * opts: {start, end, fps (null = todos), onFrame(blob, thumbCanvas, t, i), onProgress(i, est)}
  * Devuelve el número de fotogramas extraídos.
  */
-export async function extractFrames(file, opts = {}) {
-  const useFallback = async () => {
-    const { extractFramesFallback } = await import('./avi.js');
+export async function extractFrames(file: File, opts: ExtractOptions = {}): Promise<ExtractResult> {
+  const useFallback = async (): Promise<ExtractResult> => {
+    const { extractFramesFallback } = await import('./avi.ts');
     return extractFramesFallback(file, opts);
   };
   // lo tecleado, antes de decodificar nada: este es el único camino hacia los
   // tres decodificadores (los dos de mediabunny y el de ffmpeg.wasm)
   if (opts.end != null) assertRange(Math.max(0, opts.start ?? 0), opts.end);
-  let probe;
+  let probe: MediabunnyProbe;
   try {
     probe = await probeMediabunny(file);
   } catch (e) {
@@ -95,7 +150,7 @@ export async function extractFrames(file, opts = {}) {
     } catch (e2) {
       // el respaldo es el único que conoce la duración de lo que mediabunny
       // no abre: si lo que rechaza es el rango, ESE es el error informativo
-      if (e2?.badRange) throw e2;
+      if (e2 instanceof BadRangeError) throw e2;
       throw e;
     }
   }
@@ -117,7 +172,7 @@ export async function extractFrames(file, opts = {}) {
     let count = 0;
 
     let emitFailed = false; // distingue fallos del decodificador de fallos de la app
-    const emit = async (wrapped, index) => {
+    const emit = async (wrapped: WrappedCanvas, index: number): Promise<void> => {
       try {
         const canvas = wrapped.canvas;
         // PNG sin pérdida a resolución nativa
@@ -126,7 +181,7 @@ export async function extractFrames(file, opts = {}) {
         const tw = 256;
         const th = Math.max(1, Math.round((canvas.height / canvas.width) * tw));
         const thumb = new OffscreenCanvas(tw, th);
-        thumb.getContext('2d').drawImage(canvas, 0, 0, tw, th);
+        context2d(thumb).drawImage(canvas, 0, 0, tw, th);
         await opts.onFrame?.(blob, thumb, wrapped.timestamp, index, canvas.width, canvas.height);
       } catch (e) {
         emitFailed = true;
@@ -136,7 +191,7 @@ export async function extractFrames(file, opts = {}) {
 
     try {
       if (opts.fps && opts.fps > 0) {
-        const times = [];
+        const times: number[] = [];
         for (let t = start; t < end - 1e-9; t += 1 / opts.fps) times.push(t);
         if (!times.length) times.push(start);
         let i = 0;
@@ -180,9 +235,12 @@ export async function extractFrames(file, opts = {}) {
   }
 }
 
-function canvasToBlob(canvas, type) {
-  if (canvas.convertToBlob) return canvas.convertToBlob({ type });
-  return new Promise((res) => canvas.toBlob(res, type));
+function canvasToBlob(canvas: AnyCanvas, type: string): Promise<Blob> {
+  if ('convertToBlob' in canvas) return canvas.convertToBlob({ type });
+  return new Promise((res, rej) => canvas.toBlob((b) => {
+    if (b) res(b);
+    else rej(new Error('The browser could not encode the frame as PNG.'));
+  }, type));
 }
 
 /** Compone el alfa sobre BLANCO in situ (Uint8ClampedArray: redondea al
@@ -192,7 +250,7 @@ function canvasToBlob(canvas, type) {
  *  (resize_rgba_bytes solo admite imágenes opacas) y putImageData REEMPLAZA
  *  el destino en vez de componer sobre él, así que sin aplanar el mismo
  *  fotograma salía blanco por drawImage y negro por WASM. */
-function flattenOverWhite(data) {
+function flattenOverWhite(data: Uint8ClampedArray): void {
   for (let i = 3; i < data.length; i += 4) {
     const a = data[i];
     if (a === 255) continue;
@@ -204,11 +262,17 @@ function flattenOverWhite(data) {
   }
 }
 
+interface ScaledFrame {
+  img: ImageData;
+  dx: number;
+  dy: number;
+}
+
 /** Encaja `bmp` centrado en w×h. El reescalado va por el núcleo WASM
  *  (Lanczos3 con antialias, el mismo filtro de las hojas); si el núcleo no
  *  puede, cae al drawImage del navegador en su calidad más alta.
  *  Devuelve {img, dx, dy} cuando reescaló por WASM (cacheable), si no null. */
-async function drawFrameFitted(ctx, bmp, w, h) {
+async function drawFrameFitted(ctx: OffscreenCanvasRenderingContext2D, bmp: ImageBitmap, w: number, h: number): Promise<ScaledFrame | null> {
   const s = Math.min(w / bmp.width, h / bmp.height);
   const dw = Math.max(1, Math.round(bmp.width * s));
   const dh = Math.max(1, Math.round(bmp.height * s));
@@ -220,7 +284,7 @@ async function drawFrameFitted(ctx, bmp, w, h) {
   }
   try {
     const c = new OffscreenCanvas(bmp.width, bmp.height);
-    const cx = c.getContext('2d', { willReadFrequently: true });
+    const cx = context2d(c, { willReadFrequently: true });
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, bmp.width, bmp.height);
     flattenOverWhite(d.data);
@@ -237,6 +301,13 @@ async function drawFrameFitted(ctx, bmp, w, h) {
   }
 }
 
+interface CodecCandidate {
+  codec: VideoCodec;
+  format: () => OutputFormat;
+  mime: string;
+  ext: string;
+}
+
 /**
  * Reconstruye el video a partir de una secuencia de imágenes (Blob/bytes PNG).
  * frames: array de () => Promise<ImageBitmap> EN ORDEN (con repetidos).
@@ -245,7 +316,10 @@ async function drawFrameFitted(ctx, bmp, w, h) {
  *         targetH: number (0 = resolución nativa de los frames) }
  * Devuelve {bytes, mime, ext}.
  */
-export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
+export async function buildVideo(
+  frameGetters: FrameGetter[], fps: number,
+  onProgress?: ((i: number, n: number) => void) | null, opts: BuildVideoOptions = {},
+): Promise<VideoResult> {
   if (!frameGetters.length) throw new Error('There are no frames to build the video.');
   // dimensiones del primero, escaladas a la resolución pedida y normalizadas
   // a pares (requisito H.264)
@@ -256,26 +330,28 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
   // simultáneas, así que unas pocas exportaciones fallidas sin cerrar el
   // encoder dejaban muertas TODAS las siguientes hasta recargar la página (y
   // recargar se lleva por delante el proyecto, que no se persiste).
-  let openBmp = null; // fotograma en curso, aún sin cerrar
-  let output = null; // dueño del encoder y del muxer
+  let openBmp: ImageBitmap | null = null; // fotograma en curso, aún sin cerrar
+  let output: Output | null = null; // dueño del encoder y del muxer
   try {
     let fw = first.width;
     let fh = first.height;
-    if (opts.targetH > 0) {
-      fw = fw * (opts.targetH / fh);
-      fh = opts.targetH;
+    const targetH = opts.targetH ?? 0;
+    if (targetH > 0) {
+      fw = fw * (targetH / fh);
+      fh = targetH;
     }
     const w = Math.max(2, Math.round(fw / 2) * 2);
     const h = Math.max(2, Math.round(fh / 2) * 2);
 
-    const QUAL = {
+    const QUAL: Record<string, Quality> = {
       very_high: QUALITY_VERY_HIGH, high: QUALITY_HIGH,
       medium: QUALITY_MEDIUM, low: QUALITY_LOW,
     };
-    let bitrate = QUAL[opts.quality] ?? QUALITY_HIGH;
-    if (opts.quality === 'custom' && opts.bitrateMbps > 0) {
+    let bitrate: number | Quality = (opts.quality !== undefined && QUAL[opts.quality]) || QUALITY_HIGH;
+    const bitrateMbps = opts.bitrateMbps ?? 0;
+    if (opts.quality === 'custom' && bitrateMbps > 0) {
       // el max del input HTML no frena lo tecleado: tope real aquí
-      bitrate = Math.round(Math.min(500, opts.bitrateMbps) * 1e6);
+      bitrate = Math.round(Math.min(500, bitrateMbps) * 1e6);
     } else if (opts.quality === 'max') {
       // "visualmente sin pérdida": ~0.5 bits por píxel y frame, con tope.
       // Los codificadores del navegador (WebCodecs) siguen siendo lossy; el
@@ -283,7 +359,7 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
       bitrate = Math.min(500e6, Math.max(20e6, Math.round(w * h * fps * 0.5)));
     }
 
-    let candidates = [
+    let candidates: CodecCandidate[] = [
       { codec: 'avc', format: () => new Mp4OutputFormat(), mime: 'video/mp4', ext: 'mp4' },
       { codec: 'vp9', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
       { codec: 'av1', format: () => new WebMOutputFormat(), mime: 'video/webm', ext: 'webm' },
@@ -291,7 +367,7 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
     ];
     if (opts.format === 'mp4') candidates = candidates.slice(0, 1);
     else if (opts.format === 'webm') candidates = candidates.slice(1);
-    let chosen = null;
+    let chosen: CodecCandidate | null = null;
     for (const c of candidates) {
       const ok = await getFirstEncodableVideoCodec([c.codec], { width: w, height: h });
       if (ok) { chosen = c; break; }
@@ -303,7 +379,7 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
     }
 
     const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext('2d');
+    const ctx = context2d(canvas);
     const target = new BufferTarget();
     output = new Output({ format: chosen.format(), target });
     const source = new CanvasSource(canvas, { codec: chosen.codec, bitrate });
@@ -315,7 +391,7 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
     // la línea de tiempo (la fase ④ reusa el MISMO getter por dibujo) y volver
     // a pasar cada repetición por Lanczos sería trabajo tirado. Presupuesto en
     // bytes; al llenarse, las repeticiones restantes se reescalan de nuevo.
-    const scaled = new Map(); // getter → {img, dx, dy}
+    const scaled = new Map<FrameGetter, ScaledFrame>(); // getter → {img, dx, dy}
     let scaledBytes = 0;
     const SCALED_BUDGET = 300e6;
     for (let i = 0; i < frameGetters.length; i++) {
@@ -331,7 +407,7 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
         openBmp = i === 0 ? null : bmp; // `first` lo cierra el finally
         // encaja conservando aspecto (los recortes pueden variar 1-2 px entre sí)
         const res = await drawFrameFitted(ctx, bmp, w, h);
-        if (i !== 0) bmp.close?.();
+        if (i !== 0) bmp.close();
         openBmp = null;
         if (res && scaledBytes + res.img.data.byteLength <= SCALED_BUDGET) {
           scaled.set(frameGetters[i], res);
@@ -341,15 +417,16 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
       await source.add(i * dur, dur);
       onProgress?.(i + 1, frameGetters.length);
     }
-    first.close?.();
+    first.close();
     await output.finalize();
     recycleIdle(); // el remuestreo de frames grandes infla la memoria WASM
+    if (!target.buffer) throw new Error('The video encoder produced no output.');
     return { bytes: new Uint8Array(target.buffer), mime: chosen.mime, ext: chosen.ext };
   } finally {
     // close() de un ImageBitmap ya cerrado no lanza (queda "detached"), así
     // que el camino bueno pasa por aquí sin enterarse
-    openBmp?.close?.();
-    first.close?.();
+    openBmp?.close();
+    first.close();
     // cancel() suelta encoder y muxer; sobre un Output ya finalizado solo
     // dejaría un aviso en consola, por eso se mira el estado. Su propio fallo
     // se registra y no se relanza: taparía el error de verdad
@@ -365,7 +442,7 @@ export async function buildVideo(frameGetters, fps, onProgress, opts = {}) {
 
 /** ImageBitmap de un fotograma; TIFF va por el decodificador del núcleo
  *  WASM porque los navegadores no lo abren. */
-export async function decodeFrameBitmap(blob) {
+export async function decodeFrameBitmap(blob: Blob): Promise<ImageBitmap> {
   const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
   const tiff = (head[0] === 0x49 && head[1] === 0x49 && head[2] === 0x2a && head[3] === 0)
     || (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0 && head[3] === 0x2a);
@@ -376,8 +453,14 @@ export async function decodeFrameBitmap(blob) {
   return createImageBitmap(img);
 }
 
+interface ImageDims {
+  png: boolean;
+  w: number;
+  h: number;
+}
+
 /** Dimensiones de una imagen sin decodificarla entera (PNG: cabecera IHDR). */
-async function imageDims(blob) {
+async function imageDims(blob: Blob): Promise<ImageDims> {
   const head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
   // exigir el tag IHDR además de la firma: un CgBI (PNG de iPhone) trae otro
   // chunk primero y daría dimensiones basura
@@ -391,9 +474,15 @@ async function imageDims(blob) {
     if (w > 0 && h > 0 && w * h <= 1e9) return { png: true, w, h };
   }
   const bmp = await decodeFrameBitmap(blob);
-  const d = { png: false, w: bmp.width, h: bmp.height };
+  const d: ImageDims = { png: false, w: bmp.width, h: bmp.height };
   bmp.close();
   return d;
+}
+
+interface PreparedPngs {
+  blobs: Blob[];
+  outW: number;
+  outH: number;
 }
 
 /**
@@ -402,34 +491,39 @@ async function imageDims(blob) {
  * (reescalado pedido, tamaños dispares, TIFF/JPG sueltos), se recompone cada
  * uno sobre lienzo blanco y se recodifica PNG (sin pérdida de píxeles).
  */
-async function prepareFramePngs(frames, onProgress, opts = {}) {
+async function prepareFramePngs(frames: Blob[], onProgress?: (i: number, n: number) => void, opts: { targetH?: number } = {}): Promise<PreparedPngs> {
   if (!frames.length) throw new Error('There are no frames to build the video.');
   // dimensiones por Blob ÚNICO (la línea de tiempo repite dibujos) y con
   // concurrencia acotada: un lote no-PNG lanzaría cientos de decodes a la vez
   const uniq = [...new Set(frames)];
-  const dimsByBlob = new Map();
+  const dimsByBlob = new Map<Blob, ImageDims>();
   const LIMIT = 8;
   for (let i = 0; i < uniq.length; i += LIMIT) {
     const chunk = uniq.slice(i, i + LIMIT);
     const ds = await Promise.all(chunk.map(imageDims));
     chunk.forEach((b, j) => dimsByBlob.set(b, ds[j]));
   }
-  const dims = frames.map((f) => dimsByBlob.get(f));
+  const dims = frames.map((f) => {
+    const d = dimsByBlob.get(f);
+    if (!d) throw new Error('Frame dimensions missing.');
+    return d;
+  });
   let outW = dims[0].w;
   let outH = dims[0].h;
-  if (opts.targetH > 0) {
-    outW = Math.max(1, Math.round(outW * (opts.targetH / outH)));
-    outH = opts.targetH;
+  const targetH = opts.targetH ?? 0;
+  if (targetH > 0) {
+    outW = Math.max(1, Math.round(outW * (targetH / outH)));
+    outH = targetH;
   }
   const passthrough = dims.every((d) => d.png && d.w === outW && d.h === outH);
   if (passthrough) {
     onProgress?.(frames.length, frames.length);
     return { blobs: frames, outW, outH };
   }
-  const blobs = [];
+  const blobs: Blob[] = [];
   const canvas = new OffscreenCanvas(outW, outH);
-  const ctx = canvas.getContext('2d');
-  const rendered = new Map(); // mismo Blob repetido (dedup) → un solo render
+  const ctx = context2d(canvas);
+  const rendered = new Map<Blob, Blob>(); // mismo Blob repetido (dedup) → un solo render
   for (let i = 0; i < frames.length; i++) {
     let b = rendered.get(frames[i]);
     if (!b) {
@@ -456,21 +550,21 @@ async function prepareFramePngs(frames, onProgress, opts = {}) {
 // morir con un abort opaco del módulo.
 const MAX_MOV_BYTES = 1.4e9;
 
-function movTooBig(estBytes, kind) {
+function movTooBig(estBytes: number, kind: string): Error {
   return new Error(`This ${kind} export would be about ${(estBytes / 1e9).toFixed(1)} GB; the in-browser muxer can hold about 1.4 GB. Lower the resolution, split the range, or download the processed frames ZIP from the Scans report and assemble it in your editor.`);
 }
 
-async function framesToMov(blobs, fps, codecArgs, onEncodeProgress) {
-  const { withFF } = await import('./avi.js');
+async function framesToMov(blobs: Blob[], fps: number, codecArgs: string[], onEncodeProgress?: (p: number) => void): Promise<Bytes> {
+  const { withFF, FFFSType } = await import('./avi.ts');
   // sesión exclusiva: la instancia de ffmpeg se comparte con la extracción
   return withFF(async (ff) => {
     const onProg = onEncodeProgress
-      ? ({ progress }) => { if (progress > 0 && progress <= 1) onEncodeProgress(progress); }
+      ? ({ progress }: { progress: number }) => { if (progress > 0 && progress <= 1) onEncodeProgress(progress); }
       : null;
     if (onProg) ff.on('progress', onProg);
     try {
       await ff.createDir('/frames');
-      await ff.mount('WORKERFS', {
+      await ff.mount(FFFSType.WORKERFS, {
         blobs: blobs.map((data, i) => ({ name: `f_${String(i + 1).padStart(6, '0')}.png`, data })),
       }, '/frames');
       await ff.exec([
@@ -478,9 +572,11 @@ async function framesToMov(blobs, fps, codecArgs, onEncodeProgress) {
         '-framerate', String(fps), '-i', '/frames/f_%06d.png',
         ...codecArgs, 'out.mov',
       ]);
-      const bytes = await ff.readFile('out.mov');
-      if (!bytes?.length) throw new Error('The MOV muxer produced no output.');
-      return bytes;
+      const data = await ff.readFile('out.mov');
+      if (typeof data === 'string') throw new Error('The MOV muxer returned text instead of bytes.');
+      if (!data.length) throw new Error('The MOV muxer produced no output.');
+      // readFile copia el archivo fuera de la memoria WASM: ArrayBuffer propio
+      return data as Bytes;
     } finally {
       if (onProg) ff.off('progress', onProg);
       try { await ff.unmount('/frames'); } catch { /* sin montar */ }
@@ -497,7 +593,7 @@ async function framesToMov(blobs, fps, codecArgs, onEncodeProgress) {
  * ffmpeg (VLC, IINA); QuickTime Player ya no trae el códec PNG.
  * frames: array de Blob EN ORDEN (con repetidos). opts: { targetH }.
  */
-export async function buildVideoLossless(frames, fps, onProgress, opts = {}) {
+export async function buildVideoLossless(frames: Blob[], fps: number, onProgress?: (i: number, n: number) => void, opts: { targetH?: number } = {}): Promise<VideoResult> {
   const { blobs } = await prepareFramePngs(frames, onProgress, opts);
   const total = blobs.reduce((a, b) => a + b.size, 0);
   if (total > MAX_MOV_BYTES) throw movTooBig(total, 'lossless');
@@ -511,7 +607,7 @@ export async function buildVideoLossless(frames, fps, onProgress, opts = {}) {
  * bit a bit como el PNG en MOV. Matriz BT.709 marcada en el contenedor.
  * onProgress(fraction 0..1) durante la codificación.
  */
-export async function buildVideoProres(frames, fps, onProgress, opts = {}) {
+export async function buildVideoProres(frames: Blob[], fps: number, onProgress?: (p: number) => void, opts: { targetH?: number } = {}): Promise<VideoResult> {
   // preparación (reescalado/recomposición) como 0–30 % de la barra; la
   // codificación de ffmpeg ocupa el resto
   const { blobs, outW, outH } = await prepareFramePngs(

@@ -11,9 +11,9 @@ loads.
 |--------|------|---------|------------|-------------|----------|
 | Cloudflare Workers | Static hosting | Serves the built site at `mxm.sebastianlopez.me`, with the single-page-application fallback. | API token, held as a GitHub secret. | High: it is how the application reaches users. | `web/wrangler.jsonc`, `.github/workflows/ci.yml` |
 | GitHub Actions | CI/CD | Runs the Rust tests, builds the WebAssembly and the site, runs the browser test, deploys. | The workflow's own `GITHUB_TOKEN`, with `contents: read`. | High | `.github/workflows/ci.yml` |
-| Google Fonts | Static asset over the network | Web fonts for the interface. | None | Low: the page still works without them. | `web/public/sw.js` (`FONT_HOSTS`) |
-| `ffmpeg.wasm` | Bundled asset, about 32 MB | Decodes what WebCodecs refuses, and muxes the two MOV exports. | None | Medium: without it, AVI files and some camera MOV files do not open, and the MOV exports are unavailable. | `web/src/avi.js`, `web/prepare-ffmpeg.mjs` |
-| Browser platform APIs | Runtime | WebAssembly, WebCodecs, WebGPU, Web Workers, `localStorage`, service worker, `createImageBitmap`. | None | High | `web/src/pool.js`, `web/src/video.js`, `web/src/webgpu.js` |
+| Google Fonts | Static asset over the network | Web fonts for the interface. | None | Low: the page still works without them. | `web/src/sw.ts` (`FONT_HOSTS`) |
+| `ffmpeg.wasm` | Bundled asset, about 32 MB | Decodes what WebCodecs refuses, and muxes the two MOV exports. | None | Medium: without it, AVI files and some camera MOV files do not open, and the MOV exports are unavailable. | `web/src/avi.ts`, `web/prepare-ffmpeg.mts` |
+| Browser platform APIs | Runtime | WebAssembly, WebCodecs, WebGPU, Web Workers, `localStorage`, service worker, `createImageBitmap`. | None | High | `web/src/pool.ts`, `web/src/video.ts`, `web/src/webgpu.ts` |
 
 There is **no** database, no message queue, no cache server, no e-mail
 provider, no payment provider, no authentication provider, no error reporting
@@ -24,13 +24,13 @@ third-party API.
 
 | Store | What it holds | Where it lives | Evidence |
 |-------|---------------|----------------|----------|
-| `localStorage`, one key `mxm-studio-v1` | The presets, the calibration profiles, and the last phase 1 settings. | The user's browser. | `web/src/store.js` |
-| In-memory `project` object | The frames, the layout, the sheet images, the processed frames, the report. Lost on reload. | The tab. | `web/src/project.js` |
-| Cache Storage, three caches | The application shell, the hashed assets, the fonts. | The user's browser. | `web/public/sw.js` |
+| `localStorage`, one key `mxm-studio-v1` | The presets, the calibration profiles, and the last phase 1 settings. | The user's browser. | `web/src/store.ts` |
+| In-memory `project` object | The frames, the layout, the sheet images, the processed frames, the report. Lost on reload. | The tab. | `web/src/project.ts` |
+| Cache Storage, three caches | The application shell, the hashed assets, the fonts. | The user's browser. | `web/src/sw.ts` |
 
 Everything the user makes stays on the user's machine. The export and import
 of profiles is a manual JSON file download and upload
-(`web/src/phase3.js`), not a synchronisation service.
+(`web/src/phase3.ts`), not a synchronisation service.
 
 ## 3) Authentication and Authorization
 
@@ -62,18 +62,18 @@ are set again.
 - **Google Fonts unreachable**: the interface falls back to the local font
   stack. The service worker serves the fonts from its cache after the first
   visit.
-- **`web/public/ffmpeg/` missing**: `web/src/avi.js` fetches
+- **`web/public/ffmpeg/` missing**: `web/src/avi.ts` fetches
   `manifest.json` without checking the response, so the failure appears as a
   confusing `SyntaxError` rather than a clear message. This is the state of a
   fresh clone under `npm run dev`. See `CONCERNS.md`.
 - **WebCodecs absent or refusing a file**: the application falls back to
-  `ffmpeg.wasm` (`web/src/video.js`).
+  `ffmpeg.wasm` (`web/src/video.ts`).
 - **WebGPU absent**: the scans are straightened in WebAssembly instead
-  (`web/src/webgpu.js`, `web/src/phase2.js`).
+  (`web/src/webgpu.ts`, `web/src/phase2.ts`).
 
 ## 6) Evidence
 
 - `.github/workflows/ci.yml`, `web/wrangler.jsonc`
-- `web/src/store.js`, `web/src/project.js`, `web/public/sw.js`
-- `web/src/avi.js`, `web/src/video.js`, `web/src/webgpu.js`
-- `web/prepare-ffmpeg.mjs`
+- `web/src/store.ts`, `web/src/project.ts`, `web/src/sw.ts`
+- `web/src/avi.ts`, `web/src/video.ts`, `web/src/webgpu.ts`
+- `web/prepare-ffmpeg.mts`

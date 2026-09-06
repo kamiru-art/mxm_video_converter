@@ -7,6 +7,11 @@
 // los workers, los trozos de ffmpeg, las tipografías) y a partir de la
 // segunda visita todo eso ya está guardado. El HTML va por red primero, así
 // una versión nueva se recoge en cuanto hay conexión.
+//
+// Este archivo es una entrada propia de Vite (ver vite.config.ts) y sale
+// como /sw.js, sin hash: main.ts lo registra por ese nombre fijo.
+
+const sw = self as unknown as ServiceWorkerGlobalScope;
 
 const VERSION = 'mxm-v1';
 const SHELL = `${VERSION}-shell`;   // documento de entrada
@@ -15,18 +20,18 @@ const FONTS = `${VERSION}-fonts`;   // Google Fonts (respuestas opacas)
 
 const FONT_HOSTS = ['https://fonts.googleapis.com', 'https://fonts.gstatic.com'];
 
-self.addEventListener('install', (e) => {
+sw.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.add('/')).catch(() => {}));
   // sin skipWaiting: una versión nueva toma el relevo en la siguiente
   // visita, no a mitad de un proyecto abierto (los módulos ya cargados
   // seguirían pidiendo los archivos de la versión anterior)
 });
 
-self.addEventListener('activate', (e) => {
+sw.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     const keep = new Set([SHELL, ASSETS, FONTS]);
     for (const k of await caches.keys()) if (!keep.has(k)) await caches.delete(k);
-    await self.clients.claim();
+    await sw.clients.claim();
   })());
 });
 
@@ -34,7 +39,7 @@ self.addEventListener('activate', (e) => {
  *  `copy` tiene que venir clonada por quien llama, ANTES de devolver la
  *  original: para cuando esta función llega a usarla, el navegador ya puede
  *  estar leyendo el cuerpo y clonar entonces lanzaría. */
-async function put(cacheName, request, copy, usable) {
+async function put(cacheName: string, request: RequestInfo, copy: Response | null, usable: boolean): Promise<void> {
   if (!copy || !usable) return;
   try {
     const cache = await caches.open(cacheName);
@@ -44,7 +49,7 @@ async function put(cacheName, request, copy, usable) {
   }
 }
 
-function isUsable(cacheName, response) {
+function isUsable(cacheName: string, response: Response | null | undefined): boolean {
   if (!response) return false;
   if (cacheName === FONTS) return response.ok || response.type === 'opaque';
   if (!response.ok) return false;
@@ -58,11 +63,11 @@ function isUsable(cacheName, response) {
   return true;
 }
 
-self.addEventListener('fetch', (e) => {
+sw.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  const sameOrigin = url.origin === self.location.origin;
+  const sameOrigin = url.origin === sw.location.origin;
   const isFont = FONT_HOSTS.includes(url.origin);
   if (!sameOrigin && !isFont) return; // nada más se intercepta
 
