@@ -9,11 +9,15 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
     "build": "npm run typecheck && node prepare-ffmpeg.mts && vite build",
     "preview": "vite preview",
     "test:e2e": "node prepare-ffmpeg.mts && MXM_E2E=1 vite build && node e2e-run.mts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
     "@types/node": "^26.4.1",
     "puppeteer-core": "^25.9.0",
     "typescript": "^7.0.2",

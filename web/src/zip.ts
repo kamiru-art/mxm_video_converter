@@ -13,7 +13,10 @@ const PART_BYTES = 32e6;
 export type ZipEntryData = Bytes | Blob;
 
 /** files: Map<nombre, Uint8Array|Blob>. Devuelve un Blob ZIP. */
-export async function makeZip(files: Map<string, ZipEntryData>, onProgress: (i: number, n: number) => void = () => {}): Promise<Blob> {
+export async function makeZip(
+  files: Map<string, ZipEntryData>,
+  onProgress: (i: number, n: number) => void = () => {},
+): Promise<Blob> {
   const parts: Blob[] = [];
   let chunks: Bytes[] = [];
   let chunkBytes = 0;
@@ -26,9 +29,15 @@ export async function makeZip(files: Map<string, ZipEntryData>, onProgress: (i: 
   };
   let resolveDone: () => void = () => {};
   let rejectDone: (e: Error) => void = () => {};
-  const done = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej; });
+  const done = new Promise<void>((res, rej) => {
+    resolveDone = res;
+    rejectDone = rej;
+  });
   const zip = new Zip((err, chunk, final) => {
-    if (err) { rejectDone(err); return; }
+    if (err) {
+      rejectDone(err);
+      return;
+    }
     if (chunk) {
       chunks.push(chunk as Bytes); // fflate reserva sus propios ArrayBuffer
       chunkBytes += chunk.byteLength;

@@ -1,7 +1,7 @@
 // Estado del proyecto compartido entre fases (vive en memoria).
 
 import { run } from './pool.ts';
-import type { Bytes, ScanResult, VideoMeta } from './types.ts';
+import type { Bytes, VideoMeta } from './types.ts';
 import { context2d } from './ui.ts';
 
 /** Un fotograma cargado en la fase ①: de un video, de una carpeta de
@@ -38,7 +38,6 @@ export interface Project {
   sheetImages: Map<string, Blob>;
   /** etiqueta → Blob PNG del fotograma (fase ②) */
   processedFrames: Map<string, Blob>;
-  lastReport: ScanResult[] | null;
 }
 
 export const project: Project = {
@@ -47,7 +46,6 @@ export const project: Project = {
   layoutJson: null,
   sheetImages: new Map(),
   processedFrames: new Map(),
-  lastReport: null,
 };
 
 const rgbaCache = new Map<string, RgbaImage>(); // `${idx}:${full}` → {data,w,h}
@@ -64,7 +62,6 @@ export function clearFrames(): void {
   project.layoutJson = null;
   project.sheetImages.clear();
   project.processedFrames.clear();
-  project.lastReport = null;
   rgbaCache.clear();
   cacheBytes = 0;
 }
@@ -117,7 +114,11 @@ function shrinkIfNeeded(rgba: Bytes, w: number, h: number, maxSide: number | nul
   const nw = Math.max(1, Math.round(w * k));
   const nh = Math.max(1, Math.round(h * k));
   const src = new OffscreenCanvas(w, h);
-  context2d(src).putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, w * h * 4), w, h), 0, 0);
+  context2d(src).putImageData(
+    new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, w * h * 4), w, h),
+    0,
+    0,
+  );
   const dst = new OffscreenCanvas(nw, nh);
   const dctx = context2d(dst);
   dctx.drawImage(src, 0, 0, nw, nh);
@@ -133,7 +134,11 @@ export async function ensureThumb(idx: number): Promise<OffscreenCanvas> {
   const tw = 256;
   const th = Math.max(1, Math.round((h / w) * tw));
   const src = new OffscreenCanvas(w, h);
-  context2d(src).putImageData(new ImageData(new Uint8ClampedArray(data.buffer.slice(0)), w, h), 0, 0);
+  context2d(src).putImageData(
+    new ImageData(new Uint8ClampedArray(data.buffer.slice(0)), w, h),
+    0,
+    0,
+  );
   const c = new OffscreenCanvas(tw, th);
   context2d(c).drawImage(src, 0, 0, tw, th);
   f.thumb = c;

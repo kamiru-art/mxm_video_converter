@@ -4,7 +4,7 @@
 // 25 MB; el navegador las rearma en un Blob antes de instanciar el módulo.
 //
 // Node ejecuta este archivo tal cual (borrado de tipos, Node 22.18+ / 24).
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 

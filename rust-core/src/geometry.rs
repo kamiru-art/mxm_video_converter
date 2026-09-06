@@ -111,9 +111,16 @@ fn normalize_pts(pts: &[Pt]) -> (Vec<Pt>, H3) {
         d += ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt();
     }
     d /= n;
-    let s = if d > 1e-12 { std::f64::consts::SQRT_2 / d } else { 1.0 };
+    let s = if d > 1e-12 {
+        std::f64::consts::SQRT_2 / d
+    } else {
+        1.0
+    };
     let t: H3 = [s, 0.0, -s * cx, 0.0, s, -s * cy, 0.0, 0.0, 1.0];
-    let out = pts.iter().map(|&p| ((p.0 - cx) * s, (p.1 - cy) * s)).collect();
+    let out = pts
+        .iter()
+        .map(|&p| ((p.0 - cx) * s, (p.1 - cy) * s))
+        .collect();
     (out, t)
 }
 
@@ -248,8 +255,14 @@ pub fn find_homography_ransac(src: &[Pt], dst: &[Pt], thresh: f64) -> Option<(H3
     if best_count < 4 {
         return None;
     }
-    let s: Vec<Pt> = (0..n).filter(|&i| best_inliers[i]).map(|i| src[i]).collect();
-    let d: Vec<Pt> = (0..n).filter(|&i| best_inliers[i]).map(|i| dst[i]).collect();
+    let s: Vec<Pt> = (0..n)
+        .filter(|&i| best_inliers[i])
+        .map(|i| src[i])
+        .collect();
+    let d: Vec<Pt> = (0..n)
+        .filter(|&i| best_inliers[i])
+        .map(|i| dst[i])
+        .collect();
     let h = find_homography_dlt(&s, &d)?;
     Some((h, best_inliers))
 }
@@ -328,12 +341,32 @@ pub fn warp_perspective(img: &DynImg, m: &H3, out_w: usize, out_h: usize) -> Dyn
         DynImg::U8(i) => DynImg::U8(Rgb {
             w: out_w,
             h: out_h,
-            data: warp_generic(&i.data, i.w, i.h, m, out_w, out_h, 255.0, |v| v.round() as u8, [0u8; 3]),
+            data: warp_generic(
+                &i.data,
+                i.w,
+                i.h,
+                m,
+                out_w,
+                out_h,
+                255.0,
+                |v| v.round() as u8,
+                [0u8; 3],
+            ),
         }),
         DynImg::U16(i) => DynImg::U16(Rgb16 {
             w: out_w,
             h: out_h,
-            data: warp_generic(&i.data, i.w, i.h, m, out_w, out_h, 65535.0, |v| v.round() as u16, [0u16; 3]),
+            data: warp_generic(
+                &i.data,
+                i.w,
+                i.h,
+                m,
+                out_w,
+                out_h,
+                65535.0,
+                |v| v.round() as u16,
+                [0u16; 3],
+            ),
         }),
     }
 }
@@ -344,7 +377,17 @@ pub fn warp_rgb_fill(img: &Rgb, m: &H3, out_w: usize, out_h: usize, fill: [u8; 3
     Rgb {
         w: out_w,
         h: out_h,
-        data: warp_generic(&img.data, img.w, img.h, m, out_w, out_h, 255.0, |v| v.round() as u8, fill),
+        data: warp_generic(
+            &img.data,
+            img.w,
+            img.h,
+            m,
+            out_w,
+            out_h,
+            255.0,
+            |v| v.round() as u8,
+            fill,
+        ),
     }
 }
 
@@ -354,7 +397,13 @@ mod tests {
 
     #[test]
     fn homography_identity() {
-        let src = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (50.0, 20.0)];
+        let src = vec![
+            (0.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 100.0),
+            (0.0, 100.0),
+            (50.0, 20.0),
+        ];
         let h = find_homography_dlt(&src, &src).unwrap();
         let p = apply_h(&h, (33.0, 77.0));
         assert!((p.0 - 33.0).abs() < 1e-6 && (p.1 - 77.0).abs() < 1e-6);
@@ -365,8 +414,13 @@ mod tests {
         // proyectiva no trivial
         let ht: H3 = [1.2, 0.1, 5.0, -0.05, 0.9, 12.0, 0.0002, -0.0001, 1.0];
         let src: Vec<Pt> = vec![
-            (10.0, 10.0), (400.0, 30.0), (390.0, 500.0), (20.0, 480.0),
-            (200.0, 250.0), (100.0, 100.0), (300.0, 400.0),
+            (10.0, 10.0),
+            (400.0, 30.0),
+            (390.0, 500.0),
+            (20.0, 480.0),
+            (200.0, 250.0),
+            (100.0, 100.0),
+            (300.0, 400.0),
         ];
         let dst: Vec<Pt> = src.iter().map(|&p| apply_h(&ht, p)).collect();
         let h = find_homography_dlt(&src, &dst).unwrap();

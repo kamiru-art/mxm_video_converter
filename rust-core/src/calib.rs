@@ -54,10 +54,13 @@ fn cal_frame(paper: &str, dpi: u32, landscape: bool) -> CalGeometry {
 // Página de prueba de impresora
 // ────────────────────────────────────────────────────────────────
 
+/// Un cuadrado de la prueba de tamaño: (id, mm, pos, lado, quiet).
+pub type SizeTestSquare = (u32, f64, (i64, i64), i64, i64);
+
 pub struct PrinterTestGeometry {
     pub cal: CalGeometry,
     pub ramp: Vec<([i64; 4], u8)>,
-    pub size_test: Vec<(u32, f64, (i64, i64), i64, i64)>, // id, mm, pos, lado, quiet
+    pub size_test: Vec<SizeTestSquare>,
     pub qr_test: Vec<(f64, [i64; 4], String)>,
 }
 
@@ -98,7 +101,12 @@ pub fn printer_test_geometry(paper: &str, dpi: u32) -> PrinterTestGeometry {
         x += s_px + mm(10.0, dpi);
     }
 
-    PrinterTestGeometry { cal, ramp, size_test, qr_test }
+    PrinterTestGeometry {
+        cal,
+        ramp,
+        size_test,
+        qr_test,
+    }
 }
 
 fn gray_to_rgb_img(g: &crate::img::Gray) -> Rgb {
@@ -106,12 +114,20 @@ fn gray_to_rgb_img(g: &crate::img::Gray) -> Rgb {
     for &v in &g.data {
         data.extend_from_slice(&[v, v, v]);
     }
-    Rgb { w: g.w, h: g.h, data }
+    Rgb {
+        w: g.w,
+        h: g.h,
+        data,
+    }
 }
 
 pub fn render_printer_test(paper: &str, dpi: u32) -> Rgb {
     let g = printer_test_geometry(paper, dpi);
-    let mut canvas = Rgb::new(g.cal.page_w as usize, g.cal.page_h as usize, [255, 255, 255]);
+    let mut canvas = Rgb::new(
+        g.cal.page_w as usize,
+        g.cal.page_h as usize,
+        [255, 255, 255],
+    );
     let f_big = mm(4.0, dpi) as f32;
     let f_small = mm(2.6, dpi) as f32;
 
@@ -120,7 +136,14 @@ pub fn render_printer_test(paper: &str, dpi: u32) -> Rgb {
         canvas.paste(&gray_to_rgb_img(&patch), px, py);
     }
     let band = g.ramp[0].0[0];
-    draw_text(&mut canvas, "MXM Studio — Printer test", band, band, f_big, [0, 0, 0]);
+    draw_text(
+        &mut canvas,
+        "MXM Studio — Printer test",
+        band,
+        band,
+        f_big,
+        [0, 0, 0],
+    );
     draw_text(
         &mut canvas,
         &format!("Print this page at 100 % (WITHOUT \"fit to page\") on {paper} at {dpi} DPI. Then scan it whole and analyze it in the app."),
@@ -133,29 +156,62 @@ pub fn render_printer_test(paper: &str, dpi: u32) -> Rgb {
         canvas.fill_rect(bbox[0], bbox[1], bbox[2], bbox[3], [nivel, nivel, nivel]);
         canvas.stroke_rect(bbox[0], bbox[1], bbox[2], bbox[3], 1, [120, 120, 120]);
     }
-    draw_text(&mut canvas, "Tonal ramp (white → black)", g.ramp[0].0[0], g.ramp[0].0[1] - mm(5.0, dpi), f_small, [0, 0, 0]);
+    draw_text(
+        &mut canvas,
+        "Tonal ramp (white → black)",
+        g.ramp[0].0[0],
+        g.ramp[0].0[1] - mm(5.0, dpi),
+        f_small,
+        [0, 0, 0],
+    );
     for &(mid, mmv, (x, y), s_px, q_px) in &g.size_test {
         let patch = marker_patch_gray(Dict::Dict4x4_50, mid, s_px, q_px);
         canvas.paste(&gray_to_rgb_img(&patch), x, y);
-        draw_text(&mut canvas, &format!("{mmv} mm"), x, y + s_px + 2 * q_px + mm(1.0, dpi), f_small, [0, 0, 0]);
+        draw_text(
+            &mut canvas,
+            &format!("{mmv} mm"),
+            x,
+            y + s_px + 2 * q_px + mm(1.0, dpi),
+            f_small,
+            [0, 0, 0],
+        );
     }
-    draw_text(&mut canvas, "ArUco marker sizes", g.size_test[0].2 .0, g.size_test[0].2 .1 - mm(5.0, dpi), f_small, [0, 0, 0]);
+    draw_text(
+        &mut canvas,
+        "ArUco marker sizes",
+        g.size_test[0].2 .0,
+        g.size_test[0].2 .1 - mm(5.0, dpi),
+        f_small,
+        [0, 0, 0],
+    );
     for (mmv, bbox, texto) in &g.qr_test {
         let q = qr::qr_image(texto, (bbox[2] - bbox[0]) as usize, false);
         canvas.paste(&gray_to_rgb_img(&q), bbox[0], bbox[1]);
-        draw_text(&mut canvas, &format!("{mmv} mm"), bbox[0], bbox[3] + mm(1.0, dpi), f_small, [0, 0, 0]);
+        draw_text(
+            &mut canvas,
+            &format!("{mmv} mm"),
+            bbox[0],
+            bbox[3] + mm(1.0, dpi),
+            f_small,
+            [0, 0, 0],
+        );
     }
-    draw_text(&mut canvas, "QR sizes", g.qr_test[0].1[0], g.qr_test[0].1[1] - mm(5.0, dpi), f_small, [0, 0, 0]);
+    draw_text(
+        &mut canvas,
+        "QR sizes",
+        g.qr_test[0].1[0],
+        g.qr_test[0].1[1] - mm(5.0, dpi),
+        f_small,
+        [0, 0, 0],
+    );
     canvas
 }
 
+/// Resultado de `align_to_canonical`: (warp RGB8, escala, esquinas refinadas por id).
+type Aligned = (Rgb, f64, HashMap<u32, [Pt; 4]>);
+
 /// Alinea el escaneo de una carta al lienzo canónico (con espejo automático).
-/// Devuelve (warp RGB8, escala, esquinas refinadas por id).
-fn align_to_canonical(
-    mut img: DynImg,
-    cal: &CalGeometry,
-    mode: &str,
-) -> Result<(Rgb, f64, HashMap<u32, [Pt; 4]>), String> {
+fn align_to_canonical(mut img: DynImg, cal: &CalGeometry, mode: &str) -> Result<Aligned, String> {
     let expected: Vec<u32> = cal.marker_bboxes.keys().cloned().collect();
     let det = detect_oriented(&mut img, Dict::Dict4x4_50, &expected, mode, expected.len());
     if det.found.len() < 3 {
@@ -164,7 +220,11 @@ fn align_to_canonical(
             det.found.len()
         ));
     }
-    let polaridad = if det.inverted { "invertida_primero" } else { "ambas" };
+    let polaridad = if det.inverted {
+        "invertida_primero"
+    } else {
+        "ambas"
+    };
     let refined = refine_corners_fullres(&img, &det.found, Dict::Dict4x4_50, mode, polaridad);
     let bboxes_json = json!(cal
         .marker_bboxes
@@ -216,7 +276,10 @@ fn patch_mean(warp: &Rgb, bbox: [i64; 4], s: f64, shrink: f64) -> Option<f64> {
     let dx = ((x2 - x1) as f64 * shrink) as i64;
     let dy = ((y2 - y1) as f64 * shrink) as i64;
     let (x1, y1) = ((x1 + dx).max(0) as usize, (y1 + dy).max(0) as usize);
-    let (x2, y2) = (((x2 - dx).max(0) as usize).min(warp.w), ((y2 - dy).max(0) as usize).min(warp.h));
+    let (x2, y2) = (
+        ((x2 - dx).max(0) as usize).min(warp.w),
+        ((y2 - dy).max(0) as usize).min(warp.h),
+    );
     if x2 <= x1 || y2 <= y1 {
         return None;
     }
@@ -248,7 +311,11 @@ pub fn analyze_printer_test(
     if let Some(sdpi) = scan_dpi {
         let mut sx_list = Vec::new();
         let mut sy_list = Vec::new();
-        let ids: Vec<u32> = refined.keys().cloned().filter(|id| g.cal.marker_bboxes.contains_key(id)).collect();
+        let ids: Vec<u32> = refined
+            .keys()
+            .cloned()
+            .filter(|id| g.cal.marker_bboxes.contains_key(id))
+            .collect();
         let center_nominal = |mid: u32| {
             let b = g.cal.marker_bboxes[&mid];
             (
@@ -304,14 +371,27 @@ pub fn analyze_printer_test(
     }
     if !tono.is_empty() {
         let vals: Vec<f64> = tono.iter().map(|t| t[1].as_f64().unwrap()).collect();
-        let (mn, mx) = vals.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        let (mn, mx) = vals
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
         if mx - mn < 60.0 {
-            notas.push("The tonal ramp has little contrast in the scan; check the scanner exposure.".into());
+            notas.push(
+                "The tonal ramp has little contrast in the scan; check the scanner exposure."
+                    .into(),
+            );
         }
     }
 
     // Tamaño mínimo de marcador: detector ESTRICTO sobre el warp
-    let det = crate::scanproc::detect_markers_multi(&warp, Dict::Dict4x4_50, &SIZE_TEST_IDS, "normal", "normal", false, SIZE_TEST_IDS.len());
+    let det = crate::scanproc::detect_markers_multi(
+        &warp,
+        Dict::Dict4x4_50,
+        &SIZE_TEST_IDS,
+        "normal",
+        "normal",
+        false,
+        SIZE_TEST_IDS.len(),
+    );
     let mut detectados_mm: Vec<f64> = g
         .size_test
         .iter()
@@ -383,7 +463,12 @@ pub struct CyanoGeometry {
     pub target: String,
 }
 
-pub fn cyanotype_strip_geometry(paper: &str, dpi: u32, steps: usize, target: &str) -> CyanoGeometry {
+pub fn cyanotype_strip_geometry(
+    paper: &str,
+    dpi: u32,
+    steps: usize,
+    target: &str,
+) -> CyanoGeometry {
     let cal = cal_frame(paper, dpi, false);
     let band = mm(CAL_MARGIN_MM, dpi) + cal.marker_side + 2 * cal.marker_quiet + mm(6.0, dpi);
     let (content_x1, content_x2) = (band, cal.page_w - band);
@@ -396,7 +481,8 @@ pub fn cyanotype_strip_geometry(paper: &str, dpi: u32, steps: usize, target: &st
         let y0 = band + mm(20.0, dpi);
         let avail_w = content_x2 - content_x1;
         let avail_h = cal.page_h - band - y0;
-        let pitch = (((avail_w - (cols - 1) * gap) / cols).min((avail_h - (rows - 1) * gap) / rows)).max(4);
+        let pitch =
+            (((avail_w - (cols - 1) * gap) / cols).min((avail_h - (rows - 1) * gap) / rows)).max(4);
         for i in 0..256i64 {
             let (row, col) = (i / cols, i % cols);
             let x = content_x1 + col * (pitch + gap);
@@ -418,7 +504,12 @@ pub fn cyanotype_strip_geometry(paper: &str, dpi: u32, steps: usize, target: &st
             patches.push(([x, y, x + patch_w, y + patch_h], dens));
         }
     }
-    CyanoGeometry { cal, patches, steps: steps_out, target: target.to_string() }
+    CyanoGeometry {
+        cal,
+        patches,
+        steps: steps_out,
+        target: target.to_string(),
+    }
 }
 
 pub fn render_cyanotype_strip(
@@ -462,7 +553,14 @@ pub fn render_cyanotype_strip(
     } else {
         "MXM Studio — Cyanotype calibration (21-patch strip)"
     };
-    draw_text(&mut canvas, titulo, band, mm(CAL_MARGIN_MM, dpi) + mm(1.0, dpi) + g.cal.marker_side + 2 * g.cal.marker_quiet, f_big, text_color);
+    draw_text(
+        &mut canvas,
+        titulo,
+        band,
+        mm(CAL_MARGIN_MM, dpi) + mm(1.0, dpi) + g.cal.marker_side + 2 * g.cal.marker_quiet,
+        f_big,
+        text_color,
+    );
     draw_text(
         &mut canvas,
         "Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE RESULT (not the film).",
@@ -475,7 +573,14 @@ pub fn render_cyanotype_strip(
         let color = ramp[dens as usize];
         canvas.fill_rect(bbox[0], bbox[1], bbox[2], bbox[3], color);
         if g.target != "edn256" {
-            draw_text(&mut canvas, &format!("{:02} · d={}", i + 1, dens), bbox[0], bbox[3] + mm(1.0, dpi), f_small, text_color);
+            draw_text(
+                &mut canvas,
+                &format!("{:02} · d={}", i + 1, dens),
+                bbox[0],
+                bbox[3] + mm(1.0, dpi),
+                f_small,
+                text_color,
+            );
         }
     }
     if mirror {
@@ -879,7 +984,9 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         }
     }
     if vmax - vmin < 10.0 {
-        return Err("The chart has almost no contrast: the exposure was far too short or too long.".into());
+        return Err(
+            "The chart has almost no contrast: the exposure was far too short or too long.".into(),
+        );
     }
     for col in v.iter_mut() {
         for x in col.iter_mut() {
@@ -888,8 +995,8 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
     }
 
     // análisis por matiz
-    let mut monotona = vec![true; CB_COLS];
-    let mut escalones = vec![0usize; CB_COLS];
+    let mut monotona = [true; CB_COLS];
+    let mut escalones = [0usize; CB_COLS];
     let mut suavidad = vec![0.0f64; CB_COLS];
     for k in 0..CB_COLS {
         let colv = &v[k];
@@ -902,7 +1009,7 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
                 escalones[k] += 1;
             }
         }
-        let mut sorted = colv.clone();
+        let mut sorted = *colv;
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let ideal = (sorted[CB_ROWS - 1] - sorted[0]) / (CB_ROWS - 1) as f64;
         let mut acc = 0.0;
@@ -929,7 +1036,10 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
     let mut orden: Vec<usize> = (0..CB_COLS).collect();
     orden.sort_by(|&a, &b| escalones[b].cmp(&escalones[a]));
     let top3 = &orden[..3.min(orden.len())];
-    let mejor_hue = *top3.iter().min_by(|&&a, &&b| suavidad[a].partial_cmp(&suavidad[b]).unwrap()).unwrap();
+    let mejor_hue = *top3
+        .iter()
+        .min_by(|&&a, &&b| suavidad[a].partial_cmp(&suavidad[b]).unwrap())
+        .unwrap();
 
     // 3) paradas del degradado (sombras / medios / luces)
     let mut stops = Vec::new();
@@ -943,7 +1053,10 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
                 fila = row;
             }
         }
-        stops.push(json!([dens, cyan::rgb_to_hex(cb_patch_rgb(mejor_hue, fila))]));
+        stops.push(json!([
+            dens,
+            cyan::rgb_to_hex(cb_patch_rgb(mejor_hue, fila))
+        ]));
     }
 
     let mut notas: Vec<String> = Vec::new();
@@ -953,7 +1066,9 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
             "On your printer, the color {mejor_hex} blocks UV clearly better than black: use it as the negatives' ink."
         ));
     } else if best_col >= CB_HUE_COLS {
-        notas.push("On your printer black/gray is the best blocker: you can keep using black ink.".into());
+        notas.push(
+            "On your printer black/gray is the best blocker: you can keep using black ink.".into(),
+        );
     }
     let malos = monotona.iter().filter(|&&m| !m).count();
     if malos > 0 {
@@ -1027,16 +1142,32 @@ mod tests {
             let x2 = (bbox[2] as f64 * s).round() as i64;
             let y2 = (bbox[3] as f64 * s).round() as i64;
             let pad = ((x2 - x1) as f64 * 0.3) as i64;
-            let crop = warp.crop((x1 - pad).max(0) as usize, (y1 - pad).max(0) as usize,
-                                 (x2 + pad).max(0) as usize, (y2 + pad).max(0) as usize);
-            println!("{mmv} mm -> {:?} (esperado {texto})", qr::decode_qr_rgb(&crop));
+            let crop = warp.crop(
+                (x1 - pad).max(0) as usize,
+                (y1 - pad).max(0) as usize,
+                (x2 + pad).max(0) as usize,
+                (y2 + pad).max(0) as usize,
+            );
+            println!(
+                "{mmv} mm -> {:?} (esperado {texto})",
+                qr::decode_qr_rgb(&crop)
+            );
         }
         // diferencia media entre el warp y la página original
         let orig = render_printer_test("A4", 150);
         let mut acc = 0.0f64;
         let n = (orig.w * orig.h * 3).min(warp.data.len());
-        for i in 0..n { acc += (orig.data[i] as f64 - warp.data[i] as f64).abs(); }
-        println!("dif media = {:.2}, warp {}x{}, orig {}x{}", acc / n as f64, warp.w, warp.h, orig.w, orig.h);
+        for i in 0..n {
+            acc += (orig.data[i] as f64 - warp.data[i] as f64).abs();
+        }
+        println!(
+            "dif media = {:.2}, warp {}x{}, orig {}x{}",
+            acc / n as f64,
+            warp.w,
+            warp.h,
+            orig.w,
+            orig.h
+        );
     }
 
     #[test]
@@ -1044,7 +1175,10 @@ mod tests {
         let page = render_printer_test("A4", 150);
         // el análisis del render perfecto debe detectar escala ≈ 1.0
         let out = analyze_printer_test(DynImg::U8(page), "A4", 150, Some(150.0)).unwrap();
-        assert!((out["scale_x"].as_f64().unwrap() - 1.0).abs() < 0.01, "{out}");
+        assert!(
+            (out["scale_x"].as_f64().unwrap() - 1.0).abs() < 0.01,
+            "{out}"
+        );
         assert!((out["scale_y"].as_f64().unwrap() - 1.0).abs() < 0.01);
         // en un render perfecto, hasta el marcador de 4 mm debería detectarse
         assert!(out["marker_min_mm"].as_f64().unwrap() <= 6.0, "{out}");
@@ -1055,7 +1189,16 @@ mod tests {
     fn cyanotype_strip_roundtrip_builds_sane_lut() {
         // Carta → copia azul simulada con una respuesta NO lineal conocida →
         // análisis: la LUT resultante debe compensar esa respuesta.
-        let strip = render_cyanotype_strip("A4", 150, "#000000", true, CYANO_STEPS, "kamiru21", None, None);
+        let strip = render_cyanotype_strip(
+            "A4",
+            150,
+            "#000000",
+            true,
+            CYANO_STEPS,
+            "kamiru21",
+            None,
+            None,
+        );
         // exposición de contacto: la copia queda al derecho
         let derecha = strip.flip_horizontal();
         // respuesta no lineal: gamma sobre la exposición
@@ -1064,7 +1207,8 @@ mod tests {
         for y in 0..derecha.h {
             for x in 0..derecha.w {
                 let p = derecha.px(x, y);
-                let dens = 255.0 - (0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64);
+                let dens =
+                    255.0 - (0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64);
                 let expo = (1.0 - dens / 255.0).powf(2.2); // proceso "duro"
                 let mut px = [0u8; 3];
                 let paper = [245.0, 242.0, 230.0];
@@ -1076,8 +1220,23 @@ mod tests {
             }
         }
         let _ = g;
-        let out = analyze_cyanotype_strip(DynImg::U8(azul), "A4", 150, CYANO_STEPS, "kamiru21", Some("#000000"), None, None).unwrap();
-        let lut: Vec<f64> = out["lut"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        let out = analyze_cyanotype_strip(
+            DynImg::U8(azul),
+            "A4",
+            150,
+            CYANO_STEPS,
+            "kamiru21",
+            Some("#000000"),
+            None,
+            None,
+        )
+        .unwrap();
+        let lut: Vec<f64> = out["lut"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
         assert_eq!(lut.len(), 256);
         // monótona no-decreciente (con tolerancia numérica)
         for i in 1..256 {
@@ -1100,7 +1259,11 @@ mod tests {
         for y in 0..derecha.h {
             for x in 0..derecha.w {
                 let p = derecha.px(x, y);
-                let (r, gg, b) = (p[0] as f64 / 255.0, p[1] as f64 / 255.0, p[2] as f64 / 255.0);
+                let (r, gg, b) = (
+                    p[0] as f64 / 255.0,
+                    p[1] as f64 / 255.0,
+                    p[2] as f64 / 255.0,
+                );
                 // el UV pasa según el verde (los magentas absorben mucho verde/UV
                 // en este modelo de juguete); el negro bloquea bastante pero menos
                 let block = (1.0 - gg) * 0.95 + (1.0 - (r + gg + b) / 3.0) * 0.05;
@@ -1119,7 +1282,10 @@ mod tests {
         // el ganador debe ser un color con poco verde (magenta/rojo/azul puro)
         let hexc = out["mejor_color"].as_str().unwrap();
         let rgb = cyan::hex_to_rgb(hexc);
-        assert!(rgb[1] < 60, "mejor color {hexc} debería tener poco verde: {out}");
+        assert!(
+            rgb[1] < 60,
+            "mejor color {hexc} debería tener poco verde: {out}"
+        );
         assert_eq!(out["stops"].as_array().unwrap().len(), 3);
     }
 }

@@ -1,14 +1,14 @@
 // MXM Studio — bootstrap and phase navigation.
 
 import './style.css';
+import { errMsg } from './errors.ts';
+import { mountHelp } from './help.ts';
 import { mountPhase1 } from './phase1.ts';
 import { mountPhase2 } from './phase2.ts';
 import { mountPhase3 } from './phase3.ts';
 import { mountPhase4 } from './phase4.ts';
-import { mountHelp } from './help.ts';
 import { run } from './pool.ts';
 import { toast } from './ui.ts';
-import { errMsg } from './errors.ts';
 import { getGpuDevice } from './webgpu.ts';
 
 const mounted = new Set<string>();
@@ -20,7 +20,12 @@ const mounters: Record<string, (root: HTMLElement) => void> = {
   help: mountHelp,
 };
 // rutas antiguas en español: los enlaces guardados siguen funcionando
-const LEGACY_ROUTES: Record<string, string> = { hojas: 'sheets', escaneos: 'scans', calibracion: 'calibration', ayuda: 'help' };
+const LEGACY_ROUTES: Record<string, string> = {
+  hojas: 'sheets',
+  escaneos: 'scans',
+  calibracion: 'calibration',
+  ayuda: 'help',
+};
 const resolveRoute = (v: string): string => LEGACY_ROUTES[v] ?? v;
 
 function show(view: string): void {
@@ -66,14 +71,18 @@ run('version', {}).then(
 // Indicador de capacidades: el mismo proyecto tarda muy distinto según el
 // navegador enderece los escaneos en la GPU o en WebAssembly, y eso no se ve
 // por ningún lado. Aquí se dice, sin tener que abrir la fase ②.
-(async () => {
+void (async () => {
   const badge = document.getElementById('capbadge');
   const text = document.getElementById('capbadge-text');
   if (!badge || !text) return;
   const cores = navigator.hardwareConcurrency;
   const coresTxt = cores ? ` · ${cores} cores` : '';
   let gpu: GPUDevice | null = null;
-  try { gpu = await getGpuDevice(); } catch { gpu = null; }
+  try {
+    gpu = await getGpuDevice();
+  } catch {
+    gpu = null;
+  }
   badge.classList.add(gpu ? 'gpu' : 'cpu');
   text.textContent = `${gpu ? 'WebGPU' : 'CPU (WebAssembly)'}${coresTxt}`;
   badge.title = gpu

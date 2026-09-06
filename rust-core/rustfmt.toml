@@ -1,0 +1,5 @@
+# Estilo por defecto de rustfmt, a propósito: la mitad del código ya estaba
+# en él (venía de un `cargo fmt` anterior) y la otra mitad se había separado
+# a mano, sobre todo con líneas largas. Un ancho mayor o `use_small_heuristics`
+# no reducía el diff, sólo lo cambiaba de sitio. CI corre `cargo fmt --check`.
+edition = "2021"

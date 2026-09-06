@@ -142,7 +142,7 @@ pub fn detect_markers_multi(
     };
     for (prof_mode, escalated) in profiles {
         let params = params_for_mode(prof_mode);
-        let mut detect_on = |name: &str, g: &Gray, inverted: bool, best: &mut MultiDetect| -> bool {
+        let detect_on = |name: &str, g: &Gray, inverted: bool, best: &mut MultiDetect| -> bool {
             let dets = detect_markers(g, dict, &params);
             let mut found: HashMap<u32, [Pt; 4]> = HashMap::new();
             for d in dets {
@@ -231,7 +231,11 @@ pub fn detect_oriented(
         factor_prev = Some(f);
         let sufijo = if idx > 0 { "_bin" } else { "" };
         for flip in [false, true] {
-            let cara = if flip { proxy.flip_horizontal() } else { proxy.clone() };
+            let cara = if flip {
+                proxy.flip_horizontal()
+            } else {
+                proxy.clone()
+            };
             let det = detect_markers_multi(&cara, dict, expected, mode, "ambas", true, target);
             if det.found.len() > out.found.len() {
                 out.strategy = format!(
@@ -371,7 +375,9 @@ pub fn bbox_corners(b: [f64; 4]) -> [Pt; 4] {
 }
 
 fn layout_bbox(layout_bboxes: &Value, id: u32) -> Option<[f64; 4]> {
-    layout_bboxes.get(id.to_string()).and_then(layoutfile::bbox_of)
+    layout_bboxes
+        .get(id.to_string())
+        .and_then(layoutfile::bbox_of)
 }
 
 pub fn estimate_scale(detected: &HashMap<u32, [Pt; 4]>, layout_bboxes: &Value) -> Option<f64> {
@@ -388,7 +394,13 @@ pub fn estimate_scale(detected: &HashMap<u32, [Pt; 4]>, layout_bboxes: &Value) -
         .iter()
         .map(|&id| {
             let c = detected[&id];
-            (id, ((c[0].0 + c[1].0 + c[2].0 + c[3].0) / 4.0, (c[0].1 + c[1].1 + c[2].1 + c[3].1) / 4.0))
+            (
+                id,
+                (
+                    (c[0].0 + c[1].0 + c[2].0 + c[3].0) / 4.0,
+                    (c[0].1 + c[1].1 + c[2].1 + c[3].1) / 4.0,
+                ),
+            )
         })
         .collect();
     let center_lay: HashMap<u32, Pt> = ids
@@ -517,7 +529,10 @@ fn make_local_shift(
         return None;
     }
     let umbral = (FINE_ALIGN_MIN_MM * px_mm).max(0.75);
-    let mut norms: Vec<f64> = errs.iter().map(|e| (e.0 * e.0 + e.1 * e.1).sqrt()).collect();
+    let mut norms: Vec<f64> = errs
+        .iter()
+        .map(|e| (e.0 * e.0 + e.1 * e.1).sqrt())
+        .collect();
     norms.sort_by(|a, b| a.partial_cmp(b).unwrap());
     if norms[norms.len() / 2] < umbral {
         return None;
@@ -528,7 +543,11 @@ fn make_local_shift(
         .map(|b| (b[2] - b[0]) * s)
         .collect();
     sides.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let eps2 = if sides.is_empty() { 100.0 } else { sides[sides.len() / 2].powi(2) };
+    let eps2 = if sides.is_empty() {
+        100.0
+    } else {
+        sides[sides.len() / 2].powi(2)
+    };
     Some(LocalShift { pts, errs, eps2 })
 }
 
@@ -548,7 +567,11 @@ pub fn recover_missing_markers(
         .as_object()
         .map(|o| o.keys().filter_map(|k| k.parse().ok()).collect())
         .unwrap_or_default();
-    let missing: Vec<u32> = all_ids.iter().cloned().filter(|id| !refined.contains_key(id)).collect();
+    let missing: Vec<u32> = all_ids
+        .iter()
+        .cloned()
+        .filter(|id| !refined.contains_key(id))
+        .collect();
     if missing.is_empty() || refined.len() < 3 {
         return out;
     }
@@ -569,7 +592,10 @@ pub fn recover_missing_markers(
             None => continue,
         };
         let bc = bbox_corners(b);
-        let proj: Vec<Pt> = bc.iter().map(|&(x, y)| apply_h(&m0, (x * s, y * s))).collect();
+        let proj: Vec<Pt> = bc
+            .iter()
+            .map(|&(x, y)| apply_h(&m0, (x * s, y * s)))
+            .collect();
         let x1 = proj.iter().map(|p| p.0).fold(f64::MAX, f64::min);
         let x2 = proj.iter().map(|p| p.0).fold(f64::MIN, f64::max);
         let y1 = proj.iter().map(|p| p.1).fold(f64::MAX, f64::min);
@@ -702,7 +728,10 @@ fn identify_sheet<'a>(
                     None => continue,
                 };
                 let proy_qr = payload.proyecto.clone().unwrap_or_default();
-                let proy_layout = layout.get("proyecto").and_then(|v| v.as_str()).unwrap_or("");
+                let proy_layout = layout
+                    .get("proyecto")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !proy_qr.trim().is_empty()
                     && !proy_layout.trim().is_empty()
                     && proy_qr.trim() != proy_layout.trim()
@@ -783,7 +812,11 @@ pub fn resolve_markers(layout: &Value) -> LayoutMarkers {
         }
         _ => minfo["bboxes"].clone(),
     };
-    LayoutMarkers { bboxes, ids_por_hoja: iph, dict }
+    LayoutMarkers {
+        bboxes,
+        ids_por_hoja: iph,
+        dict,
+    }
 }
 
 /// Vota la hoja por los IDs de marcador detectados. Gana la hoja con más IDs
@@ -820,8 +853,7 @@ fn identify_by_markers<'a>(
     detected: &HashSet<u32>,
 ) -> Option<(&'a Value, String)> {
     let (num, score) = vote_sheet(ids_por_hoja, detected)?;
-    layoutfile::sheet_by_number(layout, num)
-        .map(|h| (h, format!("marker IDs ({score} matching)")))
+    layoutfile::sheet_by_number(layout, num).map(|h| (h, format!("marker IDs ({score} matching)")))
 }
 
 pub fn base_report(scan_name: &str) -> Value {
@@ -861,26 +893,30 @@ macro_rules! warn_res {
 
 /// Fase de detección: marcadores, escala, homografía y corrector local.
 /// Muta `res` (informe) y voltea `img` en el sitio si llegó espejado.
-/// Err(()) = fallo; el error ya quedó escrito en `res`.
+/// `None` = fallo; el error ya quedó escrito en `res`.
 pub fn detect_scan(
     img: &mut DynImg,
     layout: &Value,
     opts: &ScanOptions,
     markers: &LayoutMarkers,
     res: &mut Value,
-) -> Result<DetectData, ()> {
+) -> Option<DetectData> {
     macro_rules! warn {
         ($($arg:tt)*) => { warn_res!(res, $($arg)*) };
     }
     macro_rules! fail {
         ($($arg:tt)*) => {{
             res["error"] = json!(format!($($arg)*));
-            return Err(());
+            return None;
         }};
     }
 
     let mode = if opts.mode == "auto" {
-        layout.get("modo").and_then(|v| v.as_str()).unwrap_or("normal").to_string()
+        layout
+            .get("modo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("normal")
+            .to_string()
     } else {
         opts.mode.clone()
     };
@@ -942,7 +978,11 @@ pub fn detect_scan(
     res["marcadores"] = json!(det.found.len());
     res["espejado"] = json!(det.flipped);
     if det.flipped {
-        if layout.get("espejado").and_then(|v| v.as_bool()).unwrap_or(true) {
+        if layout
+            .get("espejado")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true)
+        {
             warn!("The scan arrived MIRRORED (film exposed flipped?); it was flipped back automatically before processing.");
         } else {
             warn!("Mirrored scan (unexpected: the negative was generated without mirroring); flipped back automatically.");
@@ -956,8 +996,16 @@ pub fn detect_scan(
             opts.min_markers
         );
     }
-    let polaridad = if det.inverted { "invertida_primero" } else { "ambas" };
-    let det_mode = if det.escalated { "cianotipia".to_string() } else { mode.clone() };
+    let polaridad = if det.inverted {
+        "invertida_primero"
+    } else {
+        "ambas"
+    };
+    let det_mode = if det.escalated {
+        "cianotipia".to_string()
+    } else {
+        mode.clone()
+    };
     if det.inverted {
         warn!("Markers with INVERTED POLARITY (normal-mode sheet exposed as cyanotype?); they were detected in negative.");
     }
@@ -974,11 +1022,24 @@ pub fn detect_scan(
     let thresh = (0.001 * diag).max(8.0);
 
     // 3b. Recuperación guiada.
-    let extra = recover_missing_markers(img, &refined, layout_bboxes, s, dict, &det_mode, thresh, polaridad);
+    let extra = recover_missing_markers(
+        img,
+        &refined,
+        layout_bboxes,
+        s,
+        dict,
+        &det_mode,
+        thresh,
+        polaridad,
+    );
     if !extra.is_empty() {
         let mut ids: Vec<u32> = extra.keys().cloned().collect();
         ids.sort();
-        warn!("Recovered {} marker(s) in the guided second pass ({:?}).", extra.len(), ids);
+        warn!(
+            "Recovered {} marker(s) in the guided second pass ({:?}).",
+            extra.len(),
+            ids
+        );
         refined.extend(extra);
         res["marcadores"] = json!(refined.len());
         if let Some(s2) = estimate_scale(&refined, layout_bboxes) {
@@ -1022,14 +1083,22 @@ pub fn detect_scan(
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let med = vals[vals.len() / 2];
         let lim = (RESIDUAL_OUTLIER_MM * px_mm).max(3.0 * med);
-        let mut malos: Vec<u32> = resid.iter().filter(|(_, &r)| r > lim).map(|(&i, _)| i).collect();
+        let mut malos: Vec<u32> = resid
+            .iter()
+            .filter(|(_, &r)| r > lim)
+            .map(|(&i, _)| i)
+            .collect();
         malos.sort();
         if !malos.is_empty() && refined.len() - malos.len() >= 3.max(opts.min_markers) {
             for mid in &malos {
                 refined.remove(mid);
             }
             res["marcadores"] = json!(refined.len());
-            warn!("Marker(s) {:?} discarded due to inconsistent residual (> {:.1} mm).", malos, lim / px_mm);
+            warn!(
+                "Marker(s) {:?} discarded due to inconsistent residual (> {:.1} mm).",
+                malos,
+                lim / px_mm
+            );
             let (src2, dst2) = correspondences(&refined, layout_bboxes, s);
             if let Some((m2, _)) = find_homography_ransac(&src2, &dst2, thresh) {
                 m = m2;
@@ -1079,7 +1148,15 @@ pub fn detect_scan(
             mb(crate::codecs::MAX_CORE_BYTES)
         );
     }
-    Ok(DetectData { m, s, flipped: det.flipped, out_w, out_h, refined, local })
+    Some(DetectData {
+        m,
+        s,
+        flipped: det.flipped,
+        out_w,
+        out_h,
+        refined,
+        local,
+    })
 }
 
 /// Entrada mínima de la fase final (serializable a través del puente JS).
@@ -1166,7 +1243,10 @@ pub fn finish_scan(
     }
 
     let plantilla: Option<&Value> = hoja.as_ref().map(|(h, _)| *h).or_else(|| {
-        layout.get("hojas").and_then(|v| v.as_array()).and_then(|a| a.first())
+        layout
+            .get("hojas")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
     });
 
     // Miniatura de diagnóstico (antes de decidir el error, como la original).
@@ -1190,7 +1270,14 @@ pub fn finish_scan(
         }
         None => markers.bboxes.clone(),
     };
-    let overlay = build_overlay(&warp, s, &overlay_bboxes, &fin.refined_ids, plantilla, local.as_ref());
+    let overlay = build_overlay(
+        &warp,
+        s,
+        &overlay_bboxes,
+        &fin.refined_ids,
+        plantilla,
+        local.as_ref(),
+    );
 
     let (hoja, via) = match hoja {
         Some(hv) => hv,
@@ -1199,19 +1286,31 @@ pub fn finish_scan(
             if let Some(pl) = plantilla {
                 if let Some(fs) = pl.get("frames").and_then(|v| v.as_object()) {
                     let mut items: Vec<(&String, &Value)> = fs.iter().collect();
-                    items.sort_by_key(|(_, info)| info.get("celda").and_then(|c| c.as_i64()).unwrap_or(0));
+                    items.sort_by_key(|(_, info)| {
+                        info.get("celda").and_then(|c| c.as_i64()).unwrap_or(0)
+                    });
                     for (i, (_lab, info)) in items.iter().enumerate() {
                         if let Some(b) = layoutfile::bbox_of(&info["bbox"]) {
-                            if let Some(crop) = crop_frame(&warp, b, s, opts.bleed, local.as_ref()) {
-                                let stem = scan_name.rsplit_once('.').map(|(a, _)| a).unwrap_or(scan_name);
+                            if let Some(crop) = crop_frame(&warp, b, s, opts.bleed, local.as_ref())
+                            {
+                                let stem = scan_name
+                                    .rsplit_once('.')
+                                    .map(|(a, _)| a)
+                                    .unwrap_or(scan_name);
                                 unidentified.push((format!("{}_celda{}", stem, i + 1), crop));
                             }
                         }
                     }
                 }
             }
-            res["error"] = json!("The sheet could not be identified (no marker identity or readable QR).");
-            return ScanOutput { result: res, frames: frames_out, unidentified, overlay };
+            res["error"] =
+                json!("The sheet could not be identified (no marker identity or readable QR).");
+            return ScanOutput {
+                result: res,
+                frames: frames_out,
+                unidentified,
+                overlay,
+            };
         }
     };
 
@@ -1258,7 +1357,12 @@ pub fn finish_scan(
         }
     }
     res["ok"] = json!(!frames_out.is_empty());
-    ScanOutput { result: res, frames: frames_out, unidentified, overlay }
+    ScanOutput {
+        result: res,
+        frames: frames_out,
+        unidentified,
+        overlay,
+    }
 }
 
 /// Procesa UN escaneo contra un layout normalizado v2 (camino todo-en-WASM).
@@ -1273,9 +1377,14 @@ pub fn process_scan(
     let markers = resolve_markers(layout);
     let mut res = base_report(scan_name);
     let det = match detect_scan(&mut img, layout, opts, &markers, &mut res) {
-        Ok(d) => d,
-        Err(()) => {
-            return ScanOutput { result: res, frames: Vec::new(), unidentified: Vec::new(), overlay: None }
+        Some(d) => d,
+        None => {
+            return ScanOutput {
+                result: res,
+                frames: Vec::new(),
+                unidentified: Vec::new(),
+                overlay: None,
+            }
         }
     };
     let warp = crate::geometry::warp_perspective(&img, &det.m, det.out_w, det.out_h);
@@ -1285,7 +1394,16 @@ pub fn process_scan(
         refined_ids: det.refined.keys().cloned().collect(),
         local: det.local,
     };
-    finish_scan(warp, scan_name, layout, opts, claimed_sheets, &markers, fin, res)
+    finish_scan(
+        warp,
+        scan_name,
+        layout,
+        opts,
+        claimed_sheets,
+        &markers,
+        fin,
+        res,
+    )
 }
 
 fn normalize_with_patches(
@@ -1305,8 +1423,18 @@ fn normalize_with_patches(
     if niveles.is_empty() || bboxes.len() != niveles.len() {
         return false;
     }
-    let i_black = niveles.iter().enumerate().min_by_key(|(_, &n)| n).unwrap().0;
-    let i_white = niveles.iter().enumerate().max_by_key(|(_, &n)| n).unwrap().0;
+    let i_black = niveles
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, &n)| n)
+        .unwrap()
+        .0;
+    let i_white = niveles
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, &n)| n)
+        .unwrap()
+        .0;
     let maxv = match warp {
         DynImg::U8(_) => 255.0f64,
         DynImg::U16(_) => 65535.0,
@@ -1318,7 +1446,7 @@ fn normalize_with_patches(
         let mut n = 0.0;
         match &crop {
             DynImg::U8(i) => {
-                for p in i.data.chunks_exact(3) {
+                for p in i.data.as_chunks::<3>().0 {
                     for c in 0..3 {
                         acc[c] += p[c] as f64;
                     }
@@ -1326,7 +1454,7 @@ fn normalize_with_patches(
                 }
             }
             DynImg::U16(i) => {
-                for p in i.data.chunks_exact(3) {
+                for p in i.data.as_chunks::<3>().0 {
                     for c in 0..3 {
                         acc[c] += p[c] as f64;
                     }
@@ -1356,17 +1484,21 @@ fn normalize_with_patches(
     }
     match warp {
         DynImg::U8(i) => {
-            for p in i.data.chunks_exact_mut(3) {
+            for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
-                    let v = (p[c] as f64 - black[c]) * ((white_t - black_t) / (white[c] - black[c])) + black_t;
+                    let v = (p[c] as f64 - black[c])
+                        * ((white_t - black_t) / (white[c] - black[c]))
+                        + black_t;
                     p[c] = v.round().clamp(0.0, 255.0) as u8;
                 }
             }
         }
         DynImg::U16(i) => {
-            for p in i.data.chunks_exact_mut(3) {
+            for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
-                    let v = (p[c] as f64 - black[c]) * ((white_t - black_t) / (white[c] - black[c])) + black_t;
+                    let v = (p[c] as f64 - black[c])
+                        * ((white_t - black_t) / (white[c] - black[c]))
+                        + black_t;
                     p[c] = v.round().clamp(0.0, 65535.0) as u16;
                 }
             }
@@ -1414,8 +1546,16 @@ fn build_overlay(
     if let Some(obj) = layout_bboxes.as_object() {
         for (mid, bb) in obj {
             if let Some(b) = layoutfile::bbox_of(bb) {
-                let ok = mid.parse::<u32>().ok().map_or(false, |id| refined_ids.contains(&id));
-                rect(b, if ok { [0, 200, 0] } else { [230, 0, 0] }, if ok { t } else { t * 2 }, false);
+                let ok = mid
+                    .parse::<u32>()
+                    .ok()
+                    .is_some_and(|id| refined_ids.contains(&id));
+                rect(
+                    b,
+                    if ok { [0, 200, 0] } else { [230, 0, 0] },
+                    if ok { t } else { t * 2 },
+                    false,
+                );
             }
         }
     }
@@ -1452,11 +1592,17 @@ mod tests {
         assert_eq!((w, h), (65_544, 65_544));
         let wrapped = (w * h) % (1u64 << 32);
         assert_eq!(wrapped, 1_048_640);
-        assert!(wrapped < MAX_IMAGE_PIXELS as u64, "el guard viejo lo dejaba pasar");
+        assert!(
+            wrapped < MAX_IMAGE_PIXELS as u64,
+            "el guard viejo lo dejaba pasar"
+        );
         assert!(!fits_image_budget(w, h));
         // un lienzo degenerado (todo el tope de ancho, la escala máxima de
         // alto) tampoco entra
-        assert!(!fits_image_budget(MAX_IMAGE_PIXELS as u64, SCALE_MAX as u64));
+        assert!(!fits_image_budget(
+            MAX_IMAGE_PIXELS as u64,
+            SCALE_MAX as u64
+        ));
     }
 
     #[test]
@@ -1465,7 +1611,11 @@ mod tests {
         let gib = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
         // El requisito: A4 a 1200 dpi en 16 bits tiene que entrar.
         let a4_1200 = rectify_bytes(9921, 14031, true);
-        assert!(a4_1200 <= MAX_CORE_BYTES, "A4@1200 16 bits pide {:.2} GiB", gib(a4_1200));
+        assert!(
+            a4_1200 <= MAX_CORE_BYTES,
+            "A4@1200 16 bits pide {:.2} GiB",
+            gib(a4_1200)
+        );
         // A3 a 600 dpi en 16 bits también.
         assert!(rectify_bytes(7016, 9921, true) <= MAX_CORE_BYTES);
         // A3 a 1200 dpi en 16 bits NO cabe: dos copias son más de lo que

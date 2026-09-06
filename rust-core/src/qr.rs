@@ -40,7 +40,12 @@ pub fn parse_qr_payload(text: &str) -> Option<QrIdentity> {
         return None;
     }
     // QRs v1: solo el nombre del frame
-    Some(QrIdentity { proyecto: None, hoja: None, celda: None, etiqueta: text.to_string() })
+    Some(QrIdentity {
+        proyecto: None,
+        hoja: None,
+        celda: None,
+        etiqueta: text.to_string(),
+    })
 }
 
 /// Bytes que caben en un QR de versión 40 con corrección H: el tope real del
@@ -248,31 +253,50 @@ mod tests {
 }
 
 #[cfg(test)]
-mod debug_tests {
+mod roundtrip_tests {
     use super::*;
     use crate::img::{resize_gray, Filter};
 
+    // Un QR de 47 px de lado es lo más pequeño que el lector recupera; a 40 px
+    // devuelve None. Eso fija el mínimo que puede permitirse la hoja: si el
+    // lector empeora y 47 deja de leerse, este test lo dice antes que un
+    // usuario con una hoja impresa.
     #[test]
     fn small_qr_sizes_decode() {
-        for size in [40usize, 47, 59, 70, 100] {
+        for size in [47usize, 59, 70, 100] {
             let text = format!("KQR|{size}");
             let img = try_qr_image(&text, size, false).unwrap();
-            let got = decode_qr(&img);
-            println!("size={size} -> {:?}", got);
+            assert_eq!(
+                decode_qr(&img).as_deref(),
+                Some(text.as_str()),
+                "lado {size} px"
+            );
         }
         // y con padding blanco alrededor (como el crop del análisis)
         let img = try_qr_image("KQR|8", 47, false).unwrap();
         let mut padded = Gray::new(75, 75, 255);
-        for y in 0..47 { for x in 0..47 { padded.data[(y+14)*75 + (x+14)] = img.at(x, y); } }
-        println!("padded 47 -> {:?}", decode_qr(&padded));
+        for y in 0..47 {
+            for x in 0..47 {
+                padded.data[(y + 14) * 75 + (x + 14)] = img.at(x, y);
+            }
+        }
+        assert_eq!(
+            decode_qr(&padded).as_deref(),
+            Some("KQR|8"),
+            "con margen blanco"
+        );
         let up = resize_gray(&padded, 300, 300, Filter::Triangle);
-        println!("upscaled -> {:?}", decode_qr(&up));
+        assert_eq!(decode_qr(&up).as_deref(), Some("KQR|8"), "ampliado ×4");
     }
 
     #[test]
     fn qr_from_printer_test_page() {
+        // Los tres QR de la página de prueba de impresora (8, 10 y 12 mm a
+        // 150 dpi) tienen que leerse desde su propio recorte, con el mismo
+        // margen del 30 % que usa el análisis.
         let page = crate::calib::render_printer_test("A4", 150);
         let g = crate::calib::printer_test_geometry("A4", 150);
+        assert!(!g.qr_test.is_empty());
         for (mmv, bbox, texto) in &g.qr_test {
             let pad = ((bbox[2] - bbox[0]) as f64 * 0.3) as i64;
             let crop = page.crop(
@@ -281,7 +305,13 @@ mod debug_tests {
                 (bbox[2] + pad) as usize,
                 (bbox[3] + pad) as usize,
             );
-            println!("{mmv} mm ({}x{}) -> {:?} (esperado {texto})", crop.w, crop.h, decode_qr_rgb(&crop));
+            assert_eq!(
+                decode_qr_rgb(&crop).as_deref(),
+                Some(texto.as_str()),
+                "QR de {mmv} mm ({}x{})",
+                crop.w,
+                crop.h
+            );
         }
     }
 

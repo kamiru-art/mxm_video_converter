@@ -1,0 +1,8 @@
+# Commits that only reformat code. `git blame` skips them with
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (once per clone; GitHub's blame view reads this file on its own).
+
+# Format the core with rustfmt
+f5ddd989ad85a103e54c2ac55e0d1b4eceba8e2d
+# Format the web application with Biome
+6ccc99d9a251374b4bb80b18556c861b212d860c

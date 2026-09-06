@@ -1,19 +1,32 @@
 // Fase ② — Procesar escaneos: de la hoja pintada/expuesta a fotogramas.
 
-import { run, recycleIdle, poolSize } from './pool.ts';
-import { el, toast, download, progressBar, dropzone, field, numberInput, select, check,
-         sanitizeLabel, pngUrl, lightbox, context2d } from './ui.ts';
-import type { GalleryItem } from './ui.ts';
-import { project } from './project.ts';
-import type { RgbaImage } from './project.ts';
-import { generateSheets, resolveCyanCurve } from './gen.ts';
-import type { GenFrame } from './gen.ts';
-import { makeZip } from './zip.ts';
-import type { ZipEntryData } from './zip.ts';
-import { getGpuDevice, gpuWarpPerspective } from './webgpu.ts';
-import { defaultSettings } from './settings.ts';
 import { errMsg } from './errors.ts';
+import type { GenFrame } from './gen.ts';
+import { generateSheets, resolveCyanCurve } from './gen.ts';
+import { poolSize, recycleIdle, run } from './pool.ts';
+import type { RgbaImage } from './project.ts';
+import { project } from './project.ts';
+import { defaultSettings } from './settings.ts';
 import type { Bytes, DetectOutput, Layout, ScanOutput, ScanResult, Settings } from './types.ts';
+import type { GalleryItem } from './ui.ts';
+import {
+  check,
+  context2d,
+  download,
+  dropzone,
+  el,
+  field,
+  lightbox,
+  numberInput,
+  pngUrl,
+  progressBar,
+  sanitizeLabel,
+  select,
+  toast,
+} from './ui.ts';
+import { getGpuDevice, gpuWarpPerspective } from './webgpu.ts';
+import type { ZipEntryData } from './zip.ts';
+import { makeZip } from './zip.ts';
 
 export interface LabeledPng {
   label: string;
@@ -89,7 +102,11 @@ function expectedLabels(layout: Layout): Map<string, number> {
 }
 
 export function mountPhase2(root: HTMLElement): void {
-  const layoutInfo = el('div', { class: 'hint' }, 'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).');
+  const layoutInfo = el(
+    'div',
+    { class: 'hint' },
+    'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).',
+  );
 
   /** Un layout nuevo es otro proyecto: las hojas que el usuario asignó a mano
    *  se refieren a números del anterior y aquí no significan lo mismo. */
@@ -100,9 +117,16 @@ export function mountPhase2(root: HTMLElement): void {
     layoutInfo.textContent = info;
   }
 
-  const useCurrentBtn = el('button', { class: 'btn ghost small', style: 'margin-top:6px' }, 'Use the current project layout');
+  const useCurrentBtn = el(
+    'button',
+    { class: 'btn ghost small', style: 'margin-top:6px' },
+    'Use the current project layout',
+  );
   useCurrentBtn.addEventListener('click', () => {
-    if (!project.layoutJson) { toast('You have not generated sheets in this session yet.', 'err'); return; }
+    if (!project.layoutJson) {
+      toast('You have not generated sheets in this session yet.', 'err');
+      return;
+    }
     const layout = JSON.parse(project.layoutJson) as Layout;
     setLayout(layout, 'current project layout', `✔ ${layoutSummary(layout)}`);
     renderSummary();
@@ -125,15 +149,27 @@ export function mountPhase2(root: HTMLElement): void {
   // opciones
   const bleedIn = numberInput(1.5, { min: 0, max: 20, step: 0.5 });
   const minMarkersIn = numberInput(3, { min: 2, max: 12 });
-  const modeSel = select([['auto', 'Automatic (from the layout)'], ['normal', 'Normal'], ['cyanotype', 'Cyanotype']], 'auto');
+  const modeSel = select(
+    [
+      ['auto', 'Automatic (from the layout)'],
+      ['normal', 'Normal'],
+      ['cyanotype', 'Cyanotype'],
+    ],
+    'auto',
+  );
   // los navegadores informan la RAM a medias (Chrome la limita a 8 GB;
   // Safari/Firefox no la informan): el usuario puede declararla
   const ramIn = numberInput(localStorage.getItem('mxm_ram_gb') ?? '', { min: 1, max: 2048 });
-  ramIn.placeholder = navigator.deviceMemory ? `detected: ${navigator.deviceMemory}+` : 'not detected';
+  ramIn.placeholder = navigator.deviceMemory
+    ? `detected: ${navigator.deviceMemory}+`
+    : 'not detected';
   ramIn.addEventListener('change', () => {
     const v = parseFloat(ramIn.value);
     if (Number.isFinite(v) && v > 0) localStorage.setItem('mxm_ram_gb', String(v));
-    else { ramIn.value = ''; localStorage.removeItem('mxm_ram_gb'); }
+    else {
+      ramIn.value = '';
+      localStorage.removeItem('mxm_ram_gb');
+    }
   });
   function machineRam(): { gb: number; manual: boolean } {
     const manual = parseFloat(ramIn.value);
@@ -154,7 +190,10 @@ export function mountPhase2(root: HTMLElement): void {
   // los archivos cargados se retienen para poder reprocesarlos con otras
   // opciones sin volver a soltarlos
   const loadedScans = new Map<string, File>(); // nombre → File
-  const reprocessBtn = el('button', { class: 'btn ghost small', style: 'display:none; margin-top:6px' });
+  const reprocessBtn = el('button', {
+    class: 'btn ghost small',
+    style: 'display:none; margin-top:6px',
+  });
   function refreshReprocess(): void {
     reprocessBtn.style.display = loadedScans.size ? '' : 'none';
     reprocessBtn.textContent = `Reprocess the ${loadedScans.size} loaded scan(s) with the current options`;
@@ -162,7 +201,7 @@ export function mountPhase2(root: HTMLElement): void {
   reprocessBtn.addEventListener('click', () => {
     if (!loadedScans.size) return;
     clearReport(true); // borra resultados y frames; conserva las hojas puestas a mano
-    processScans([...loadedScans.values()]);
+    void processScans([...loadedScans.values()]);
   });
 
   const scansDz = dropzone({
@@ -175,10 +214,13 @@ export function mountPhase2(root: HTMLElement): void {
       refreshReprocess();
       if (processing) {
         // sin esto quedarían retenidos en silencio, sin procesar
-        toast('A batch is already running. The new files were added to the loaded list; press Reprocess when it finishes.', 'err');
+        toast(
+          'A batch is already running. The new files were added to the loaded list; press Reprocess when it finishes.',
+          'err',
+        );
         return;
       }
-      processScans(files);
+      void processScans(files);
     },
   });
 
@@ -187,38 +229,75 @@ export function mountPhase2(root: HTMLElement): void {
     try {
       const head = new Uint8Array(await file.slice(0, 26).arrayBuffer());
       return head[24] ?? 8;
-    } catch { return 8; }
+    } catch {
+      return 8;
+    }
   }
 
   /** ImageBitmap si el navegador puede decodificar SIN perder profundidad. */
   async function decodeForGpu(f: File): Promise<ImageBitmap | null> {
     const name = f.name.toLowerCase();
-    if (/\.(tif|tiff)$/.test(name)) return null;              // decodifica WASM
+    if (/\.(tif|tiff)$/.test(name)) return null; // decodifica WASM
     if (/\.png$/.test(name) && (await pngBitDepth(f)) > 8) return null; // 16 bits
-    try { return await createImageBitmap(f); } catch { return null; }
+    try {
+      return await createImageBitmap(f);
+    } catch {
+      return null;
+    }
   }
 
   /** Camino acelerado: detectar en WASM → enderezar en la GPU → recortar en
    *  WASM. La memoria WASM nunca ve entrada y salida a la vez. */
-  async function processViaGpu(f: File, bmp: ImageBitmap, layoutStr: string, opts: string): Promise<ScanOutput | null> {
+  async function processViaGpu(
+    f: File,
+    bmp: ImageBitmap,
+    layoutStr: string,
+    opts: string,
+  ): Promise<ScanOutput | null> {
     const c = new OffscreenCanvas(bmp.width, bmp.height);
     const ctx = context2d(c, { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
     const d = ctx.getImageData(0, 0, bmp.width, bmp.height);
     const rgba = new Uint8Array(d.data.buffer);
-    const det = JSON.parse(await run('scan_detect', {
-      rgba, w: bmp.width, h: bmp.height, name: f.name, layout: layoutStr, opts,
-    }, [rgba.buffer])) as DetectOutput;
+    const det = JSON.parse(
+      await run(
+        'scan_detect',
+        {
+          rgba,
+          w: bmp.width,
+          h: bmp.height,
+          name: f.name,
+          layout: layoutStr,
+          opts,
+        },
+        [rgba.buffer],
+      ),
+    ) as DetectOutput;
     if (!det.ok) {
       return { result: JSON.stringify(det.res), frames: [], sin_identificar: [], overlay: null };
     }
     const warped = await gpuWarpPerspective(bmp, det.m, det.flipped, det.out_w, det.out_h);
     if (!warped) return null; // la GPU no pudo con este tamaño: camino WASM
-    const state = JSON.stringify({ res: det.res, s: det.s, refined_ids: det.refined_ids, local: det.local });
-    return run('scan_finish', {
-      rgba: warped, w: det.out_w, h: det.out_h, name: f.name,
-      layout: layoutStr, opts, claims: JSON.stringify(ph2.claims), state,
-    }, [warped.buffer]);
+    const state = JSON.stringify({
+      res: det.res,
+      s: det.s,
+      refined_ids: det.refined_ids,
+      local: det.local,
+    });
+    return run(
+      'scan_finish',
+      {
+        rgba: warped,
+        w: det.out_w,
+        h: det.out_h,
+        name: f.name,
+        layout: layoutStr,
+        opts,
+        claims: JSON.stringify(ph2.claims),
+        state,
+      },
+      [warped.buffer],
+    );
   }
 
   /** Pico de memoria estimado de un escaneo, a partir del tamaño del archivo.
@@ -265,7 +344,11 @@ export function mountPhase2(root: HTMLElement): void {
   }
 
   async function makeContext(): Promise<BatchContext> {
-    return { base: currentOpts(), layoutStr: JSON.stringify(ph2.layout), gpu: await getGpuDevice() };
+    return {
+      base: currentOpts(),
+      layoutStr: JSON.stringify(ph2.layout),
+      gpu: await getGpuDevice(),
+    };
   }
 
   /** Procesa un escaneo y devuelve su entrada de informe, SIN registrarla:
@@ -289,16 +372,26 @@ export function mountPhase2(root: HTMLElement): void {
     }
     if (!r) {
       const bytes = new Uint8Array(await f.arrayBuffer());
-      r = await run('scan_process', {
-        bytes, name: f.name, layout: ctx.layoutStr, opts,
-        claims: JSON.stringify(ph2.claims),
-      }, [bytes.buffer]);
+      r = await run(
+        'scan_process',
+        {
+          bytes,
+          name: f.name,
+          layout: ctx.layoutStr,
+          opts,
+          claims: JSON.stringify(ph2.claims),
+        },
+        [bytes.buffer],
+      );
     }
     const asBlob = (u8: Bytes, type: string): Blob => new Blob([u8], { type });
     return {
       result: JSON.parse(r.result) as ScanResult,
       frames: (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
-      sinIdentificar: (r.sin_identificar ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
+      sinIdentificar: (r.sin_identificar ?? []).map((fr) => ({
+        label: fr.label,
+        png: asBlob(fr.png, 'image/png'),
+      })),
       overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
     };
   }
@@ -339,15 +432,23 @@ export function mountPhase2(root: HTMLElement): void {
 
   function describeMachine(gpu: GPUDevice | null, width: number): void {
     const ram = machineRam();
-    const ramTxt = ram.manual ? `${ram.gb} GB RAM (set by you)`
-      : navigator.deviceMemory ? `${navigator.deviceMemory}+ GB RAM (browser estimate)`
-      : 'RAM not reported (assuming 4 GB; set yours in Options)';
+    const ramTxt = ram.manual
+      ? `${ram.gb} GB RAM (set by you)`
+      : navigator.deviceMemory
+        ? `${navigator.deviceMemory}+ GB RAM (browser estimate)`
+        : 'RAM not reported (assuming 4 GB; set yours in Options)';
     specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ramTxt}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
   }
 
   async function processScans(files: File[]): Promise<void> {
-    if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return; }
-    if (processing) { toast('Wait for the current batch to finish.', 'err'); return; }
+    if (!ph2.layout) {
+      toast('Load the project layout.json first.', 'err');
+      return;
+    }
+    if (processing) {
+      toast('Wait for the current batch to finish.', 'err');
+      return;
+    }
     processing = true;
     reprocessBtn.disabled = true;
     prog.show();
@@ -358,17 +459,19 @@ export function mountPhase2(root: HTMLElement): void {
       describeMachine(ctx.gpu, width);
       let done = 0;
       const queue = [...files];
-      await Promise.all(Array.from({ length: width }, async () => {
-        for (let f = queue.shift(); f; f = queue.shift()) {
-          try {
-            addResult(await runOne(f, ctx));
-          } catch (e) {
-            toast(`Error in one scan: ${errMsg(e)}`, 'err');
+      await Promise.all(
+        Array.from({ length: width }, async () => {
+          for (let f = queue.shift(); f; f = queue.shift()) {
+            try {
+              addResult(await runOne(f, ctx));
+            } catch (e) {
+              toast(`Error in one scan: ${errMsg(e)}`, 'err');
+            }
+            done++;
+            prog.set(done / files.length, `${done}/${files.length} scans`);
           }
-          done++;
-          prog.set(done / files.length, `${done}/${files.length} scans`);
-        }
-      }));
+        }),
+      );
       recycleIdle(); // liberar la memoria WASM que infló el lote
       renderSummary();
       toast('Processing finished. Check the report.', 'ok');
@@ -395,9 +498,18 @@ export function mountPhase2(root: HTMLElement): void {
    *  identifica solo, que es lo que pide la caja de conflictos. */
   async function reprocessOne(name: string): Promise<boolean> {
     const f = loadedScans.get(name);
-    if (!f) { toast(`“${name}” is no longer loaded: drop it again to reprocess it.`, 'err'); return false; }
-    if (!ph2.layout) { toast('Load the project layout.json first.', 'err'); return false; }
-    if (processing) { toast('Wait for the current batch to finish.', 'err'); return false; }
+    if (!f) {
+      toast(`“${name}” is no longer loaded: drop it again to reprocess it.`, 'err');
+      return false;
+    }
+    if (!ph2.layout) {
+      toast('Load the project layout.json first.', 'err');
+      return false;
+    }
+    if (processing) {
+      toast('Wait for the current batch to finish.', 'err');
+      return false;
+    }
     processing = true;
     reprocessBtn.disabled = true;
     prog.show();
@@ -414,10 +526,12 @@ export function mountPhase2(root: HTMLElement): void {
       recycleIdle();
       ran = true;
       const n = entry.result.hoja_numero;
-      toast(n != null
-        ? `“${name}” → sheet ${n}: ${entry.frames.length} frame(s) cropped.`
-        : `“${name}” still has no sheet: ${entry.result.error || 'check the alignment overlay.'}`,
-        n != null ? 'ok' : 'err');
+      toast(
+        n != null
+          ? `“${name}” → sheet ${n}: ${entry.frames.length} frame(s) cropped.`
+          : `“${name}” still has no sheet: ${entry.result.error || 'check the alignment overlay.'}`,
+        n != null ? 'ok' : 'err',
+      );
     } catch (e) {
       console.error(e);
       toast(`Could not reprocess “${name}”: ${errMsg(e)}`, 'err');
@@ -436,7 +550,13 @@ export function mountPhase2(root: HTMLElement): void {
   // y filtraba URLs sin liberar: por eso el final del lote se arrastraba.
   // Cada entrada guarda ADEMÁS sus propias filas y URLs, para poder cambiar
   // una sola cuando se le asigna la hoja a mano.
-  const reportHeader = el('tr', {}, ...['', 'Scan', 'Sheet', 'Assign', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) => el('th', {}, h)));
+  const reportHeader = el(
+    'tr',
+    {},
+    ...['', 'Scan', 'Sheet', 'Assign', 'Markers', 'Alignment', 'Frames', 'Notes'].map((h) =>
+      el('th', {}, h),
+    ),
+  );
   const reportTable = el('table', { class: 'report' }, reportHeader);
   // La tabla se desplaza DENTRO de su caja. Son ocho columnas y cuatro de
   // ellas las ensancha el rótulo de la cabecera, no el dato, así que en un
@@ -454,8 +574,12 @@ export function mountPhase2(root: HTMLElement): void {
     const out: [string, string][] = [['', 'automatic']];
     for (const h of ph2.layout?.hojas ?? []) {
       const labels = Object.keys(h.frames ?? {}).sort();
-      const range = labels.length > 1 ? ` · ${labels[0]} → ${labels[labels.length - 1]}`
-        : labels.length === 1 ? ` · ${labels[0]}` : '';
+      const range =
+        labels.length > 1
+          ? ` · ${labels[0]} → ${labels[labels.length - 1]}`
+          : labels.length === 1
+            ? ` · ${labels[0]}`
+            : '';
       const taken = ph2.claims[h.numero];
       const busy = taken && taken !== forScan ? ` · already taken by ${taken}` : '';
       out.push([String(h.numero), `Sheet ${h.numero}${range}${busy}`]);
@@ -492,9 +616,13 @@ export function mountPhase2(root: HTMLElement): void {
     const items: GalleryItem[] = [];
     for (const e of ph2.results) {
       if (e.overlay) {
-        items.push({ data: e.overlay, caption: `${e.result.scan}: green = marker found, red = missing, blue = frames, orange = QRs` });
+        items.push({
+          data: e.overlay,
+          caption: `${e.result.scan}: green = marker found, red = missing, blue = frames, orange = QRs`,
+        });
       }
-      for (const f of e.shown ?? []) items.push({ data: f.png, caption: `${e.result.scan} · ${f.label}` });
+      for (const f of e.shown ?? [])
+        items.push({ data: f.png, caption: `${e.result.scan} · ${f.label}` });
     }
     return items;
   }
@@ -502,7 +630,10 @@ export function mountPhase2(root: HTMLElement): void {
   function openInGallery(blob: Blob, caption: string): void {
     const items = galleryItems();
     const index = items.findIndex((it) => it.data === blob);
-    if (index < 0) { lightbox(blob, caption); return; }
+    if (index < 0) {
+      lightbox(blob, caption);
+      return;
+    }
     lightbox(blob, caption, { items, index });
   }
 
@@ -510,41 +641,67 @@ export function mountPhase2(root: HTMLElement): void {
     const { result: r, frames, sinIdentificar, overlay } = entry;
     const urls: string[] = [];
     entry.urls = urls;
-    const trackUrl = (u: string): string => { urls.push(u); return u; };
+    const trackUrl = (u: string): string => {
+      urls.push(u);
+      return u;
+    };
     // miniaturas pequeñas; un clic abre la imagen a tamaño completo
     const shown = [...frames, ...sinIdentificar].slice(0, 60);
     entry.shown = shown;
     const thumbs = el('div', { class: 'thumbs report-thumbs' });
     if (overlay) {
-      const t = el('div', { class: 'thumb clickable', title: 'View the alignment overlay' },
+      const t = el(
+        'div',
+        { class: 'thumb clickable', title: 'View the alignment overlay' },
         el('img', { src: trackUrl(URL.createObjectURL(overlay)), alt: 'alignment' }),
-        el('div', { class: 'tag' }, 'alignment'));
+        el('div', { class: 'tag' }, 'alignment'),
+      );
       t.addEventListener('click', () => openInGallery(overlay, r.scan));
       thumbs.append(t);
     }
     for (const f of shown) {
-      const t = el('div', { class: 'thumb clickable', title: 'View at full size (← → to move between frames, Esc to close)' },
-        el('img', { src: trackUrl(pngUrl(f.png)) }), el('div', { class: 'tag' }, f.label));
+      const t = el(
+        'div',
+        {
+          class: 'thumb clickable',
+          title: 'View at full size (← → to move between frames, Esc to close)',
+        },
+        el('img', { src: trackUrl(pngUrl(f.png)) }),
+        el('div', { class: 'tag' }, f.label),
+      );
       t.addEventListener('click', () => openInGallery(f.png, f.label));
       thumbs.append(t);
     }
     const manual = ph2.assign[r.scan] != null;
-    const rows = [el('tr', {},
-      el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
-      el('td', { class: 'mono' }, r.scan),
-      // el selector va en su propia columna: metido en la celda de la hoja
-      // estiraba esa columna a media tabla y empujaba el número a otro renglón
-      el('td', { class: 'sheet-cell' },
-        String(r.hoja_numero ?? '—'), manual ? el('span', { class: 'byhand' }, 'by hand') : null),
-      el('td', { class: 'assign-cell' }, assignControl(r.scan)),
-      el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
-      el('td', { class: 'mono' }, `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`),
-      el('td', {}, String(frames?.length ?? 0)),
-      el('td', {}, [
-        ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint warn' }, a)),
-        r.error ? el('div', { class: 'hint err' }, r.error) : null,
-      ]),
-    ), el('tr', {}, el('td', {}), el('td', { colspan: '7' }, thumbs))];
+    const rows = [
+      el(
+        'tr',
+        {},
+        el('td', { class: r.ok ? 'ok' : 'bad' }, r.ok ? '✔' : '✘'),
+        el('td', { class: 'mono' }, r.scan),
+        // el selector va en su propia columna: metido en la celda de la hoja
+        // estiraba esa columna a media tabla y empujaba el número a otro renglón
+        el(
+          'td',
+          { class: 'sheet-cell' },
+          String(r.hoja_numero ?? '—'),
+          manual ? el('span', { class: 'byhand' }, 'by hand') : null,
+        ),
+        el('td', { class: 'assign-cell' }, assignControl(r.scan)),
+        el('td', { class: 'mono' }, `${r.marcadores}/${r.marcadores_total}`),
+        el(
+          'td',
+          { class: 'mono' },
+          `${r.residual_mm ? `±${r.residual_mm} mm` : '—'}${r.espejado ? ' · mirrored' : ''}`,
+        ),
+        el('td', {}, String(frames?.length ?? 0)),
+        el('td', {}, [
+          ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint warn' }, a)),
+          r.error ? el('div', { class: 'hint err' }, r.error) : null,
+        ]),
+      ),
+      el('tr', {}, el('td', {}), el('td', { colspan: '7' }, thumbs)),
+    ];
     entry.rows = rows;
     return rows;
   }
@@ -555,7 +712,10 @@ export function mountPhase2(root: HTMLElement): void {
    *  cambiara la otra. Un archivo, una fila. */
   function addResult(entry: ResultEntry): void {
     const dup = ph2.results.find((e) => e.result.scan === entry.result.scan);
-    if (dup) { replaceResult(dup, entry); return; }
+    if (dup) {
+      replaceResult(dup, entry);
+      return;
+    }
     ph2.results.push(entry);
     reportTable.append(...buildResultRows(entry));
     rebuildFromResults();
@@ -574,9 +734,11 @@ export function mountPhase2(root: HTMLElement): void {
   function replaceResult(oldEntry: ResultEntry, entry: ResultEntry): void {
     const i = ph2.results.indexOf(oldEntry);
     const anchor = oldEntry.rows?.[0] ?? null;
-    if (i >= 0) ph2.results[i] = entry; else ph2.results.push(entry);
+    if (i >= 0) ph2.results[i] = entry;
+    else ph2.results.push(entry);
     const rows = buildResultRows(entry);
-    if (anchor) anchor.before(...rows); else reportTable.append(...rows);
+    if (anchor) anchor.before(...rows);
+    else reportTable.append(...rows);
     dropRows(oldEntry);
     rebuildFromResults();
     renderSummary();
@@ -598,7 +760,8 @@ export function mountPhase2(root: HTMLElement): void {
   function whereTheSheetNumberIs(): string {
     const aj = ph2.layout?.ajustes;
     if (!aj) return 'Look for the sheet number printed on the page';
-    if (aj.page_num_on === false) return 'This project printed no sheet number, so go by the drawings';
+    if (aj.page_num_on === false)
+      return 'This project printed no sheet number, so go by the drawings';
     const corner = String(aj.page_num_corner ?? 'Bottom right').toLowerCase();
     const edge = corner.includes('top') || corner.includes('superior') ? 'top' : 'bottom';
     const side = corner.includes('left') || corner.includes('izquierda') ? 'left' : 'right';
@@ -611,29 +774,57 @@ export function mountPhase2(root: HTMLElement): void {
     assignSlot.replaceChildren();
     const pending = ph2.results.filter((e) => e.result.hoja_numero == null);
     if (!ph2.layout || !pending.length) return;
-    assignSlot.append(el('div', { class: 'assign-box' },
-      el('strong', {}, `${pending.length} scan${pending.length > 1 ? 's' : ''} with no sheet identified`),
-      el('div', { class: 'hint assign-hint' },
-        'The markers straightened the sheet, but nothing identified it: the QR is painted over or unreadable, '
-        + 'or the project identifies sheets by QR only. '
-        + `${whereTheSheetNumberIs()}, or recognise the drawings in the thumbnails, and pick the sheet here. `
-        + 'The scan is reprocessed at once with the right labels.'),
-      ...pending.map((e) => el('div', { class: 'assign-row' },
-        el('span', { class: 'mono' }, e.result.scan),
-        assignControl(e.result.scan))),
-    ));
+    assignSlot.append(
+      el(
+        'div',
+        { class: 'assign-box' },
+        el(
+          'strong',
+          {},
+          `${pending.length} scan${pending.length > 1 ? 's' : ''} with no sheet identified`,
+        ),
+        el(
+          'div',
+          { class: 'hint assign-hint' },
+          'The markers straightened the sheet, but nothing identified it: the QR is painted over or unreadable, ' +
+            'or the project identifies sheets by QR only. ' +
+            `${whereTheSheetNumberIs()}, or recognise the drawings in the thumbnails, and pick the sheet here. ` +
+            'The scan is reprocessed at once with the right labels.',
+        ),
+        ...pending.map((e) =>
+          el(
+            'div',
+            { class: 'assign-row' },
+            el('span', { class: 'mono' }, e.result.scan),
+            assignControl(e.result.scan),
+          ),
+        ),
+      ),
+    );
   }
 
   function renderConflicts(): void {
     conflictSlot.replaceChildren();
     if (!sheetConflicts.length) return;
-    conflictSlot.append(el('div', { class: 'missing-box' },
-      el('strong', {}, `Two scans claim the same sheet:`),
-      ...sheetConflicts.map(({ numero, scans }) => el('div', { style: 'margin-top:4px' },
-        `Sheet ${numero}: ${scans.join(', ')} — only the frames of the last one are kept.`)),
-      el('div', { style: 'margin-top:6px' },
-        'Send the wrong one to another sheet with its selector, or set it back to automatic.'),
-    ));
+    conflictSlot.append(
+      el(
+        'div',
+        { class: 'missing-box' },
+        el('strong', {}, `Two scans claim the same sheet:`),
+        ...sheetConflicts.map(({ numero, scans }) =>
+          el(
+            'div',
+            { style: 'margin-top:4px' },
+            `Sheet ${numero}: ${scans.join(', ')} — only the frames of the last one are kept.`,
+          ),
+        ),
+        el(
+          'div',
+          { style: 'margin-top:6px' },
+          'Send the wrong one to another sheet with its selector, or set it back to automatic.',
+        ),
+      ),
+    );
   }
 
   function renderSummary(): void {
@@ -645,12 +836,21 @@ export function mountPhase2(root: HTMLElement): void {
     if (ph2.layout && any) {
       const expected = expectedLabels(ph2.layout);
       const missing = [...expected.keys()].filter((et) => !project.processedFrames.has(et)).sort();
-      missingSlot.append(missing.length
-        ? el('div', { class: 'missing-box' },
-            el('strong', {}, `Missing frames (${missing.length}): `),
-            missing.join(', '),
-            el('div', { style: 'margin-top:6px' }, 'Use “Rescue sheets” below to reprint only these.'))
-        : el('div', { class: 'allok-box' }, el('strong', {}, 'No frames missing.')));
+      missingSlot.append(
+        missing.length
+          ? el(
+              'div',
+              { class: 'missing-box' },
+              el('strong', {}, `Missing frames (${missing.length}): `),
+              missing.join(', '),
+              el(
+                'div',
+                { style: 'margin-top:6px' },
+                'Use “Rescue sheets” below to reprint only these.',
+              ),
+            )
+          : el('div', { class: 'allok-box' }, el('strong', {}, 'No frames missing.')),
+      );
       rescueSection.style.display = missing.length ? '' : 'none';
       rescueMissing = missing;
     }
@@ -661,33 +861,46 @@ export function mountPhase2(root: HTMLElement): void {
   }
 
   // descarga de resultados
-  const downloadRow = el('div', { class: 'btn-row' },
-    el('button', {
-      class: 'btn sun', onclick: async () => {
-        try {
-          const files = new Map<string, ZipEntryData>();
-          for (const [label, png] of project.processedFrames) {
-            files.set(`frames/${sanitizeLabel(label)}.png`, png);
+  const downloadRow = el(
+    'div',
+    { class: 'btn-row' },
+    el(
+      'button',
+      {
+        class: 'btn sun',
+        onclick: async () => {
+          try {
+            const files = new Map<string, ZipEntryData>();
+            for (const [label, png] of project.processedFrames) {
+              files.set(`frames/${sanitizeLabel(label)}.png`, png);
+            }
+            for (const { sinIdentificar } of ph2.results) {
+              for (const f of sinIdentificar ?? [])
+                files.set(`sin_identificar/${sanitizeLabel(f.label)}.png`, f.png);
+            }
+            const informe = buildInforme();
+            files.set('informe.json', new TextEncoder().encode(JSON.stringify(informe, null, 2)));
+            files.set('informe.csv', new TextEncoder().encode(informeCsv()));
+            const zip = await makeZip(files);
+            download(zip, 'processed_frames.zip', 'application/zip');
+          } catch (e) {
+            // un ZIP de cientos de fotogramas puede quedarse sin memoria: sin
+            // esto, el botón simplemente no hacía nada
+            console.error(e);
+            toast(`Could not build the ZIP: ${errMsg(e)}`, 'err');
           }
-          for (const { sinIdentificar } of ph2.results) {
-            for (const f of sinIdentificar ?? []) files.set(`sin_identificar/${sanitizeLabel(f.label)}.png`, f.png);
-          }
-          const informe = buildInforme();
-          files.set('informe.json', new TextEncoder().encode(JSON.stringify(informe, null, 2)));
-          files.set('informe.csv', new TextEncoder().encode(informeCsv()));
-          const zip = await makeZip(files);
-          download(zip, 'processed_frames.zip', 'application/zip');
-        } catch (e) {
-          // un ZIP de cientos de fotogramas puede quedarse sin memoria: sin
-          // esto, el botón simplemente no hacía nada
-          console.error(e);
-          toast(`Could not build the ZIP: ${errMsg(e)}`, 'err');
-        }
+        },
       },
-    }, 'Download frames + report (ZIP)'),
-    el('button', {
-      class: 'btn ghost-light small', onclick: () => clearReport(),
-    }, 'Clear results'),
+      'Download frames + report (ZIP)',
+    ),
+    el(
+      'button',
+      {
+        class: 'btn ghost-light small',
+        onclick: () => clearReport(),
+      },
+      'Clear results',
+    ),
   );
   resultsBox.append(assignSlot, conflictSlot, missingSlot, reportScroll, downloadRow);
   renderSummary();
@@ -702,17 +915,33 @@ export function mountPhase2(root: HTMLElement): void {
       escaneos_ok: ph2.results.filter((r) => r.result.ok).length,
       frames_extraidos: extraidas.length,
       frames_esperados: expected.size,
-      etiquetas_faltantes: [...expected.keys()].filter((et) => !project.processedFrames.has(et)).sort(),
+      etiquetas_faltantes: [...expected.keys()]
+        .filter((et) => !project.processedFrames.has(et))
+        .sort(),
       resultados: ph2.results.map((r) => r.result),
     };
   }
 
   function informeCsv(): string {
-    const lines = ['escaneo,ok,hoja,marcadores,estrategia,escala,frames,error,espejado,residual_mm'];
+    const lines = [
+      'escaneo,ok,hoja,marcadores,estrategia,escala,frames,error,espejado,residual_mm',
+    ];
     for (const { result: r, frames } of ph2.results) {
       const esc = (v: unknown): string => `"${String(v ?? '').replaceAll('"', '""')}"`;
-      lines.push([esc(r.scan), r.ok, r.hoja_numero ?? '', `${r.marcadores}/${r.marcadores_total}`,
-        esc(r.estrategia), r.escala, frames.length, esc(r.error), r.espejado, r.residual_mm].join(','));
+      lines.push(
+        [
+          esc(r.scan),
+          r.ok,
+          r.hoja_numero ?? '',
+          `${r.marcadores}/${r.marcadores_total}`,
+          esc(r.estrategia),
+          r.escala,
+          frames.length,
+          esc(r.error),
+          r.espejado,
+          r.residual_mm,
+        ].join(','),
+      );
     }
     return lines.join('\n');
   }
@@ -724,7 +953,9 @@ export function mountPhase2(root: HTMLElement): void {
   const rescueDz = dropzone({
     label: 'Drop the project originals folder (…_originals/)',
     sublabel: 'The copies phase ① saved next to the layout, to reprint only the failed frames.',
-    accept: 'image/*,.tif,.tiff', multiple: true, dark: true,
+    accept: 'image/*,.tif,.tiff',
+    multiple: true,
+    dark: true,
     onFiles: (files) => {
       for (const f of files) rescueOriginals.set(f.name.replace(/\.[^.]+$/, ''), f);
       rescueInfo.textContent = `${rescueOriginals.size} originals loaded.`;
@@ -732,98 +963,130 @@ export function mountPhase2(root: HTMLElement): void {
   });
   const rescueProg = progressBar();
   rescueProg.hide();
-  const rescueBtn = el('button', { class: 'btn blue', onclick: async () => {
-    if (!ph2.layout?.ajustes) {
-      toast('This layout has no generation settings (is it from v1?). Generate the sheets with MXM Studio to use rescue.', 'err');
-      return;
-    }
-    const found: { label: string; file: File }[] = [];
-    const sinOriginal: string[] = [];
-    for (const et of rescueMissing) {
-      const safe = sanitizeLabel(et);
-      let file = rescueOriginals.get(safe) ?? rescueOriginals.get(et);
-      // también: buscar por archivo_original del layout
-      if (!file) {
-        outer: for (const h of ph2.layout.hojas ?? []) {
-          for (const [key, info] of Object.entries(h.frames ?? {})) {
-            if ((info.etiqueta ?? key) === et && info.archivo_original) {
-              const base = (info.archivo_original.split('/').pop() ?? '').replace(/\.[^.]+$/, '');
-              file = rescueOriginals.get(base);
-              if (file) break outer;
+  const rescueBtn = el(
+    'button',
+    {
+      class: 'btn blue',
+      onclick: async () => {
+        if (!ph2.layout?.ajustes) {
+          toast(
+            'This layout has no generation settings (is it from v1?). Generate the sheets with MXM Studio to use rescue.',
+            'err',
+          );
+          return;
+        }
+        const found: { label: string; file: File }[] = [];
+        const sinOriginal: string[] = [];
+        for (const et of rescueMissing) {
+          const safe = sanitizeLabel(et);
+          let file = rescueOriginals.get(safe) ?? rescueOriginals.get(et);
+          // también: buscar por archivo_original del layout
+          if (!file) {
+            outer: for (const h of ph2.layout.hojas ?? []) {
+              for (const [key, info] of Object.entries(h.frames ?? {})) {
+                if ((info.etiqueta ?? key) === et && info.archivo_original) {
+                  const base = (info.archivo_original.split('/').pop() ?? '').replace(
+                    /\.[^.]+$/,
+                    '',
+                  );
+                  file = rescueOriginals.get(base);
+                  if (file) break outer;
+                }
+              }
             }
           }
+          if (file) found.push({ label: et, file });
+          else sinOriginal.push(et);
         }
-      }
-      if (file) found.push({ label: et, file });
-      else sinOriginal.push(et);
-    }
-    if (sinOriginal.length) {
-      toast(`No original copy (cannot be reprinted): ${sinOriginal.join(', ')}`, 'err');
-    }
-    if (!found.length) { toast('No original copy found for any missing frame.', 'err'); return; }
-    rescueBtn.disabled = true;
-    rescueProg.show();
-    try {
-      // un layout v2 trae el bloque de ajustes completo: los valores por
-      // defecto solo cubren claves que un layout real nunca deja vacías
-      const ajustes: Settings = { ...defaultSettings(), ...ph2.layout.ajustes };
-      let baseName = ajustes.out_name || 'hojas';
-      baseName = baseName.replace(/_rescate$/, '');
-      ajustes.out_name = `${baseName}_rescate`;
-      ajustes.registration_on = true;
-      ajustes.sheets_include = '';
-      ajustes.sheets_exclude = '';
-      ajustes.page_num_start = 1;
-      ajustes.page_num_prefix = (ajustes.page_num_prefix || '') + 'R';
-      const frames: GenFrame[] = [];
-      for (const { file } of found) {
-        const isTiff = /\.(tif|tiff)$/i.test(file.name);
-        let getImageData: () => Promise<RgbaImage>;
-        let w = 16, h = 9, hasAlpha = false;
-        if (isTiff) {
-          const bytesP = file.arrayBuffer().then((b) => new Uint8Array(b));
-          const decoded = await run('decode_image', { bytes: await bytesP });
-          w = decoded.w; h = decoded.h; hasAlpha = decoded.had_alpha;
-          getImageData = async () => ({ data: decoded.rgba, w: decoded.w, h: decoded.h });
-        } else {
-          const bmp = await createImageBitmap(file);
-          w = bmp.width; h = bmp.height;
-          hasAlpha = /\.(png|webp)$/i.test(file.name);
-          bmp.close();
-          getImageData = async () => {
-            const b = await createImageBitmap(file);
-            const c = new OffscreenCanvas(b.width, b.height);
-            const ctx = context2d(c);
-            ctx.drawImage(b, 0, 0);
-            b.close();
-            const d = ctx.getImageData(0, 0, c.width, c.height);
-            return { data: new Uint8Array(d.data.buffer), w: c.width, h: c.height };
-          };
+        if (sinOriginal.length) {
+          toast(`No original copy (cannot be reprinted): ${sinOriginal.join(', ')}`, 'err');
         }
-        frames.push({ name: file.name, blob: file, w, h, hasAlpha, getImageData });
-      }
-      const settings = await resolveCyanCurve(ajustes, []);
-      const out = await generateSheets({
-        settings, frames, labels: found.map((f) => f.label),
-        timeline: [], videoMeta: ph2.layout.video ?? {},
-        keepOriginals: true,
-        onProgress: (d, t, note) => rescueProg.set(d / t, note),
-      });
-      const zip = await makeZip(out.files);
-      download(zip, `${ajustes.out_name}.zip`, 'application/zip');
-      toast(`Rescue sheets generated with ${found.length} frame(s). Print, paint/expose, scan and process against the rescue layout.`, 'ok');
-    } catch (e) {
-      console.error(e);
-      toast(`Rescue failed: ${errMsg(e)}`, 'err');
-    } finally {
-      rescueBtn.disabled = false;
-      rescueProg.hide();
-    }
-  } }, 'Generate rescue sheets');
+        if (!found.length) {
+          toast('No original copy found for any missing frame.', 'err');
+          return;
+        }
+        rescueBtn.disabled = true;
+        rescueProg.show();
+        try {
+          // un layout v2 trae el bloque de ajustes completo: los valores por
+          // defecto solo cubren claves que un layout real nunca deja vacías
+          const ajustes: Settings = { ...defaultSettings(), ...ph2.layout.ajustes };
+          let baseName = ajustes.out_name || 'hojas';
+          baseName = baseName.replace(/_rescate$/, '');
+          ajustes.out_name = `${baseName}_rescate`;
+          ajustes.registration_on = true;
+          ajustes.sheets_include = '';
+          ajustes.sheets_exclude = '';
+          ajustes.page_num_start = 1;
+          ajustes.page_num_prefix = `${ajustes.page_num_prefix || ''}R`;
+          const frames: GenFrame[] = [];
+          for (const { file } of found) {
+            const isTiff = /\.(tif|tiff)$/i.test(file.name);
+            let getImageData: () => Promise<RgbaImage>;
+            let w = 16,
+              h = 9,
+              hasAlpha = false;
+            if (isTiff) {
+              const bytesP = file.arrayBuffer().then((b) => new Uint8Array(b));
+              const decoded = await run('decode_image', { bytes: await bytesP });
+              w = decoded.w;
+              h = decoded.h;
+              hasAlpha = decoded.had_alpha;
+              getImageData = async () => ({ data: decoded.rgba, w: decoded.w, h: decoded.h });
+            } else {
+              const bmp = await createImageBitmap(file);
+              w = bmp.width;
+              h = bmp.height;
+              hasAlpha = /\.(png|webp)$/i.test(file.name);
+              bmp.close();
+              getImageData = async () => {
+                const b = await createImageBitmap(file);
+                const c = new OffscreenCanvas(b.width, b.height);
+                const ctx = context2d(c);
+                ctx.drawImage(b, 0, 0);
+                b.close();
+                const d = ctx.getImageData(0, 0, c.width, c.height);
+                return { data: new Uint8Array(d.data.buffer), w: c.width, h: c.height };
+              };
+            }
+            frames.push({ name: file.name, blob: file, w, h, hasAlpha, getImageData });
+          }
+          const settings = await resolveCyanCurve(ajustes, []);
+          const out = await generateSheets({
+            settings,
+            frames,
+            labels: found.map((f) => f.label),
+            timeline: [],
+            videoMeta: ph2.layout.video ?? {},
+            keepOriginals: true,
+            onProgress: (d, t, note) => rescueProg.set(d / t, note),
+          });
+          const zip = await makeZip(out.files);
+          download(zip, `${ajustes.out_name}.zip`, 'application/zip');
+          toast(
+            `Rescue sheets generated with ${found.length} frame(s). Print, paint/expose, scan and process against the rescue layout.`,
+            'ok',
+          );
+        } catch (e) {
+          console.error(e);
+          toast(`Rescue failed: ${errMsg(e)}`, 'err');
+        } finally {
+          rescueBtn.disabled = false;
+          rescueProg.hide();
+        }
+      },
+    },
+    'Generate rescue sheets',
+  );
 
-  const rescueSection = el('div', { style: 'display:none; margin-top:16px' },
+  const rescueSection = el(
+    'div',
+    { style: 'display:none; margin-top:16px' },
     el('h2', {}, 'Rescue sheets'),
-    rescueDz, rescueInfo, el('div', { class: 'btn-row' }, rescueBtn), rescueProg.root,
+    rescueDz,
+    rescueInfo,
+    el('div', { class: 'btn-row' }, rescueBtn),
+    rescueProg.root,
   );
 
   // ── escaneos de demostración ─────────────────────────────────
@@ -846,12 +1109,21 @@ export function mountPhase2(root: HTMLElement): void {
     return new File([png], `${name.replace(/\.png$/i, '')}_scan.png`, { type: 'image/png' });
   }
 
-  const demoBtn = el('button', { class: 'btn ghost small', style: 'display:none; margin-top:6px' },
-    'No scans yet? Simulate them from this session’s sheets');
+  const demoBtn = el(
+    'button',
+    { class: 'btn ghost small', style: 'display:none; margin-top:6px' },
+    'No scans yet? Simulate them from this session’s sheets',
+  );
   demoBtn.addEventListener('click', async () => {
-    if (!project.sheetImages.size) { toast('Generate the sheets in phase ① first.', 'err'); return; }
+    if (!project.sheetImages.size) {
+      toast('Generate the sheets in phase ① first.', 'err');
+      return;
+    }
     if (!ph2.layout) {
-      if (!project.layoutJson) { toast('Generate the sheets in phase ① first.', 'err'); return; }
+      if (!project.layoutJson) {
+        toast('Generate the sheets in phase ① first.', 'err');
+        return;
+      }
       const layout = JSON.parse(project.layoutJson) as Layout;
       setLayout(layout, 'current project layout', `✔ ${layoutSummary(layout)}`);
     }
@@ -861,7 +1133,10 @@ export function mountPhase2(root: HTMLElement): void {
       for (const [name, blob] of project.sheetImages) files.push(await simulateScan(blob, name));
       for (const f of files) loadedScans.set(f.name, f);
       refreshReprocess();
-      toast(`${files.length} simulated scan(s): your sheets, printed and scanned back crooked.`, 'ok');
+      toast(
+        `${files.length} simulated scan(s): your sheets, printed and scanned back crooked.`,
+        'ok',
+      );
       await processScans(files);
     } catch (e) {
       console.error(e);
@@ -876,18 +1151,32 @@ export function mountPhase2(root: HTMLElement): void {
   root.addEventListener('mxm:activated', refreshDemo);
   refreshDemo();
 
-  const paper = el('div', { class: 'paper' },
+  const paper = el(
+    'div',
+    { class: 'paper' },
     el('h2', {}, '② Process scans'),
-    el('div', { class: 'hint' }, 'Straightens each sheet with its markers, identifies it by marker IDs (or QRs on older projects) and crops every frame. A sheet nothing identifies can be assigned by hand in the report.'),
-    layoutDz, useCurrentBtn, layoutInfo,
+    el(
+      'div',
+      { class: 'hint' },
+      'Straightens each sheet with its markers, identifies it by marker IDs (or QRs on older projects) and crops every frame. A sheet nothing identifies can be assigned by hand in the report.',
+    ),
+    layoutDz,
+    useCurrentBtn,
+    layoutInfo,
     el('h3', {}, 'Options'),
     // campos apilados: con hints de largos distintos, en fila quedaban
     // desalineados en altura
     field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
     field('Minimum markers', minMarkersIn),
     field('Detection mode', modeSel),
-    field('Machine RAM (GB)', ramIn, 'Browsers report at most 8 GB. The real value lets more scans run in parallel.'),
-    resizeCheck.label, patchesCheck.label, fineCheck.label,
+    field(
+      'Machine RAM (GB)',
+      ramIn,
+      'Browsers report at most 8 GB. The real value lets more scans run in parallel.',
+    ),
+    resizeCheck.label,
+    patchesCheck.label,
+    fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,
     demoBtn,
@@ -896,7 +1185,9 @@ export function mountPhase2(root: HTMLElement): void {
     prog.root,
   );
 
-  const bench = el('div', { class: 'bench' },
+  const bench = el(
+    'div',
+    { class: 'bench' },
     el('h2', {}, 'Processing report'),
     framesState,
     resultsBox,

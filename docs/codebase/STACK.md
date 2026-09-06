@@ -48,29 +48,35 @@ through the `el()` helper in `web/src/ui.ts`.
 
 | Tool | Purpose | Evidence |
 |------|---------|----------|
-| `cargo test` | The Rust test suite: 40 unit tests and 6 end-to-end integration tests. | `rust-core/src/*.rs`, `rust-core/tests/pipeline.rs` |
-| `cargo clippy` | Lint. CI runs it but does not fail on it: the step ends with `\| tail -5`. | `.github/workflows/ci.yml` |
+| `cargo test` | The Rust test suite: 55 unit tests and 7 end-to-end integration tests. | `rust-core/src/*.rs`, `rust-core/tests/pipeline.rs` |
+| `rustfmt` | Formatter, default style. CI runs `cargo fmt --check`. | `rust-core/rustfmt.toml`, `.github/workflows/ci.yml` |
+| `cargo clippy` | Lint, warnings as errors, natively and for `wasm32-unknown-unknown` (the only target that compiles `api.rs`). Two lints allowed in `Cargo.toml` with the reason. | `rust-core/Cargo.toml` (`[lints]`), `.github/workflows/ci.yml` |
+| `rust-toolchain.toml` | Pins the Rust channel, `clippy`, `rustfmt` and the wasm target, for CI and developers alike. | `rust-toolchain.toml` |
 | `wasm-pack` | Compiles the core to WebAssembly, into `web/src/wasm/`. | `.github/workflows/ci.yml` |
 | TypeScript 7 (`tsc`) | Type checking only: `npm run typecheck` runs three projects (page, workers, Node scripts) and `npm run build` runs it first. Vite does the transpiling and never checks types. | `web/tsconfig.json`, `web/tsconfig.worker.json`, `web/tsconfig.node.json` |
 | Vite 8 | Development server and production bundle. | `web/package.json` |
+| Biome 2 | Linter and formatter of the web (`npm run lint`, `npm run lint:fix`, `npm run format`). Chosen over ESLint + Prettier because TypeScript 7's package no longer ships the JavaScript compiler API that typescript-eslint needs. | `web/biome.jsonc`, `web/package.json` |
 | `puppeteer-core` 25 | Drives headless Chrome for the browser test. | `web/e2e-run.mts` |
 | `wrangler` 4 | Publishes to Cloudflare. It is not a declared dependency; CI pins the version in the action. | `.github/workflows/ci.yml`, `web/wrangler.jsonc` |
 
-There is no formatter configuration and no linter configuration in the
-repository: no `rustfmt.toml`, no `clippy.toml`, no ESLint or Prettier file.
+See `CONVENTIONS.md` §2 for what each tool enforces and why.
 
 ## 4) Key Commands
 
 ```bash
 # Rust core
 cd rust-core
+cargo fmt --check                                             # formatting
 cargo test                                                    # tests
+cargo clippy --release --all-targets -- -D warnings           # lint (native)
+cargo clippy --release --target wasm32-unknown-unknown -- -D warnings
 wasm-pack build --release --target web --out-dir ../web/src/wasm
 
 # Web application
 cd web
 npm install
 npm run typecheck    # tsc over the page, the workers and the Node scripts
+npm run lint         # biome: lint + formatting check (lint:fix applies fixes)
 npm run dev          # development server (does NOT produce web/public/ffmpeg/)
 npm run test:e2e     # browser end-to-end test; needs Chrome and ffmpeg
 npm run build        # production bundle into web/dist
@@ -79,21 +85,23 @@ npx wrangler@4 deploy
 
 ## 5) Environment and Config
 
-- Config sources: `rust-core/Cargo.toml`, `web/package.json`, `web/vite.config.ts`,
-  `web/wrangler.jsonc`, `.github/workflows/ci.yml`.
+- Config sources: `rust-toolchain.toml`, `rust-core/Cargo.toml`,
+  `rust-core/rustfmt.toml`, `web/package.json`, `web/biome.jsonc`,
+  `web/vite.config.ts`, `web/wrangler.jsonc`, `.github/workflows/ci.yml`.
 - Required environment variables: none at runtime. The application reads no
   environment variable, because it runs fully in the browser.
 - Required CI secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. If
   the token is absent, the deploy step reports itself as skipped and the
   workflow stays green (`.github/workflows/ci.yml`).
-- `web/wrangler.jsonc` also holds a copy of the account id in the repository.
+- `web/wrangler.jsonc` deliberately does not hold the account id: CI passes
+  it as a secret, and a local deploy exports `CLOUDFLARE_ACCOUNT_ID`.
 - Runtime constraints: WebAssembly is necessary. WebCodecs gives the fast video
   path, and WebGPU gives the fast scan path; the application falls back when
   they are absent (`web/src/main.ts`, `web/src/webgpu.ts`).
 
 ## 6) Evidence
 
-- `rust-core/Cargo.toml`, `rust-core/Cargo.lock`
-- `web/package.json`, `web/package-lock.json`
+- `rust-toolchain.toml`, `rust-core/Cargo.toml`, `rust-core/Cargo.lock`, `rust-core/rustfmt.toml`
+- `web/package.json`, `web/package-lock.json`, `web/biome.jsonc`
 - `web/vite.config.ts`, `web/wrangler.jsonc`
 - `.github/workflows/ci.yml`

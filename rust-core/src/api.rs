@@ -12,8 +12,8 @@ use crate::img::{DynImg, Rgb};
 use crate::layoutfile;
 use crate::pdf::PdfBuilder;
 use crate::scanproc::{
-    base_report, detect_scan, finish_scan, process_scan, resolve_markers, FinishInput,
-    LocalShift, ScanOptions, MAX_IMAGE_PIXELS,
+    base_report, detect_scan, finish_scan, process_scan, resolve_markers, FinishInput, LocalShift,
+    ScanOptions, MAX_IMAGE_PIXELS,
 };
 use crate::sheet::{self, FrameInput, Settings};
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -59,12 +59,13 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
             let start = m.offset as usize;
             // aritmética comprobada: en wasm32 (usize de 32 bits) un meta
             // hostil puede enrollar w*h*4 y saltarse el bounds check
-            let len = m
-                .w
-                .checked_mul(m.h)
-                .and_then(|p| p.checked_mul(4))
-                .ok_or_else(|| err("Frame dimensions overflow"))?;
-            let end = start.checked_add(len).ok_or_else(|| err("Frame offset overflows"))?;
+            let len =
+                m.w.checked_mul(m.h)
+                    .and_then(|p| p.checked_mul(4))
+                    .ok_or_else(|| err("Frame dimensions overflow"))?;
+            let end = start
+                .checked_add(len)
+                .ok_or_else(|| err("Frame offset overflows"))?;
             if end > pixels.len() {
                 return Err(err("Pixel buffer shorter than the metadata"));
             }
@@ -144,9 +145,15 @@ pub fn render_sheet(
                     if s.cyan_mirror {
                         img = img.flip_horizontal(); // la copia de contacto queda al derecho
                     }
-                    let response: Option<Vec<(f64, f64)>> = serde_json::from_str(response_json).ok();
+                    let response: Option<Vec<(f64, f64)>> =
+                        serde_json::from_str(response_json).ok();
                     let stops = s.ink_stops();
-                    img = cyan::simulate_print(&img, response.as_deref(), Some(&s.cyan_ink), stops.as_deref());
+                    img = cyan::simulate_print(
+                        &img,
+                        response.as_deref(),
+                        Some(&s.cyan_ink),
+                        stops.as_deref(),
+                    );
                 }
             }
             _ => {}
@@ -160,7 +167,12 @@ pub fn render_sheet(
     if !record.is_null() {
         sheet::scale_record_bboxes(&s, &l, &mut record);
     }
-    Reflect::set(&out, &"record".into(), &JsValue::from_str(&record.to_string())).ok();
+    Reflect::set(
+        &out,
+        &"record".into(),
+        &JsValue::from_str(&record.to_string()),
+    )
+    .ok();
     Ok(out.into())
 }
 
@@ -180,7 +192,11 @@ pub fn assemble_layout(
     let records: Vec<Value> = serde_json::from_str(records_json).map_err(err)?;
     let timeline: Value = serde_json::from_str(timeline_json).unwrap_or(json!([]));
     let video: Value = serde_json::from_str(video_json).unwrap_or(json!({}));
-    let dir = if originales_dir.is_empty() { None } else { Some(originales_dir) };
+    let dir = if originales_dir.is_empty() {
+        None
+    } else {
+        Some(originales_dir)
+    };
     Ok(sheet::build_layout_json(&s, &l, &records, timeline, video, dir).to_string())
 }
 
@@ -194,13 +210,17 @@ pub fn dedup_hashes(meta_json: &str, pixels: &[u8]) -> Result<String, JsValue> {
         let rgba = f.rgba.ok_or_else(|| err("Frame without pixels"))?;
         // aplanar sobre blanco (lo que ve la impresión)
         let mut rgb = Vec::with_capacity(f.w * f.h * 3);
-        for p in rgba.chunks_exact(4) {
+        for p in rgba.as_chunks::<4>().0 {
             let a = p[3] as u32;
             for c in 0..3 {
                 rgb.push(((p[c] as u32 * a + 255 * (255 - a)) / 255) as u8);
             }
         }
-        let h = dedup::dhash(&Rgb { w: f.w, h: f.h, data: rgb });
+        let h = dedup::dhash(&Rgb {
+            w: f.w,
+            h: f.h,
+            data: rgb,
+        });
         out.push(h.map(|x| format!("{x:016x}")));
     }
     Ok(serde_json::to_string(&out).unwrap())
@@ -232,13 +252,20 @@ pub fn content_histogram(meta_json: &str, pixels: &[u8]) -> Result<String, JsVal
     for f in frames {
         if let Some(rgba) = f.rgba {
             let mut rgb = Vec::with_capacity(f.w * f.h * 3);
-            for p in rgba.chunks_exact(4) {
+            for p in rgba.as_chunks::<4>().0 {
                 let a = p[3] as u32;
                 for c in 0..3 {
                     rgb.push(((p[c] as u32 * a + 255 * (255 - a)) / 255) as u8);
                 }
             }
-            cyan::accumulate_histogram(&mut hist, &Rgb { w: f.w, h: f.h, data: rgb });
+            cyan::accumulate_histogram(
+                &mut hist,
+                &Rgb {
+                    w: f.w,
+                    h: f.h,
+                    data: rgb,
+                },
+            );
         }
     }
     Ok(serde_json::to_string(&hist.to_vec()).unwrap())
@@ -304,7 +331,12 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
 
 fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
     let obj = Object::new();
-    Reflect::set(&obj, &"result".into(), &JsValue::from_str(&out.result.to_string())).ok();
+    Reflect::set(
+        &obj,
+        &"result".into(),
+        &JsValue::from_str(&out.result.to_string()),
+    )
+    .ok();
     let frames = Array::new();
     for (label, crop) in &out.frames {
         let f = Object::new();
@@ -333,7 +365,9 @@ fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
 /// RGBA (del canvas del navegador) → Rgb de 8 bits.
 fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> Result<Rgb, JsValue> {
     // el tope va primero: descarta dimensiones que enrollarían w*h*4 en wasm32
-    let area = w.checked_mul(h).ok_or_else(|| err("Image dimensions overflow"))?;
+    let area = w
+        .checked_mul(h)
+        .ok_or_else(|| err("Image dimensions overflow"))?;
     if area > MAX_IMAGE_PIXELS {
         return Err(err(format!("Image too large ({w}×{h}).")));
     }
@@ -341,7 +375,7 @@ fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> Result<Rgb, JsValue> {
         return Err(err("RGBA buffer does not match the given dimensions"));
     }
     let mut data = Vec::with_capacity(w * h * 3);
-    for p in rgba.chunks_exact(4).take(w * h) {
+    for p in rgba.as_chunks::<4>().0.iter().take(w * h) {
         data.extend_from_slice(&p[..3]);
     }
     Ok(Rgb { w, h, data })
@@ -387,7 +421,7 @@ pub fn scan_detect(
     let mut img = DynImg::U8(rgba_to_rgb(rgba, w, h)?);
     let mut res = base_report(scan_name);
     match detect_scan(&mut img, &layout, &opts, &markers, &mut res) {
-        Ok(d) => {
+        Some(d) => {
             let ids: Vec<u32> = d.refined.keys().cloned().collect();
             Ok(json!({
                 "ok": true,
@@ -402,7 +436,7 @@ pub fn scan_detect(
             })
             .to_string())
         }
-        Err(()) => Ok(json!({ "ok": false, "res": res }).to_string()),
+        None => Ok(json!({ "ok": false, "res": res }).to_string()),
     }
 }
 
@@ -429,38 +463,76 @@ pub fn scan_finish(
     // el informe debe ser un objeto con "advertencias" (array): un estado
     // malformado no debe poder hacer panic aguas abajo
     let res = match state.get("res") {
-        Some(r) if r.is_object() && r.get("advertencias").map_or(false, |a| a.is_array()) => r.clone(),
+        Some(r) if r.is_object() && r.get("advertencias").is_some_and(|a| a.is_array()) => {
+            r.clone()
+        }
         _ => base_report(scan_name),
     };
-    let s = state.get("s").and_then(|v| v.as_f64()).ok_or_else(|| err("state without scale"))?;
+    let s = state
+        .get("s")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| err("state without scale"))?;
     let refined_ids: std::collections::HashSet<u32> = state
         .get("refined_ids")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|u| u as u32)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_u64().map(|u| u as u32))
+                .collect()
+        })
         .unwrap_or_default();
     let local: Option<LocalShift> = state
         .get("local")
         .filter(|v| !v.is_null())
         .and_then(|v| serde_json::from_value(v.clone()).ok());
     let warp = DynImg::U8(rgba_to_rgb(warped_rgba, w, h)?);
-    let fin = FinishInput { s, refined_ids, local };
-    let out = finish_scan(warp, scan_name, &layout, &opts, &claims_map, &markers, fin, res);
+    let fin = FinishInput {
+        s,
+        refined_ids,
+        local,
+    };
+    let out = finish_scan(
+        warp,
+        scan_name,
+        &layout,
+        &opts,
+        &claims_map,
+        &markers,
+        fin,
+        res,
+    );
     Ok(scan_output_to_js(out))
 }
 
 /// Remuestrea un buffer RGBA opaco con Lanczos3 (mismo filtro que las hojas).
 /// La fase de video escala aquí en vez de con el drawImage del navegador.
 #[wasm_bindgen]
-pub fn resize_rgba(rgba: &[u8], w: usize, h: usize, out_w: usize, out_h: usize) -> Result<Vec<u8>, JsValue> {
-    let area = w.checked_mul(h).ok_or_else(|| err("Image dimensions overflow"))?;
-    let out_area = out_w.checked_mul(out_h).ok_or_else(|| err("Image dimensions overflow"))?;
+pub fn resize_rgba(
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+    out_w: usize,
+    out_h: usize,
+) -> Result<Vec<u8>, JsValue> {
+    let area = w
+        .checked_mul(h)
+        .ok_or_else(|| err("Image dimensions overflow"))?;
+    let out_area = out_w
+        .checked_mul(out_h)
+        .ok_or_else(|| err("Image dimensions overflow"))?;
     if area > MAX_IMAGE_PIXELS || out_area > MAX_IMAGE_PIXELS {
         return Err(err(format!("Image too large ({w}×{h} → {out_w}×{out_h}).")));
     }
     if w == 0 || h == 0 || out_w == 0 || out_h == 0 || rgba.len() < area * 4 {
         return Err(err("RGBA buffer does not match the given dimensions"));
     }
-    Ok(crate::img::resize_rgba_bytes(&rgba[..area * 4], w, h, out_w, out_h))
+    Ok(crate::img::resize_rgba_bytes(
+        &rgba[..area * 4],
+        w,
+        h,
+        out_w,
+        out_h,
+    ))
 }
 
 /// Re-codifica un PNG (el que devuelve render_sheet) como TIFF, conservando
@@ -479,10 +551,17 @@ pub fn printer_test_png(paper: &str, dpi: u32) -> Vec<u8> {
 }
 
 #[wasm_bindgen]
-pub fn analyze_printer_test(scan_bytes: &[u8], paper: &str, dpi: u32, scan_dpi: f64) -> Result<String, JsValue> {
+pub fn analyze_printer_test(
+    scan_bytes: &[u8],
+    paper: &str,
+    dpi: u32,
+    scan_dpi: f64,
+) -> Result<String, JsValue> {
     let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
     let sd = if scan_dpi > 0.0 { Some(scan_dpi) } else { None };
-    calib::analyze_printer_test(img, paper, dpi, sd).map(|v| v.to_string()).map_err(err)
+    calib::analyze_printer_test(img, paper, dpi, sd)
+        .map(|v| v.to_string())
+        .map_err(err)
 }
 
 fn parse_stops(stops_json: &str) -> Option<Vec<cyan::InkStop>> {
@@ -501,7 +580,11 @@ pub fn cyan_strip_png(
     block_color: &str,
 ) -> Vec<u8> {
     let stops = parse_stops(stops_json);
-    let bc = if block_color.is_empty() { None } else { Some(block_color) };
+    let bc = if block_color.is_empty() {
+        None
+    } else {
+        Some(block_color)
+    };
     codecs::encode_png_rgb(&calib::render_cyanotype_strip(
         paper,
         dpi,
@@ -526,14 +609,22 @@ pub fn analyze_cyan_strip(
 ) -> Result<String, JsValue> {
     let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
     let stops = parse_stops(stops_json);
-    let bc = if block_color.is_empty() { None } else { Some(block_color) };
+    let bc = if block_color.is_empty() {
+        None
+    } else {
+        Some(block_color)
+    };
     calib::analyze_cyanotype_strip(
         img,
         paper,
         dpi,
         calib::CYANO_STEPS,
         target,
-        if ink_color.is_empty() { None } else { Some(ink_color) },
+        if ink_color.is_empty() {
+            None
+        } else {
+            Some(ink_color)
+        },
         stops.as_deref(),
         bc,
     )
@@ -543,14 +634,20 @@ pub fn analyze_cyan_strip(
 
 #[wasm_bindgen]
 pub fn colorblocker_png(paper: &str, dpi: u32, mirror: bool, block_color: &str) -> Vec<u8> {
-    let bc = if block_color.is_empty() { None } else { Some(block_color) };
+    let bc = if block_color.is_empty() {
+        None
+    } else {
+        Some(block_color)
+    };
     codecs::encode_png_rgb(&calib::render_colorblocker(paper, dpi, mirror, bc))
 }
 
 #[wasm_bindgen]
 pub fn analyze_colorblocker(scan_bytes: &[u8], paper: &str, dpi: u32) -> Result<String, JsValue> {
     let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
-    calib::analyze_colorblocker(img, paper, dpi).map(|v| v.to_string()).map_err(err)
+    calib::analyze_colorblocker(img, paper, dpi)
+        .map(|v| v.to_string())
+        .map_err(err)
 }
 
 // ── PDF combinado ───────────────────────────────────────────────
@@ -564,7 +661,9 @@ pub struct Pdf {
 impl Pdf {
     #[wasm_bindgen(constructor)]
     pub fn new(dpi: u32) -> Pdf {
-        Pdf { inner: Some(PdfBuilder::new(dpi)) }
+        Pdf {
+            inner: Some(PdfBuilder::new(dpi)),
+        }
     }
 
     /// Añade una página desde un PNG (el mismo que devuelve render_sheet).
@@ -581,6 +680,9 @@ impl Pdf {
     }
 
     pub fn finish(&mut self) -> Result<Vec<u8>, JsValue> {
-        self.inner.take().map(|b| b.finish()).ok_or_else(|| err("PDF already finalized"))
+        self.inner
+            .take()
+            .map(|b| b.finish())
+            .ok_or_else(|| err("PDF already finalized"))
     }
 }

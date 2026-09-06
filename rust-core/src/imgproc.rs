@@ -51,7 +51,9 @@ pub fn gaussian_blur_f32(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32
         return src.to_vec();
     }
     // radio de box equivalente para 3 pasadas
-    let r = (((3.0 * sigma * sigma) / 3.0).sqrt() * 1.5).round().max(1.0) as usize;
+    let r = (((3.0 * sigma * sigma) / 3.0).sqrt() * 1.5)
+        .round()
+        .max(1.0) as usize;
     let mut out = src.to_vec();
     for _ in 0..3 {
         out = box_blur_f32(&out, w, h, r);
@@ -65,7 +67,10 @@ pub fn gaussian_blur_gray(src: &Gray, sigma: f32) -> Gray {
     Gray {
         w: src.w,
         h: src.h,
-        data: out.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect(),
+        data: out
+            .iter()
+            .map(|&v| v.round().clamp(0.0, 255.0) as u8)
+            .collect(),
     }
 }
 
@@ -86,7 +91,11 @@ pub fn normalize_minmax(src: &Gray) -> Gray {
     Gray {
         w: src.w,
         h: src.h,
-        data: src.data.iter().map(|&v| (((v - lo) as f32) * scale).round() as u8).collect(),
+        data: src
+            .data
+            .iter()
+            .map(|&v| (((v - lo) as f32) * scale).round() as u8)
+            .collect(),
     }
 }
 
@@ -97,8 +106,8 @@ pub fn clahe(src: &Gray, clip_limit: f32, tiles: usize) -> Gray {
     if w < tiles || h < tiles {
         return src.clone();
     }
-    let tw = (w + tiles - 1) / tiles;
-    let th = (h + tiles - 1) / tiles;
+    let tw = w.div_ceil(tiles);
+    let th = h.div_ceil(tiles);
     // LUT por tile
     let mut luts = vec![[0u8; 256]; tiles * tiles];
     for ty in 0..tiles {
@@ -179,9 +188,16 @@ pub fn flat_field(src: &Gray) -> Gray {
     let bg_gray = Gray {
         w: small.w,
         h: small.h,
-        data: bg_small.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect(),
+        data: bg_small
+            .iter()
+            .map(|&v| v.round().clamp(0.0, 255.0) as u8)
+            .collect(),
     };
-    let bg = if k > 1 { resize_gray(&bg_gray, w, h, Filter::Triangle) } else { bg_gray };
+    let bg = if k > 1 {
+        resize_gray(&bg_gray, w, h, Filter::Triangle)
+    } else {
+        bg_gray
+    };
     let mut out = vec![0u8; w * h];
     for i in 0..w * h {
         let b = (bg.data[i] as f32).max(1.0);
@@ -200,7 +216,11 @@ pub fn otsu_threshold(src: &Gray) -> u8 {
         hist[v as usize] += 1;
     }
     let total: u64 = src.data.len() as u64;
-    let sum_all: f64 = hist.iter().enumerate().map(|(i, &c)| i as f64 * c as f64).sum();
+    let sum_all: f64 = hist
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| i as f64 * c as f64)
+        .sum();
     let (mut sum_b, mut w_b) = (0.0f64, 0u64);
     let (mut best, mut best_t) = (0.0f64, 0u8);
     for t in 0..256 {
@@ -228,7 +248,11 @@ pub fn threshold_binary(src: &Gray, t: u8) -> Gray {
     Gray {
         w: src.w,
         h: src.h,
-        data: src.data.iter().map(|&v| if v > t { 255 } else { 0 }).collect(),
+        data: src
+            .data
+            .iter()
+            .map(|&v| if v > t { 255 } else { 0 })
+            .collect(),
     }
 }
 
@@ -241,7 +265,11 @@ pub fn adaptive_threshold_inv(src: &Gray, win: usize, c: f32) -> Gray {
     let mean = box_blur_f32(&f, w, h, r);
     let mut out = vec![0u8; w * h];
     for i in 0..w * h {
-        out[i] = if (src.data[i] as f32) < mean[i] - c { 255 } else { 0 };
+        out[i] = if (src.data[i] as f32) < mean[i] - c {
+            255
+        } else {
+            0
+        };
     }
     Gray { w, h, data: out }
 }
@@ -255,12 +283,25 @@ pub fn adaptive_threshold_inv(src: &Gray, win: usize, c: f32) -> Gray {
 pub fn find_contours(bin: &Gray) -> Vec<Vec<(f32, f32)>> {
     let (w, h) = (bin.w, bin.h);
     let at = |x: i64, y: i64| -> bool {
-        x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && bin.data[y as usize * w + x as usize] > 0
+        x >= 0
+            && y >= 0
+            && x < w as i64
+            && y < h as i64
+            && bin.data[y as usize * w + x as usize] > 0
     };
     let mut visited = vec![false; w * h];
     let mut contours = Vec::new();
     // vecinos en orden horario empezando por la izquierda
-    const NB: [(i64, i64); 8] = [(-1, 0), (-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1)];
+    const NB: [(i64, i64); 8] = [
+        (-1, 0),
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (-1, 1),
+    ];
     for y in 0..h as i64 {
         for x in 0..w as i64 {
             let idx = y as usize * w + x as usize;
@@ -422,7 +463,7 @@ mod tests {
             g.data[i] = 220;
         }
         let t = otsu_threshold(&g);
-        assert!(t >= 20 && t < 220);
+        assert!((20..220).contains(&t));
     }
 
     #[test]

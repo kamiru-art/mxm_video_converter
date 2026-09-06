@@ -2,6 +2,9 @@
 name = "mxm-core"
 version = "1.0.0"
 edition = "2021"
+# `as_chunks` (1.88) es lo más nuevo que usa el código; el toolchain real lo
+# fija rust-toolchain.toml en la raíz.
+rust-version = "1.88"
 description = "Núcleo de MXM Studio: hojas de contacto, marcadores, cianotipia y procesado de escaneos, compilable a WebAssembly."
 license = "CC-BY-NC-SA-4.0"
 
@@ -26,3 +29,14 @@ console_error_panic_hook = "0.1"
 [profile.release]
 opt-level = 3
 lto = true
+
+# Clippy es bloqueante en CI (`-D warnings`). Dos lints se permiten a propósito:
+#   needless_range_loop — en los núcleos de píxeles el índice ES el cálculo
+#     (se usa para varias matrices a la vez y con aritmética); reescribirlos
+#     con iteradores los haría más largos y no más claros.
+#   too_many_arguments — seis funciones de geometría y de hoja reciben 8-9
+#     parámetros; agruparlos en structs es un cambio de firma que no toca la
+#     lógica y queda para cuando se toque esa función por otra razón.
+[lints.clippy]
+needless_range_loop = "allow"
+too_many_arguments = "allow"

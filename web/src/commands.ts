@@ -13,15 +13,28 @@ export interface Commands {
   };
   render_sheet: {
     args: {
-      settings: string; firstW: number; firstH: number; meta: string; pixels?: Bytes;
-      labels: string; sheetNum: number; render: boolean; finish?: string; response?: string;
+      settings: string;
+      firstW: number;
+      firstH: number;
+      meta: string;
+      pixels?: Bytes;
+      labels: string;
+      sheetNum: number;
+      render: boolean;
+      finish?: string;
+      response?: string;
     };
     result: RenderSheetOutput;
   };
   assemble_layout: {
     args: {
-      settings: string; firstW: number; firstH: number; records: string;
-      timeline: string; video: string; originalesDir?: string;
+      settings: string;
+      firstW: number;
+      firstH: number;
+      records: string;
+      timeline: string;
+      video: string;
+      originalesDir?: string;
     };
     result: string;
   };
@@ -43,8 +56,14 @@ export interface Commands {
   };
   scan_finish: {
     args: {
-      rgba: Bytes; w: number; h: number; name: string; layout: string;
-      opts?: string; claims?: string; state: string;
+      rgba: Bytes;
+      w: number;
+      h: number;
+      name: string;
+      layout: string;
+      opts?: string;
+      claims?: string;
+      state: string;
     };
     result: ScanOutput;
   };
@@ -60,15 +79,25 @@ export interface Commands {
   };
   cyan_strip_png: {
     args: {
-      paper: string; dpi: number; ink: string; mirror: boolean; target: string;
-      stops?: string; blockColor?: string;
+      paper: string;
+      dpi: number;
+      ink: string;
+      mirror: boolean;
+      target: string;
+      stops?: string;
+      blockColor?: string;
     };
     result: Bytes;
   };
   analyze_cyan_strip: {
     args: {
-      bytes: Bytes; paper: string; dpi: number; target: string;
-      ink?: string; stops?: string; blockColor?: string;
+      bytes: Bytes;
+      paper: string;
+      dpi: number;
+      target: string;
+      ink?: string;
+      stops?: string;
+      blockColor?: string;
     };
     result: string;
   };
