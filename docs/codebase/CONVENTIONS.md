@@ -60,7 +60,10 @@ loading. Do not rename them.
 - **`worker.js`** wraps every call in `try`/`catch`, returns `{ ok, value,
   error }`, and sets `poisoned` when the core panicked.
 - **`pool.js`** turns a failed result into a rejected promise, and also rejects
-  every pending promise if the worker script itself fails to load.
+  every pending promise if the worker script itself fails to load. A worker
+  that fails before its first reply is not respawned from the error handler:
+  the next `run()` creates it again, at most three times in a row and then
+  once a minute, and the rejection tells the user to reload the page.
 - **The interface** reports with `toast(message, 'err')` from `web/src/ui.js`.
   Every `async` handler ends in a `catch` that toasts: a rejection that only
   reaches the console is invisible to the user, who sees the button do

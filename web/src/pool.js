@@ -17,21 +17,41 @@ const RECYCLE_BYTES = 700e6; // por worker; los escaneos grandes llegan a esto
 // tuviera en cola.
 const STALL_MS = 10 * 60e3;
 
+// Un worker que muere ANTES de contestar nada no llegó a arrancar: el script
+// no cargó o falló al ejecutarse. El caso real es una pestaña que se quedó
+// abierta mientras se publicaba una versión nueva: el main.js viejo pide el
+// worker-<hash>.js viejo, que ya no existe, y el sitio (una SPA) devuelve el
+// index.html con estado 200 en su lugar. Ese worker no va a arrancar por
+// mucho que se repita. Volver a crearlo desde el propio `onerror` era un
+// bucle sin pausa (crear → fallar → crear…), una petición HTTP por vuelta y
+// sin nada visible para el usuario; en producción llegó a cientos de miles
+// de peticiones desde una sola pestaña. Ahora un worker que no arrancó se
+// vuelve a intentar solo cuando alguien pide un comando, unas pocas veces
+// seguidas, y después una vez por minuto como mucho.
+const MAX_BOOT_FAILURES = 3;
+const BOOT_RETRY_MS = 60e3;
+const BOOT_FAILED_MSG = 'The processing engine could not start. Reload the page: this usually happens when the site was updated while this tab was open.';
+
 class WasmWorker {
   constructor() {
+    this.nextId = 1;
+    this.bootFailures = 0; // seguidos; la primera respuesta los pone a cero
+    this.lastBootFailure = 0;
     this.spawn();
   }
   spawn() {
     this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     this.pending = new Map();
     this.busy = 0;
-    this.nextId = 1;
     this.mem = 0;
+    this.answered = false; // ha contestado al menos una vez: el script cargó
     this.pinned = false; // PDF a medio construir: no reciclar
     this.poisoned = false; // el WASM hizo panic: reciclar al quedar ocioso
     this.stall = null; // temporizador de "lleva demasiado sin contestar"
     this.worker.onmessage = (ev) => {
       const { id, ok, value, error, mem, pinned, poisoned } = ev.data;
+      this.answered = true;
+      this.bootFailures = 0;
       const p = this.pending.get(id);
       if (!p) return;
       this.pending.delete(id);
@@ -43,9 +63,13 @@ class WasmWorker {
       ok ? p.resolve(value) : p.reject(new Error(error));
       maybeRecycle(this);
     };
-    // si el script del worker no carga (red, CSP), las promesas pendientes
-    // no deben colgar para siempre
-    this.worker.onerror = (e) => this.fail(`Processing worker failed: ${e?.message ?? 'could not load'}`);
+    // si el script del worker no carga (red, CSP, versión vieja), las
+    // promesas pendientes no deben colgar para siempre. Sin ninguna
+    // respuesta previa es un fallo de arranque: ver MAX_BOOT_FAILURES.
+    this.worker.onerror = (e) => {
+      if (!this.answered) this.fail(BOOT_FAILED_MSG, true);
+      else this.fail(`Processing worker failed: ${e?.message ?? 'unknown error'}`);
+    };
     // un resultado que el navegador no puede deserializar no llega nunca a
     // onmessage: sin esto, su promesa se queda pendiente y su plaza ocupada
     this.worker.onmessageerror = () => this.fail('A result from the processing worker could not be read. Try again with a smaller image.');
@@ -61,14 +85,40 @@ class WasmWorker {
       : null;
   }
   /** Un worker atascado o roto no va a atender lo que tenga en cola: se
-   *  rechaza TODO lo pendiente y se reemplaza, la misma salida que ya se usa
-   *  cuando el núcleo hace panic. */
-  fail(message) {
+   *  rechaza TODO lo pendiente y se termina. El reemplazo NO se crea aquí:
+   *  lo crea el siguiente `run()`. Así un worker que no arranca no puede
+   *  encadenar creaciones por sí solo, porque cada intento cuesta una
+   *  acción del usuario, y además se limita (ver MAX_BOOT_FAILURES). */
+  fail(message, boot = false) {
     const pend = [...this.pending.values()];
-    this.recycle(); // spawn() deja pending vacío, busy en 0 y el reloj parado
+    this.kill();
+    if (boot) {
+      this.bootFailures++;
+      this.lastBootFailure = Date.now();
+    }
     for (const p of pend) p.reject(new Error(message));
   }
+  /** Termina el worker y deja la plaza vacía (worker = null). */
+  kill() {
+    clearTimeout(this.stall);
+    this.stall = null;
+    this.worker?.terminate();
+    this.worker = null;
+    this.pending = new Map();
+    this.busy = 0;
+    this.mem = 0;
+    this.pinned = false;
+    this.poisoned = false;
+  }
   run(cmd, args, transfer = []) {
+    if (!this.worker) {
+      // plaza vacía por un fallo: se vuelve a intentar, pero no sin freno
+      if (this.bootFailures >= MAX_BOOT_FAILURES
+          && Date.now() - this.lastBootFailure < BOOT_RETRY_MS) {
+        return Promise.reject(new Error(BOOT_FAILED_MSG));
+      }
+      this.spawn();
+    }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       // postMessage ANTES de contar: si el clonado estructurado falla
@@ -86,9 +136,12 @@ class WasmWorker {
       this.armStall();
     });
   }
+  /** Reemplazo inmediato de un worker sano pero hinchado o envenenado. Solo
+   *  se llama a un worker que ya contestó, así que crear el nuevo aquí no
+   *  puede encadenar fallos: si el nuevo no arranca, cae en `fail(…, true)`
+   *  y la plaza queda vacía hasta el siguiente `run()`. */
   recycle() {
-    clearTimeout(this.stall);
-    this.worker.terminate();
+    this.kill();
     this.spawn();
   }
 }

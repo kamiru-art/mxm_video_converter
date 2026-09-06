@@ -81,15 +81,27 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // Todo lo demás: caché primero (los assets llevan hash en el nombre), y se
-  // refresca en segundo plano por si el servidor cambió algo sin hash.
+  // Todo lo demás: caché primero, y red solo si hace falta.
   e.respondWith((async () => {
     const cacheName = isFont ? FONTS : ASSETS;
     const hit = await caches.match(req);
+    // Lo que vive en /assets/ lleva hash en el nombre: esa URL no va a
+    // cambiar nunca, así que un acierto en caché es la respuesta y no hay
+    // nada que refrescar. Refrescar "por si acaso" costaba una petición al
+    // origen por cada worker que el pool creaba. El resto (manifest, iconos,
+    // trozos de ffmpeg, tipografías) no lleva hash y sí se refresca en
+    // segundo plano.
+    const hashed = sameOrigin && url.pathname.startsWith('/assets/');
+    if (hit && hashed) return hit;
     const network = fetch(req)
       .then((res) => {
         const ok = isUsable(cacheName, res);
         put(cacheName, req, ok ? res.clone() : null, ok);
+        // Un asset con hash que llega como HTML es el index.html que el
+        // sitio devuelve en lugar de un 404: el archivo es de una versión
+        // anterior y ya no existe. Se contesta 404, que es la verdad, en
+        // vez de entregar HTML a un `new Worker()` o a un import.
+        if (hashed && !ok && res.ok) return new Response(null, { status: 404, statusText: 'Not Found' });
         return res;
       })
       .catch(() => null);

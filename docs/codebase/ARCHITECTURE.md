@@ -69,11 +69,13 @@ browser refuses a file.
 | Worker pool with recycling | `web/src/pool.js` | WebAssembly memory never shrinks. After a large scan the only way to return the memory is to terminate the worker and start another. The pool recycles above 700 MB, and only when the worker is idle. |
 | Worker affinity | `web/src/pool.js` (`pinned`) | A PDF is built over several calls, so its state must stay in one worker. |
 | Poison flag | `web/src/worker.js` and `web/src/pool.js` | A Rust panic leaves the WebAssembly instance unusable, so the worker is marked and replaced when it goes idle. |
+| Lazy respawn after a failure | `web/src/pool.js` (`fail`, `MAX_BOOT_FAILURES`) | A worker that never replied did not start, usually because the tab is older than the deployed site and its hashed `worker-*.js` no longer exists. Respawning from `onerror` was a loop with no pause: one request to the origin per turn, and nothing visible to the user. Now the slot stays empty until the next `run()`, with a cap on attempts. |
 | Command table | `web/src/worker.js` (`handlers`) | One flat map from a command name to a core function. |
 | Module-level singleton | `web/src/project.js` | One shared project object, imported by every phase. |
 | Adapter over storage | `web/src/store.js` | Every read and write of `localStorage` is wrapped in `try`/`catch` in one place. |
 | Explicit buffer transfer | `web/src/worker.js` | Pixel buffers are moved between threads instead of copied. |
-| Network-first document, cache-first assets | `web/public/sw.js` | Vite hashes the asset names on each build, so a hand-written precache list would go stale. The service worker caches what the browser actually asks for. |
+| Network-first document, cache-first assets | `web/public/sw.js` | Vite hashes the asset names on each build, so a hand-written precache list would go stale. The service worker caches what the browser actually asks for. A hit under `/assets/` is final (the URL cannot change); everything else is refreshed in the background. |
+| Immutable cache for hashed files | `web/public/_headers` | Cloudflare serves static assets with `max-age=0, must-revalidate` by default. The files under `/assets/` are content-addressed, so the browser may keep them for a year. |
 
 ## 5) Known Architectural Risks
 

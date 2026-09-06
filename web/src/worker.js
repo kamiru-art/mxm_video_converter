@@ -5,7 +5,13 @@
 import init, * as core from './wasm/mxm_core.js';
 
 let wasm = null;
-let ready = init().then((exports) => { wasm = exports; return core.version(); });
+// Si el .wasm no carga, cada comando falla con el error crudo del navegador
+// ("expected application/wasm", "Failed to fetch"). La causa habitual es una
+// pestaña abierta durante una publicación: su mxm_core_bg-<hash>.wasm ya no
+// existe y el sitio devuelve HTML en su lugar. Se dice lo que hay que hacer.
+let ready = init().then((exports) => { wasm = exports; return core.version(); }, (e) => {
+  throw new Error(`The WebAssembly core could not load (${e?.message ?? e}). Reload the page: this usually happens when the site was updated while this tab was open.`);
+});
 
 const handlers = {
   version: () => core.version(),
