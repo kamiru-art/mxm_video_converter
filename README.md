@@ -43,6 +43,12 @@ Between phase 1 and phase 2, you do the manual work:
 - You can stop a long extraction with one button. The frames extracted so
   far stay loaded, so you can change the range or the frame rate and extract
   again.
+- Before you generate, the application shows the size the ZIP will have,
+  and how much the browser can keep on disk. The ZIP is written to disk
+  sheet by sheet, so a long project does not fill the memory of the
+  browser.
+- One option includes the frames as image files in the ZIP. Phase 2 needs
+  them for the rescue sheets, and you can use them for anything else.
 - You can set the grid, the paper size and the resolution in dots per inch.
 - The application selects the page orientation that fits best.
 - You can add labels and a sheet number.

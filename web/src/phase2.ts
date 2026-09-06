@@ -951,7 +951,7 @@ export function mountPhase2(root: HTMLElement): void {
   const rescueOriginals = new Map<string, File>(); // nombre → File
   const rescueInfo = el('div', { class: 'hint' });
   const rescueDz = dropzone({
-    label: 'Drop the project originals folder (…_originals/)',
+    label: 'Drop the project frames folder (…_frames/)',
     sublabel: 'The copies phase ① saved next to the layout, to reprint only the failed frames.',
     accept: 'image/*,.tif,.tiff',
     multiple: true,
@@ -1058,7 +1058,7 @@ export function mountPhase2(root: HTMLElement): void {
             labels: found.map((f) => f.label),
             timeline: [],
             videoMeta: ph2.layout.video ?? {},
-            keepOriginals: true,
+            includeFrames: true,
             onProgress: (d, t, note) => rescueProg.set(d / t, note),
           });
           const zip = await makeZip(out.files);

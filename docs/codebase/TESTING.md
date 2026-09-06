@@ -57,6 +57,9 @@ The PDF that phase 1 assembles from the streamed chunks must be one whole
 file: header first, `%%EOF` last, `startxref` pointing at the table, and
 the page image declared with the PNG predictor; the Rust tests of
 `pdf.rs` walk the xref and require every offset to land on its object.
+The test page must be cross-origin isolated (the runner sends every header
+of the `/*` block of `public/_headers`), so the `ffmpeg.wasm` samples run
+through the multithreaded core; the log line says which core ran.
 
 `CHROME_PATH` selects the browser binary (`.github/workflows/ci.yml`).
 

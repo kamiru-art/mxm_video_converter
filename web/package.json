@@ -25,9 +25,9 @@
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/core-mt": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
-    "fflate": "^0.8.3",
     "mediabunny": "^1.55.3"
   }
 }

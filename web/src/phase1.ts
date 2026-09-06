@@ -9,7 +9,7 @@ import {
   resolveCyanCurve,
   settingsForCore,
 } from './gen.ts';
-import { clearFrameCache, storeFrame } from './opfs.ts';
+import { clearFrameCache, clearOutputs, opfsSupported, storeFrame } from './opfs.ts';
 import { run } from './pool.ts';
 import {
   clearFrames,
@@ -40,6 +40,7 @@ import {
   el,
   etaClock,
   field,
+  fmtBytes,
   numberInput,
   originalPageNumbers,
   pngUrl,
@@ -52,7 +53,7 @@ import {
   uniquifyLabels,
 } from './ui.ts';
 import { extractFrames, probeVideo } from './video.ts';
-import { makeZip } from './zip.ts';
+import { ZipSink } from './zip.ts';
 
 const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', 'Letter', 'Legal', 'Tabloid', 'Custom'];
 const ORIENTATIONS: SelectOption[] = [
@@ -82,8 +83,7 @@ export interface Phase1State {
   dedupOn: boolean;
   dedupThreshold: number;
   dedupGroups: DedupGroups | null; // {reps, rep_of} sobre la selección actual
-  keepOriginals: boolean;
-  exportFrames: boolean;
+  includeFrames: boolean;
   sheets_include: string;
   sheets_exclude: string;
   previewPage: number;
@@ -102,8 +102,7 @@ export const ph1: Phase1State = {
   dedupOn: false,
   dedupThreshold: 4,
   dedupGroups: null,
-  keepOriginals: true,
-  exportFrames: false,
+  includeFrames: true,
   sheets_include: '',
   sheets_exclude: '',
   previewPage: 0,
@@ -214,8 +213,10 @@ async function computeDedup(statusEl: HTMLElement): Promise<void> {
 export function mountPhase1(root: HTMLElement): void {
   const s = ph1.settings;
   // la caché de disco de la sesión anterior no sirve: el proyecto no
-  // sobrevive a la recarga
+  // sobrevive a la recarga; las salidas (ZIP) tampoco, salvo las recientes,
+  // que otra pestaña puede estar descargando todavía
   void clearFrameCache();
+  void clearOutputs(10 * 60e3);
 
   // ---------- panel de origen ----------
   const framesInfo = el('div', { class: 'hint' }, 'No frames yet.');
@@ -825,6 +826,73 @@ export function mountPhase1(root: HTMLElement): void {
   const genProg = progressBar();
   genProg.hide();
   const warnBox = el('ul', { class: 'warnlist' });
+  // Tamaño previsto del ZIP, ANTES de generar: un proyecto de 4K con todos
+  // los fotogramas y TIFF son decenas de GB, y descubrirlo a los seis
+  // minutos con un error es lo que pasaba. Proporciones medidas sobre video
+  // real (PNG ≈ 26 % del RGB de la hoja, PNG de un fotograma ≈ 41 % de su
+  // RGB); un dibujo a línea comprime mucho mejor, así que es un techo.
+  const sizeInfo = el('div', { class: 'hint' });
+  let sizeSeq = 0;
+  async function refreshSizeEstimate(): Promise<void> {
+    const seq = ++sizeSeq;
+    const plan = project.frames.length ? computePlan() : null;
+    if (!plan?.printed.length) {
+      sizeInfo.textContent = '';
+      return;
+    }
+    try {
+      const first = project.frames[plan.printed[0].frameIdx];
+      const info = JSON.parse(
+        await run('compute_layout', {
+          settings: settingsForCore(s),
+          firstW: first.w,
+          firstH: first.h,
+        }),
+      ) as LayoutInfo;
+      if (seq !== sizeSeq) return; // llegó otra actualización mientras tanto
+      const pagePx = Number(info.page_w) * Number(info.page_h);
+      const pages = selectIndices(plan.numPages, ph1.sheets_include, ph1.sheets_exclude).length;
+      const sheetRgb = pages * pagePx * 3;
+      const parts: [string, number][] = [];
+      if (s.fmt_png) parts.push(['PNG sheets', sheetRgb * 0.26]);
+      if (s.fmt_tiff) parts.push(['TIFF sheets', sheetRgb]);
+      if (s.fmt_pdf) parts.push(['PDF', sheetRgb * 0.26]);
+      if (ph1.includeFrames) {
+        let frames = 0;
+        for (const p of plan.printed) {
+          const f = project.frames[p.frameIdx];
+          frames += f.blob ? f.blob.size : f.w * f.h * 3 * 0.41;
+        }
+        parts.push([`${plan.printed.length} frame files`, frames]);
+      }
+      const total = parts.reduce((a, [, b]) => a + b, 0);
+      // lo que queda en el disco privado del navegador (cuota menos uso);
+      // sin OPFS el ZIP se arma en memoria y el techo es otro, así que no
+      // se promete nada
+      let room = 0;
+      if (opfsSupported()) {
+        try {
+          const est = await navigator.storage.estimate();
+          room = Math.max(0, (est.quota ?? 0) - (est.usage ?? 0));
+        } catch {
+          /* sin estimación */
+        }
+      }
+      if (seq !== sizeSeq) return;
+      const tooBig = room > 0 && total > room * 0.8;
+      sizeInfo.textContent =
+        `Estimated ZIP: up to ${fmtBytes(total)} (${parts.map(([n, b]) => `${n} ${fmtBytes(b)}`).join(', ')}).` +
+        (room
+          ? ` This browser has about ${fmtBytes(room)} of disk for it.`
+          : ' This browser keeps the ZIP in memory while it is made.') +
+        (tooBig
+          ? ' That does not fit: generate fewer sheets at a time, or turn off TIFF or the frame files.'
+          : '');
+      sizeInfo.classList.toggle('warn', tooBig);
+    } catch (e) {
+      console.warn('[sheets] size estimate failed:', e);
+    }
+  }
   const genBtn = el(
     'button',
     { class: 'btn sun', style: 'width:100%; margin-top:8px' },
@@ -845,7 +913,12 @@ export function mountPhase1(root: HTMLElement): void {
     // los PNG de los fotogramas que viven en el video, para el ZIP, en una
     // pasada compartida (ver framePngs); se codifican al empaquetar
     let pngs: ReturnType<typeof framePngs> | null = null;
+    let sink: ZipSink | null = null;
     try {
+      // salidas de generaciones anteriores que ya nadie descarga
+      await clearOutputs(10 * 60e3);
+      const zipName = `${sanitizeLabel(s.out_name || 'hojas')}.zip`;
+      sink = await ZipSink.open(`${Date.now()}-${zipName}`);
       const thumbs: OffscreenCanvas[] = [];
       if (isCyanotype(s) && (s.cyan_adaptive ?? 0) > 0) {
         for (const p of plan.printed) thumbs.push(await ensureThumb(p.frameIdx));
@@ -879,26 +952,27 @@ export function mountPhase1(root: HTMLElement): void {
         pageNumbers: plan.pageNumbers,
         timeline: plan.timeline,
         videoMeta: project.videoMeta,
-        keepOriginals: ph1.keepOriginals,
-        exportFrames: ph1.exportFrames,
+        includeFrames: ph1.includeFrames,
         prefetch: (chunk) => prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
+        sink,
         onProgress: (d, t, note) => genProg.set(d / t, `${note} · ${eta(d, t)}`),
       });
       project.layoutJson = out.layoutJson;
       project.sheetImages = out.sheetImages;
       warnBox.replaceChildren(...out.avisos.map((a) => el('li', {}, a)));
-      genProg.set(1, 'packing ZIP…');
-      // las copias de los fotogramas que viven en el video se codifican
-      // aquí, al llegar su turno en el ZIP: es la parte lenta del empaquetado
-      const zipEta = etaClock();
-      const zip = await makeZip(out.files, (i, n) =>
-        genProg.set(1, `packing ${i}/${n} · ${zipEta(i, n)}`),
+      if (!out.zip) throw new Error('The ZIP was not produced.');
+      const onDisk = sink.where === 'disk';
+      sink = null; // terminado: nada que descartar
+      download(out.zip, zipName, 'application/zip');
+      toast(
+        `Done: ${out.numPages} sheet(s), ${fmtBytes(out.zip.size)}${onDisk ? ', written to disk' : ''}. Print at 100 % (no “fit to page”).`,
+        'ok',
       );
-      download(zip, `${sanitizeLabel(s.out_name || 'hojas')}.zip`, 'application/zip');
-      toast(`Done: ${out.numPages} sheet(s). Print at 100 % (no “fit to page”).`, 'ok');
     } catch (e) {
       console.error(e);
       toast(`Generation failed: ${errMsg(e)}`, 'err');
+      // el ZIP a medias no se queda en el disco
+      await sink?.abort().catch(() => {});
     } finally {
       pngs?.cancel();
       genBtn.disabled = false;
@@ -1025,6 +1099,7 @@ export function mountPhase1(root: HTMLElement): void {
       ) as LayoutInfo;
       pageLabel.textContent = `sheet ${ph1.previewPage + 1} / ${plan.numPages}`;
       previewInfo.textContent = `${info.landscape ? 'landscape' : 'portrait'} · grid ${info.cols}×${info.rows}${info.grid_swapped ? ' (swapped by best fit)' : ''} · ${plan.printed.length} frames on ${plan.numPages} sheet(s)`;
+      void refreshSizeEstimate();
       const avisos = [...(info.avisos ?? [])];
       if (info.marker_capacity && plan.numPages > info.marker_capacity) {
         avisos.push(
@@ -1377,20 +1452,20 @@ export function mountPhase1(root: HTMLElement): void {
     ),
     el('div', { class: 'hint' }, 'layout.json, the map phase ② needs, is always included.'),
     (() => {
-      const c = check('Keep a copy of the original frames (rescue sheets)', ph1.keepOriginals);
+      // UNA opción, no dos: "keep originals" y "export frames" escribían los
+      // mismos archivos en dos carpetas y nadie sabía cuál marcar
+      const c = check(
+        'Include the frames as image files (phase ② needs them for rescue sheets; also handy on their own)',
+        ph1.includeFrames,
+      );
       c.input.addEventListener('change', () => {
-        ph1.keepOriginals = c.input.checked;
-      });
-      return c.label;
-    })(),
-    (() => {
-      const c = check('Also export the individual frames', ph1.exportFrames);
-      c.input.addEventListener('change', () => {
-        ph1.exportFrames = c.input.checked;
+        ph1.includeFrames = c.input.checked;
+        void refreshSizeEstimate();
       });
       return c.label;
     })(),
     genBtn,
+    sizeInfo,
     genProg.root,
     warnBox,
 

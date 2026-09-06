@@ -15,7 +15,15 @@
 #   data: in img        the favicon is an inline SVG data URI
 # There is no 'unsafe-inline' and no 'unsafe-eval' for scripts: the build
 # emits one external module and no inline script, so nothing needs them.
+# Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy isolate the
+# origin, which is what unlocks SharedArrayBuffer and with it the
+# multithreaded ffmpeg core (public/ffmpeg/mt). require-corp rather than
+# credentialless because Safari only knows the former. Every cross-origin
+# resource must then be CORS: the Google Fonts stylesheet is loaded with
+# crossorigin in index.html, and font files are always fetched with CORS.
 /*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data:
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff

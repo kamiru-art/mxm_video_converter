@@ -3,6 +3,7 @@
 import './style.css';
 import { errMsg } from './errors.ts';
 import { mountHelp } from './help.ts';
+import { clearOutputs } from './opfs.ts';
 import { mountPhase1 } from './phase1.ts';
 import { mountPhase2 } from './phase2.ts';
 import { mountPhase3 } from './phase3.ts';
@@ -53,6 +54,12 @@ phaseNav.addEventListener('click', (e) => {
   const view = btn?.dataset.view;
   if (view) show(view);
 });
+
+// las salidas (ZIP, PDF) que dejó una sesión anterior en el disco privado
+// del navegador: cualquier fase puede haberlas escrito, así que se limpian
+// aquí y no solo al montar la fase ①; las de hace poco se respetan por si
+// otra pestaña las está descargando
+void clearOutputs(10 * 60e3);
 
 window.addEventListener('hashchange', () => {
   const v = resolveRoute(location.hash.replace('#', ''));

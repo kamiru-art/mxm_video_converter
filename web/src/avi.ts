@@ -8,6 +8,7 @@ import type { LogEvent } from '@ffmpeg/ffmpeg';
 import { FFFSType, FFmpeg } from '@ffmpeg/ffmpeg';
 import { BadRangeError } from './errors.ts';
 import { FrameQueue } from './frames.ts';
+import { loadFlag, saveFlag } from './store.ts';
 import type { Bytes } from './types.ts';
 import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
 
@@ -16,6 +17,188 @@ import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
 export { FFFSType };
 
 let ffPromise: Promise<FFmpeg> | null = null;
+
+/** ffmpeg con hilos (@ffmpeg/core-mt) cuando el navegador aísla el origen
+ *  (cabeceras COOP/COEP, ver public/_headers): decodificar HEVC 4K por
+ *  software en un hilo son minutos; con los núcleos de la máquina, bastante
+ *  menos. Sin aislamiento no hay SharedArrayBuffer y se usa el núcleo de un
+ *  hilo de siempre. Si el multihilo falla al cargar, también. */
+function multiThreadAvailable(): boolean {
+  return (
+    typeof SharedArrayBuffer !== 'undefined' &&
+    typeof crossOriginIsolated !== 'undefined' &&
+    crossOriginIsolated
+  );
+}
+let mtFailed = false;
+
+/** 'multi' o 'single': lo que usará (o usa) la próxima sesión. */
+export function ffmpegThreads(): 'multi' | 'single' {
+  return multiThreadAvailable() && !mtFailed ? 'multi' : 'single';
+}
+
+/** Hilos que se piden a ffmpeg con el núcleo multihilo: los de la máquina,
+ *  con un tope; más no ayuda a un decodificador. */
+function threadCount(): number {
+  return Math.max(2, Math.min(8, navigator.hardwareConcurrency || 2));
+}
+
+/** El argumento `-threads` de cada exec: explícito con el núcleo multihilo
+ *  (el mismo número que superó la prueba), nada con el de un hilo. */
+export function threadArgs(): string[] {
+  return ffmpegThreads() === 'multi' ? ['-threads', String(threadCount())] : [];
+}
+
+/** Tiempo máximo para la prueba: 6 fotogramas de 16×16 son milisegundos;
+ *  si no ha vuelto en esto, está atascado. */
+const PROBE_MS = 8000;
+
+/** Un MP4 H.264 de 6 fotogramas de 64×64 (testsrc), para probar el
+ *  decodificador con hilos sin depender de ningún codificador. H.264 y no
+ *  MPEG-4: el decodificador MPEG-4 de ffmpeg 5.1 con hilos falla en un
+ *  fotograma diminuto ("scratch buffers could not be allocated"), y eso
+ *  descartaba el multihilo en Firefox, donde sí funciona. */
+const PROBE_MP4_B64 =
+  'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAM7bW9vdgAAAGxtdmhkAAAAAAAAAAAA' +
+  'AAAAAAAD6AAAAlgAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA' +
+  'AABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAmV0cmFrAAAAXHRraGQAAAADAAAA' +
+  'AAAAAAAAAAABAAAAAAAAAlgAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA' +
+  'AAAAAAAAAABAAAAAAEAAAABAAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAJYAAAAAAABAAAA' +
+  'AAHdbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAoAAAAGABVxAAAAAAALWhkbHIAAAAAAAAAAHZp' +
+  'ZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABiG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAA' +
+  'ACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAUhzdGJsAAAAuHN0c2QAAAAAAAAA' +
+  'AQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAEAAQABIAAAASAAAAAAAAAABFUxhdmM2' +
+  'Mi4yOC4xMDIgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAK/+EAFmdCwAraEJsBEAAA' +
+  'AwAQAAADAUDxImoBAAVozgJcgAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAAK4CAAAAAAAA' +
+  'ABhzdHRzAAAAAAAAAAEAAAAGAAAEAAAAABRzdHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAA' +
+  'AQAAAAEAAAAGAAAAAQAAACxzdHN6AAAAAAAAAAAAAAAGAAAFJAAAAvsAAAF6AAABMgAAAToAAAEI' +
+  'AAAAFHN0Y28AAAAAAAAAAQAAA2sAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABt' +
+  'ZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEy' +
+  'LjEwMgAAAAhmcmVlAAANFW1kYXQAAAJUBgX//1DcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUg' +
+  'MTY1IHIzMjIyIGIzNTYwNWEgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAw' +
+  'My0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2Fi' +
+  'YWM9MCByZWY9MSBkZWJsb2NrPTA6MDowIGFuYWx5c2U9MDowIG1lPWRpYSBzdWJtZT0wIHBzeT0x' +
+  'IHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJl' +
+  'bGxpcz0wIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNraXA9MSBjaHJvbWFf' +
+  'cXBfb2Zmc2V0PTAgdGhyZWFkcz0yIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9' +
+  'MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5l' +
+  'ZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTI1MCBrZXlpbnRfbWluPTEwIHNj' +
+  'ZW5lY3V0PTAgaW50cmFfcmVmcmVzaD0wIHJjPWNyZiBtYnRyZWU9MCBjcmY9MzUuMCBxY29tcD0w' +
+  'LjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0wAIAAAALIZYiE' +
+  'OgxgAeiIGdEONgsbfvXv4Au6Q3MeuADytes1YKT+ugBaqY3MevDiASkQAA+AxgTG8Njj+GgBHkUw' +
+  '1ZghAkUgkZgDGAEBBWUxgBADzdqKX8ACv2adUEEogJhpYf/hoBgAgEACAAIA4goUlmANXwIBtpxZ' +
+  'q/2UXUC++NNDhjAdAbSlAEAAEBZ+BwTjyw4Jx5fnCZMm5/8JABBQABADCAFgNpATGlgG+UxBtnn7' +
+  '9ANzFMICbPPhjAEJewlsU1+I0IGVHwAyNFQS+/1/+ARMcRvgfAYlqMtkyMOg5XjPXCE/rrwwIpyC' +
+  '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';
+
+function probeClip(): Uint8Array {
+  const bin = atob(PROBE_MP4_B64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** ¿Funciona de verdad el multihilo aquí? Chrome carga el núcleo y corre
+ *  `-version`, pero se queda colgado para siempre en cuanto un
+ *  decodificador usa más de dos hilos o un codificador usa dos (medido
+ *  el 2026-09-06, con y sin ventana); Firefox corre con diez sin problema.
+ *  Ninguna lista de navegadores sería fiable, así que se prueba: el clip
+ *  diminuto se decodifica con los hilos que se van a usar, con tiempo
+ *  límite, y la salida se lee de verdad (un exec que aborta al instante
+ *  "termina" sin producir nada). Si no vuelve o no produce, el núcleo de un
+ *  hilo de siempre. */
+async function probeThreads(ff: FFmpeg): Promise<boolean> {
+  let log = '';
+  const onLog = ({ message }: LogEvent): void => {
+    log += `${message}\n`;
+  };
+  ff.on('log', onLog);
+  const work = (async () => {
+    await ff.writeFile('probe.mp4', probeClip());
+    await ff.exec([
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-threads',
+      String(threadCount()),
+      '-i',
+      'probe.mp4',
+      '-c:v',
+      'rawvideo',
+      '-pix_fmt',
+      'rgba',
+      '-f',
+      'image2',
+      'p_%03d.raw',
+    ]);
+    // con que salga el primero y tenga el tamaño justo basta: lo que se
+    // vigila es que el decodificador con hilos vuelva y produzca
+    const first = await ff.readFile('p_001.raw');
+    if (typeof first === 'string' || first.length !== 64 * 64 * 4)
+      throw new Error('no decoded output');
+  })();
+  work.catch(() => {}); // si se termina la instancia, esta promesa rechaza después
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error('stalled')), PROBE_MS);
+  });
+  try {
+    await Promise.race([work, timeout]);
+    return true;
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    console.warn(
+      `[ffmpeg] thread probe: ${why}${log.trim() ? ` · ${log.trim().slice(-300)}` : ''}`,
+    );
+    return false;
+  } finally {
+    clearTimeout(timer);
+    ff.off('log', onLog);
+  }
+}
 
 // Un asset que falta NO responde 404: wrangler.jsonc trae
 // not_found_handling: "single-page-application", así que el servidor
@@ -36,17 +219,20 @@ function coreMissing(res: Response, what: string): Error {
 // Blob de 32 MB por sesión. Revocarla tras el load tampoco valdría, porque la
 // sesión siguiente necesita rearmar el mismo módulo: se crea una vez y se
 // reutiliza (y de paso las sesiones posteriores arrancan sin volver a bajarlo).
-let wasmURLPromise: Promise<string> | null = null;
+const wasmURLPromises = new Map<string, Promise<string>>();
 
 function coreWasmURL(base: string): Promise<string> {
   // un fallo no se cachea: si el módulo aparece luego, el siguiente intento
   // vuelve a probar en vez de quedarse con la promesa rechazada
-  if (!wasmURLPromise)
-    wasmURLPromise = assembleCore(base).catch((e: unknown) => {
-      wasmURLPromise = null;
+  let p = wasmURLPromises.get(base);
+  if (!p) {
+    p = assembleCore(base).catch((e: unknown) => {
+      wasmURLPromises.delete(base);
       throw e;
     });
-  return wasmURLPromise;
+    wasmURLPromises.set(base, p);
+  }
+  return p;
 }
 
 interface CoreManifest {
@@ -78,11 +264,87 @@ async function assembleCore(base: string): Promise<string> {
   return URL.createObjectURL(new Blob(parts, { type: 'application/wasm' }));
 }
 
-async function loadCore(): Promise<FFmpeg> {
-  const base = `${location.origin}/ffmpeg`;
+async function loadVariant(variant: 'mt' | 'st'): Promise<FFmpeg> {
+  const base = `${location.origin}/ffmpeg/${variant}`;
   const wasmURL = await coreWasmURL(base);
   const ff = new FFmpeg();
-  await ff.load({ coreURL: `${base}/ffmpeg-core.js`, wasmURL });
+  await ff.load({
+    coreURL: `${base}/ffmpeg-core.js`,
+    wasmURL,
+    ...(variant === 'mt' ? { workerURL: `${base}/ffmpeg-core.worker.js` } : {}),
+  });
+  return ff;
+}
+
+let mtProbe: Promise<boolean> | null = null;
+
+/** La prueba vale para este navegador y este núcleo: se recuerda entre
+ *  sesiones, que en Chrome son 8 s de espera y 32 MB de descarga cada vez
+ *  para acabar en el núcleo de un hilo. Cambiar de versión del núcleo o de
+ *  navegador la repite. */
+const MT_CORE_ID = 'core-mt-0.12.10';
+function probeFlagName(): string {
+  return `ffmpeg-mt:${MT_CORE_ID}:${navigator.userAgent}`;
+}
+
+/** Con tiempo límite: una promesa que no vuelve (un pool de hilos que nunca
+ *  arranca) dejaría colgada toda sesión de ffmpeg, y Stop no podría salir. */
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error(`${what} took more than ${ms / 1000} s`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** La prueba corre en una instancia DESECHABLE: la que la pasa se termina
+ *  y la sesión real carga otra limpia. Reutilizar la de la prueba dejaba
+ *  el módulo roto (el siguiente exec abortaba sin decir nada). Una vez por
+ *  página. */
+function multiThreadWorks(): Promise<boolean> {
+  if (!mtProbe) {
+    mtProbe = (async () => {
+      const remembered = loadFlag(probeFlagName());
+      if (remembered === 'ok' || remembered === 'stall') return remembered === 'ok';
+      let ff: FFmpeg | null = null;
+      try {
+        ff = await withTimeout(loadVariant('mt'), PROBE_MS * 3, 'loading the multithreaded core');
+        const ok = await probeThreads(ff);
+        if (!ok) {
+          console.warn(
+            '[ffmpeg] the multithreaded core stalls or fails in this browser; using the single-threaded one',
+          );
+        }
+        saveFlag(probeFlagName(), ok ? 'ok' : 'stall');
+        return ok;
+      } catch (e) {
+        // un worker bloqueado, un módulo que falta…: el de un hilo sigue valiendo
+        console.warn(
+          '[ffmpeg] multithreaded core failed to load, using the single-threaded one:',
+          e,
+        );
+        return false;
+      } finally {
+        try {
+          ff?.terminate();
+        } catch {
+          /* ya terminada */
+        }
+      }
+    })();
+  }
+  return mtProbe;
+}
+
+async function loadCore(): Promise<FFmpeg> {
+  if (ffmpegThreads() === 'multi' && (await multiThreadWorks())) {
+    const ff = await loadVariant('mt');
+    console.info(`[ffmpeg] multithreaded core, ${threadCount()} threads`);
+    return ff;
+  }
+  mtFailed = true;
+  const ff = await loadVariant('st');
+  console.info('[ffmpeg] single-threaded core');
   return ff;
 }
 
@@ -179,7 +441,12 @@ async function probeLoaded(ff: FFmpeg, path: string): Promise<ProbeInfo> {
   ff.off('log', onLog);
   const p = parseProbeLog(log);
   if (!p.duration || !p.width) {
-    throw new Error('The file could not be decoded (unsupported or damaged video).');
+    // lo que dijo ffmpeg, que es lo único que explica un archivo que no abre
+    const tail = log.trim().split('\n').filter(Boolean).slice(-3).join(' · ');
+    console.warn('[ffmpeg] probe log:', log.trim().slice(-2000));
+    throw new Error(
+      `The file could not be decoded (unsupported or damaged video).${tail ? ` ffmpeg: ${tail}` : ''}`,
+    );
   }
   return p;
 }
@@ -274,6 +541,7 @@ export function extractFramesFallback(
           const want = Math.min(BATCH, Math.max(1, Math.round((end - t) * fps)));
           await ff.exec([
             '-hide_banner',
+            ...threadArgs(),
             // info, no error: la línea "Output … rawvideo … WxH" es la que
             // dice el tamaño real de los fotogramas (ver parseOutputSize)
             '-loglevel',

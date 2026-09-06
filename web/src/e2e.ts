@@ -78,7 +78,7 @@ async function main(): Promise<void> {
       labels,
       timeline: labels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
       videoMeta: { fps_extraccion: 4 },
-      keepOriginals: false,
+      includeFrames: false,
     });
     const sheetBlob = out.files.get('e2e_p1.png');
     if (!sheetBlob || !(sheetBlob instanceof Blob)) throw new Error('sheet was not generated');
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
       labels: cyLabels,
       timeline: cyLabels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
       videoMeta: {},
-      keepOriginals: false,
+      includeFrames: false,
     });
     if (!cyGen.layoutJson) throw new Error('cyanotype layout was not generated');
     const cyLayoutJson = cyGen.layoutJson;
@@ -487,8 +487,7 @@ async function main(): Promise<void> {
           labels: lazyLabels,
           timeline: lazyLabels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
           videoMeta: { fps_extraccion: 2 },
-          keepOriginals: true,
-          exportFrames: true,
+          includeFrames: true,
           prefetch: (chunk) =>
             prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
         });
@@ -498,6 +497,15 @@ async function main(): Promise<void> {
         const lazyEntry = lazyOut.files.get('lazy_frames/lz_1.png');
         if (typeof lazyEntry !== 'function') throw new Error('frame export entry is not lazy');
         const lazyZip = await makeZip(lazyOut.files);
+        // el ZIP lo escribe zipwriter.ts en ZIP64: cola con EOCD64 + localizador + EOCD
+        const tailBytes = new Uint8Array(await lazyZip.slice(-98).arrayBuffer());
+        const sig = (o: number): number =>
+          tailBytes[o] |
+          (tailBytes[o + 1] << 8) |
+          (tailBytes[o + 2] << 16) |
+          (tailBytes[o + 3] << 24);
+        if (sig(0) !== 0x06064b50 || sig(56) !== 0x07064b50 || sig(76) !== 0x06054b50)
+          throw new Error('ZIP tail is not EOCD64 + locator + EOCD');
         // el PNG que sale del video al exportar es EL MISMO que el de la
         // extracción con PNG (mismo instante, mismo codificador): byte a byte
         const lazyPng = new Uint8Array(await new Blob([await lazyEntry()]).arrayBuffer());
@@ -600,6 +608,11 @@ async function main(): Promise<void> {
           type: 'video/x-msvideo',
         });
         const { extractFrames } = await import('./video.ts');
+        const { ffmpegThreads } = await import('./avi.ts');
+        // el servidor del test manda las cabeceras de _headers: con ellas el
+        // origen está aislado y el multihilo puede probarse; si no, es que
+        // las cabeceras (o el navegador) no dan SharedArrayBuffer
+        if (!crossOriginIsolated) throw new Error('the page is not cross-origin isolated');
         const got: Blob[] = [];
         const meta = await extractFrames(ablob, {
           start: 0,
@@ -610,8 +623,9 @@ async function main(): Promise<void> {
             got.push(b);
           },
         });
+        // qué núcleo corrió de verdad: se sabe después de la primera sesión
         log(
-          `AVI: ${meta.count} frames extraídos vía ffmpeg.wasm (${meta.fps} fps nativo detectado)`,
+          `AVI: ${meta.count} frames extraídos vía ffmpeg.wasm (${meta.fps} fps nativo detectado), núcleo ${ffmpegThreads()}-threaded`,
         );
         if (got.length < 5) throw new Error(`incomplete AVI extraction (${got.length})`);
 

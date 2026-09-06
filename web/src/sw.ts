@@ -13,7 +13,9 @@
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
-const VERSION = 'mxm-v1';
+// v2: las fuentes pasaron a pedirse con CORS (crossorigin en index.html) por
+// las cabeceras COEP; una respuesta opaca guardada por la v1 ya no valdría
+const VERSION = 'mxm-v2';
 const SHELL = `${VERSION}-shell`; // documento de entrada
 const ASSETS = `${VERSION}-assets`; // JS, CSS, WASM, imágenes propias
 const FONTS = `${VERSION}-fonts`; // Google Fonts (respuestas opacas)

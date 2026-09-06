@@ -3,7 +3,7 @@
 // Cada respuesta incluye `mem` (bytes de memoria WASM) y `pinned` (estado PDF
 // vivo) para que el pool pueda reciclar workers hinchados sin perder nada.
 
-import type { CommandName, Commands, WorkerRequest, WorkerResponse } from './commands.ts';
+import type { CommandName, Commands, RawRgba, WorkerRequest, WorkerResponse } from './commands.ts';
 import { errMsg } from './errors.ts';
 import type { Bytes, DecodedImage, RenderSheetOutput, ScanOutput } from './types.ts';
 import type { InitOutput } from './wasm/mxm_core.js';
@@ -183,17 +183,18 @@ const handlers: Handlers = {
       src.close();
     }
     const png = a.png === false ? null : await canvas.convertToBlob({ type: 'image/png' });
-    let thumb: ImageBitmap | null = null;
+    let thumb: RawRgba | null = null;
     if (a.thumbW) {
       const tw = Math.max(1, Math.round(a.thumbW));
       const th = Math.max(1, Math.round((h / w) * tw));
       const small = new OffscreenCanvas(tw, th);
-      const sctx = small.getContext('2d');
+      const sctx = small.getContext('2d', { willReadFrequently: true });
       if (!sctx) throw new Error('Could not create a 2D canvas context in the worker.');
       sctx.drawImage(canvas, 0, 0, tw, th);
-      thumb = small.transferToImageBitmap();
+      const d = sctx.getImageData(0, 0, tw, th);
+      thumb = { rgba: new Uint8Array(d.data.buffer) as Bytes, w: tw, h: th };
     }
-    return { value: { png, thumb, w, h }, transfer: thumb ? [thumb] : [] };
+    return { value: { png, thumb, w, h }, transfer: thumb ? [thumb.rgba.buffer] : [] };
   },
   // PDF con estado (una instancia por worker; el pool lo enruta al worker 0)
   pdf_new: (a) => {
