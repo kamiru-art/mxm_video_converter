@@ -115,6 +115,65 @@ export function etaClock(): (done: number, total: number) => string {
   };
 }
 
+type Lockable = HTMLInputElement | HTMLSelectElement | HTMLButtonElement | HTMLTextAreaElement;
+
+/** Bloquea todos los controles de `root` (campos, selectores, botones y
+ *  zonas de soltar) mientras corre una tarea larga, salvo los de `keep`
+ *  (el botón de cancelar). Cambiar un formato o soltar otro video a mitad
+ *  de la generación no cambiaba nada de lo que ya corría, pero la interfaz
+ *  daba a entender que sí. Devuelve la función que lo deja como estaba: lo
+ *  que ya estaba apagado sigue apagado. */
+export function lockControls(root: HTMLElement, keep: Element[] = []): () => void {
+  const touched: Lockable[] = [];
+  for (const c of root.querySelectorAll<Lockable>('input, select, button, textarea')) {
+    if (c.disabled || keep.some((k) => k === c || k.contains(c))) continue;
+    c.disabled = true;
+    touched.push(c);
+  }
+  root.classList.add('locked');
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    for (const c of touched) c.disabled = false;
+    root.classList.remove('locked');
+  };
+}
+
+/** Botón de cancelar de una tarea larga: aparece al empezar, se apaga al
+ *  pulsarlo ("Cancelling…") y se esconde al terminar. `arm` devuelve el
+ *  AbortController de la tarea; `disarm` recoge. */
+export interface CancelButton {
+  button: HTMLButtonElement;
+  arm(): AbortController;
+  disarm(): void;
+}
+
+export function cancelButton(label = 'Cancel'): CancelButton {
+  const button = el('button', { class: 'btn ghost small', type: 'button' }, label);
+  button.style.display = 'none';
+  let ctl: AbortController | null = null;
+  button.addEventListener('click', () => {
+    ctl?.abort();
+    button.disabled = true;
+    button.textContent = 'Cancelling…';
+  });
+  return {
+    button,
+    arm() {
+      ctl = new AbortController();
+      button.disabled = false;
+      button.textContent = label;
+      button.style.display = '';
+      return ctl;
+    },
+    disarm() {
+      ctl = null;
+      button.style.display = 'none';
+    },
+  };
+}
+
 export interface ProgressBar {
   root: HTMLDivElement;
   set(frac: number, text?: string): void;
@@ -331,10 +390,14 @@ export function dropzone({
       dirInput.click();
     });
   }
-  zone.addEventListener('click', () => input.click());
+  // una zona bloqueada (lockControls apaga su input mientras corre una
+  // tarea larga) no abre el diálogo ni acepta lo que le suelten
+  zone.addEventListener('click', () => {
+    if (!input.disabled) input.click();
+  });
   zone.addEventListener('keydown', (e) => {
     if (e.target !== zone) return; // Enter sobre el botón de carpeta ya es lo suyo
-    if (e.key === 'Enter' || e.key === ' ') input.click();
+    if ((e.key === 'Enter' || e.key === ' ') && !input.disabled) input.click();
   });
   zone.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -344,6 +407,7 @@ export function dropzone({
   zone.addEventListener('drop', (e) => {
     e.preventDefault();
     zone.classList.remove('over');
+    if (input.disabled) return;
     // `items` y sus entradas solo valen mientras dura este manejador: hay que
     // sacarlas ANTES del primer await o no queda nada que recorrer.
     const items = e.dataTransfer?.items;

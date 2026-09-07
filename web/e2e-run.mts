@@ -41,6 +41,36 @@ if (!existsSync(sample)) {
       : 'ffmpeg not available: the video section will be skipped.',
   );
 }
+// MP4 CON AUDIO para la prueba del sonido del original: un tono que salta de
+// 440 Hz a 880 Hz en t = 1.5 s. La prueba corta el tramo [0.5, 2.5) s y
+// exige 440 Hz en la primera mitad y 880 Hz en la segunda, lo que verifica
+// a la vez el recorte y que el audio arranque en cero junto al primer
+// fotograma. Un tono y no ruido: la frecuencia se mide contando cruces por
+// cero, sin depender del códec ni de la resolución del muestreo.
+const withAudio = join(DIST, 'e2e_sample_audio.mp4');
+if (!existsSync(withAudio)) {
+  spawnSync(
+    'ffmpeg',
+    [
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=size=320x180:rate=12:duration=3',
+      '-f',
+      'lavfi',
+      '-i',
+      "aevalsrc='sin(2*PI*t*(440+440*gte(t,1.5)))':s=48000:d=3",
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-shortest',
+      '-y',
+      withAudio,
+    ],
+    { stdio: 'ignore' },
+  );
+}
 // AVI con códec MPEG-4 ASP: WebCodecs no lo decodifica, así que ejercita el
 // camino de respaldo con ffmpeg.wasm.
 const avi = join(DIST, 'e2e_sample.avi');

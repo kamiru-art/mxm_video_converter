@@ -87,6 +87,10 @@ export type BooleanKeys<T> = { [K in keyof T]-?: T[K] extends boolean ? K : neve
 export interface VideoMeta {
   fps_extraccion?: number;
   origen?: string;
+  /** Tramo del video original del que salieron los fotogramas, en
+   *  segundos: la fase ④ toma de ahí el audio para el video final. */
+  inicio_s?: number;
+  fin_s?: number;
 }
 
 export interface LayoutFrame {

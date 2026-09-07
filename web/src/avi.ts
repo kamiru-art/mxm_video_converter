@@ -364,6 +364,15 @@ async function release(): Promise<void> {
   }
 }
 
+/** Parar lo que ffmpeg esté haciendo AHORA: terminar la instancia es la
+ *  única forma, porque `exec` bloquea su worker y no se interrumpe. La
+ *  llamada en curso se rechaza, y quien la esperaba lo reconoce por su
+ *  AbortSignal; la siguiente sesión arranca otra instancia limpia. Lo usan
+ *  la extracción (aquí abajo) y las exportaciones MOV (video.ts). */
+export function abortFF(): Promise<void> {
+  return release();
+}
+
 // La instancia es ÚNICA y se comparte entre la extracción y la exportación
 // MOV (video.ts). Dos sesiones a la vez se pisarían: terminate() de una
 // rechaza los exec de la otra, los callbacks de progreso son globales por

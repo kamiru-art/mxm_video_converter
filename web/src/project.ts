@@ -1,6 +1,6 @@
 // Estado del proyecto compartido entre fases (vive en memoria).
 
-import { frameSource } from './frames.ts';
+import { frameTransfer } from './frames.ts';
 import { poolSize, run } from './pool.ts';
 import type { Bytes, VideoMeta } from './types.ts';
 import { context2d } from './ui.ts';
@@ -165,9 +165,8 @@ export async function framePng(idx: number): Promise<Blob> {
   const f = project.frames[idx];
   if (f.blob) return f.blob;
   if (!f.video) throw new Error(`Frame ${f.name} has no image.`);
-  const image = await frameSource(await decodeOne(f.video));
-  const transfer: Transferable[] = 'rgba' in image ? [image.rgba.buffer] : [image];
-  const r = await run('encode_frame', { image, png: true }, transfer);
+  const image = await decodeOne(f.video);
+  const r = await run('encode_frame', { image, png: true }, frameTransfer(image));
   if (!r.png) throw new Error('The frame encoder returned no PNG.');
   return r.png;
 }
@@ -225,12 +224,12 @@ export function framePngs(idxs: number[]): FramePngs {
             bmp.close();
             throw new Error('cancelled');
           }
-          const image = await frameSource(bmp);
-          const transfer: Transferable[] = 'rgba' in image ? [image.rgba.buffer] : [image];
-          const job = run('encode_frame', { image, png: true }, transfer).then((r) => {
-            if (!r.png) throw new Error('The frame encoder returned no PNG.');
-            return r.png;
-          });
+          const job = run('encode_frame', { image: bmp, png: true }, frameTransfer(bmp)).then(
+            (r) => {
+              if (!r.png) throw new Error('The frame encoder returned no PNG.');
+              return r.png;
+            },
+          );
           deliver(list[k].i, job);
           const done: Promise<void> = job
             .then(

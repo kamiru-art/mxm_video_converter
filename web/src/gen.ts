@@ -2,6 +2,7 @@
 // Orquesta al núcleo WASM página a página para no cargar todos los
 // fotogramas a resolución completa a la vez.
 
+import { throwIfCancelled } from './errors.ts';
 import { openOutput } from './opfs.ts';
 import { recycleIdle, run, run0 } from './pool.ts';
 import type { RgbaImage, VideoRef } from './project.ts';
@@ -209,6 +210,10 @@ export interface GenerateArgs {
    *  a hoja) y `files` queda vacío; sin él, todo se devuelve en `files`
    *  para que quien llama lo empaquete (hojas de rescate, pruebas). */
   sink?: ZipSink;
+  /** Parar a mitad (botón Cancel): se mira entre hoja y hoja y entre
+   *  archivo y archivo; lo que corre en un worker termina solo. Sale como
+   *  CancelledError, y el ZIP a medias lo descarta quien llama. */
+  signal?: AbortSignal;
   onProgress?: (done: number, total: number, note: string) => void;
 }
 
@@ -260,6 +265,7 @@ async function generateSheetsInner({
   includeFrames = true,
   prefetch = async () => {},
   sink,
+  signal,
   onProgress = () => {},
 }: GenerateArgs): Promise<GenerateResult> {
   const s: Settings = { ...settings };
@@ -333,6 +339,7 @@ async function generateSheetsInner({
       const pnum = pnumOf(pageIdx);
       const pageBase = `${safeName}_p${zfill(pnum, fileDigits)}`;
 
+      throwIfCancelled(signal, 'Sheet generation cancelled.');
       if (selected) {
         onProgress(done, totalSel, `sheet ${pnum}: decoding ${chunk.length} frame(s)…`);
         await prefetch(chunk);
@@ -434,6 +441,7 @@ async function generateSheetsInner({
   // (los de video se codifican ahora, en los workers)
   const sheetsDone = done;
   for (let i = 0; i < frameEntries.length; i++) {
+    throwIfCancelled(signal, 'Sheet generation cancelled.');
     const [name, data] = frameEntries[i];
     await emit(name, data);
     if (sink && (i % 10 === 9 || i === frameEntries.length - 1)) {

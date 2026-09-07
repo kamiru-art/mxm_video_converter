@@ -300,7 +300,16 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .progress-note { font-family: var(--font-mono); font-size: 12px; }
 
 /* miniaturas de fotogramas */
-.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin-top: 12px; max-height: 300px; overflow-y: auto; padding: 2px; }
+/* `grid-auto-rows: max-content` y `align-content: start` NO son adorno: sin
+   ellas WebKit reparte los 300 px del `max-height` ENTRE TODAS las filas en
+   vez de dejar que las defina su contenido. Medido en Safari 26.5.2 con 241
+   fotogramas de un MOV HEVC 4K: 21 filas de 6.47 px cada una, con la
+   miniatura de 53.3 px dentro; las celdas se solapaban y la tira salía a
+   bandas, cada una un trozo de otro fotograma. Con esto, filas de 53.3 px y
+   la tira se desplaza como debe (1284 px de alto real). Los píxeles nunca
+   estuvieron mal: la miniatura del worker y una decodificación de
+   referencia (<video> + canvas) coinciden igual por los dos caminos. */
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); grid-auto-rows: max-content; align-content: start; gap: 8px; margin-top: 12px; max-height: 300px; overflow-y: auto; padding: 2px; }
 .thumb { position: relative; border-radius: 4px; overflow: hidden; background: var(--prusia-950); aspect-ratio: 16/10; }
 /* `position:absolute` NO es decorativo y `height:100%` tampoco sobra: las
    dos se necesitan. WebKit no considera definida la altura que sale de
@@ -510,3 +519,7 @@ table.report td.assign-cell .assign-sel { width: 200px; }
 }
 details.adv { margin: 10px 0; }
 details.adv > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--prusia-500); }
+
+/* controles bloqueados mientras corre una tarea larga (ui.ts lockControls) */
+.locked .dropzone { opacity: .5; pointer-events: none; }
+.locked label.field > span, .locked h3 { opacity: .7; }

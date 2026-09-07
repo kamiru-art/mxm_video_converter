@@ -4,13 +4,24 @@
 // Filosofía de calidad: cada fotograma extraído se guarda como PNG (sin
 // pérdida) a resolución nativa; no se aplica ningún filtro de color.
 
-import type { InputVideoTrack, OutputFormat, Quality, VideoCodec, WrappedCanvas } from 'mediabunny';
+import type {
+  AudioCodec,
+  InputAudioTrack,
+  InputVideoTrack,
+  OutputFormat,
+  Quality,
+  VideoCodec,
+  WrappedCanvas,
+} from 'mediabunny';
 import {
   ALL_FORMATS,
+  AudioSampleSink,
+  AudioSampleSource,
   BlobSource,
   BufferTarget,
   CanvasSink,
   CanvasSource,
+  getFirstEncodableAudioCodec,
   getFirstEncodableVideoCodec,
   Input,
   Mp4OutputFormat,
@@ -21,7 +32,7 @@ import {
   QUALITY_VERY_HIGH,
   WebMOutputFormat,
 } from 'mediabunny';
-import { BadRangeError } from './errors.ts';
+import { BadRangeError, throwIfCancelled } from './errors.ts';
 import { FrameQueue } from './frames.ts';
 import { recycleIdle, run } from './pool.ts';
 import type { Bytes } from './types.ts';
@@ -79,18 +90,38 @@ export interface ProbeResult {
 
 export type FrameGetter = () => Promise<ImageBitmap>;
 
-export interface BuildVideoOptions {
+/** El audio del video original, para el video final. Los fotogramas
+ *  salieron del tramo que empieza en `start` (segundos, VideoMeta.inicio_s)
+ *  a los fps del proyecto, así que el sonido de ese tramo, recortado a lo
+ *  que dura la secuencia, cae en su sitio sin más. */
+export interface AudioFrom {
+  file: File;
+  start: number;
+}
+
+/** Lo común a las tres exportaciones (WebCodecs, PNG en MOV, ProRes). */
+export interface ExportOptions {
+  /** 0 = resolución nativa de los frames */
+  targetH?: number;
+  audio?: AudioFrom;
+  /** Cancelar (botón Cancel): entre fotograma y fotograma. Con ffmpeg
+   *  además se termina la instancia, que es lo único que interrumpe un
+   *  exec (ver avi.ts). Sale como CancelledError. */
+  signal?: AbortSignal;
+}
+
+export interface BuildVideoOptions extends ExportOptions {
   format?: 'auto' | 'mp4' | 'webm';
   quality?: string;
   bitrateMbps?: number;
-  /** 0 = resolución nativa de los frames */
-  targetH?: number;
 }
 
 export interface VideoResult {
   bytes: Bytes;
   mime: string;
   ext: string;
+  /** Lleva la pista de audio del original. */
+  audio: boolean;
 }
 
 interface MediabunnyProbe {
@@ -396,6 +427,96 @@ interface CodecCandidate {
   ext: string;
 }
 
+// ── audio del original ──────────────────────────────────────────
+
+interface OpenAudio {
+  input: Input;
+  track: InputAudioTrack;
+}
+
+/** La pista de audio del video original, o null si no tiene ninguna (o el
+ *  navegador no la decodifica): entonces el video sale mudo, como siempre,
+ *  y quien llama lo dice. El Input es del llamador: input.dispose(). */
+async function openAudio(file: File): Promise<OpenAudio | null> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    if (!track || !(await track.canDecode())) {
+      input.dispose();
+      return null;
+    }
+    return { input, track };
+  } catch (e) {
+    input.dispose();
+    throw e;
+  }
+}
+
+/** ¿Llega el audio del original hasta donde empieza el tramo? Un inicio
+ *  más allá del final (un layout de otro video, un número mal tecleado)
+ *  daría una pista vacía, que el muxer no escribe: mejor mudo y avisado. */
+async function audioReaches(track: InputAudioTrack, from: AudioFrom): Promise<boolean> {
+  const dur = await track.computeDuration();
+  if (from.start < dur - 0.01) return true;
+  console.warn(
+    `[video] the audio of ${from.file.name} lasts ${dur.toFixed(2)} s; nothing to take from ${from.start.toFixed(2)} s on`,
+  );
+  return false;
+}
+
+/** Con qué codificar el audio para este contenedor y este navegador: AAC
+ *  en MP4 y Opus en WebM donde el navegador los codifica (Chrome, Safari;
+ *  Firefox no trae codificador AAC y cae a Opus, que MP4 admite y los
+ *  navegadores reproducen), y PCM como último recurso. */
+async function pickAudioCodec(
+  format: OutputFormat,
+  track: InputAudioTrack,
+): Promise<AudioCodec | null> {
+  const wanted: AudioCodec[] = ['aac', 'opus', 'pcm-s16'];
+  const supported = format.getSupportedAudioCodecs();
+  return getFirstEncodableAudioCodec(
+    wanted.filter((c) => supported.includes(c)),
+    { numberOfChannels: track.numberOfChannels, sampleRate: track.sampleRate },
+  );
+}
+
+/** Vuelca en `source` el audio del tramo [start, start + duration) del
+ *  original, con el tiempo contado desde el principio del tramo: es el
+ *  mismo reloj que los fotogramas (el fotograma i va en i / fps). Corre a
+ *  la vez que la codificación del video; el muxer entrelaza. */
+async function pumpAudio(
+  track: InputAudioTrack,
+  source: AudioSampleSource,
+  start: number,
+  duration: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const end = start + duration;
+  const sink = new AudioSampleSink(track);
+  for await (const sample of sink.samples(start, end)) {
+    try {
+      throwIfCancelled(signal, 'Video export cancelled.');
+      // el primer bloque suele empezar antes del tramo y el último acabar
+      // después: se recortan a la muestra, que es lo que mantiene el
+      // sonido alineado con el primer fotograma
+      const rate = sample.sampleRate;
+      const from = sample.timestamp < start ? Math.round((start - sample.timestamp) * rate) : 0;
+      const to =
+        sample.timestamp + sample.duration > end
+          ? Math.round((end - sample.timestamp) * rate)
+          : sample.numberOfFrames;
+      if (from >= to) continue;
+      const piece = from > 0 || to < sample.numberOfFrames ? sample.trim(from, to) : sample;
+      piece.setTimestamp(Math.max(0, piece.timestamp - start));
+      await source.add(piece);
+      if (piece !== sample) piece.close();
+    } finally {
+      sample.close();
+    }
+  }
+  source.close();
+}
+
 /**
  * Reconstruye el video a partir de una secuencia de imágenes (Blob/bytes PNG).
  * frames: array de () => Promise<ImageBitmap> EN ORDEN (con repetidos).
@@ -422,6 +543,7 @@ export async function buildVideo(
   // recargar se lleva por delante el proyecto, que no se persiste).
   let openBmp: ImageBitmap | null = null; // fotograma en curso, aún sin cerrar
   let output: Output | null = null; // dueño del encoder y del muxer
+  let audio: OpenAudio | null = null; // el original abierto, si lleva sonido
   try {
     let fw = first.width;
     let fh = first.height;
@@ -479,12 +601,47 @@ export async function buildVideo(
     const canvas = new OffscreenCanvas(w, h);
     const ctx = context2d(canvas);
     const target = new BufferTarget();
-    output = new Output({ format: chosen.format(), target });
+    const format = chosen.format();
+    output = new Output({ format, target });
     const source = new CanvasSource(canvas, { codec: chosen.codec, bitrate });
     output.addVideoTrack(source, { frameRate: fps });
+    // la pista de audio del original, si la tiene y hay con qué codificarla
+    let audioSource: AudioSampleSource | null = null;
+    if (opts.audio) {
+      audio = await openAudio(opts.audio.file);
+      if (audio && !(await audioReaches(audio.track, opts.audio))) {
+        audio.input.dispose();
+        audio = null;
+      }
+      if (audio) {
+        const codec = await pickAudioCodec(format, audio.track);
+        if (codec) {
+          audioSource = new AudioSampleSource({ codec, quality: QUALITY_HIGH });
+          output.addAudioTrack(audioSource);
+        } else {
+          console.warn('[video] no audio codec this browser can write into the chosen container');
+          audio.input.dispose();
+          audio = null;
+        }
+      } else {
+        console.warn(`[video] ${opts.audio.file.name} has no audio track this browser can decode`);
+      }
+    }
     await output.start();
 
     const dur = 1 / fps;
+    // el audio va a la vez que los fotogramas; su error sale al esperarlo
+    const audioDone =
+      audio && audioSource && opts.audio
+        ? pumpAudio(
+            audio.track,
+            audioSource,
+            opts.audio.start,
+            frameGetters.length * dur,
+            opts.signal,
+          )
+        : Promise.resolve();
+    audioDone.catch(() => {});
     // caché de reescalados por getter: los dibujos deduplicados se repiten en
     // la línea de tiempo (la fase ④ reusa el MISMO getter por dibujo) y volver
     // a pasar cada repetición por Lanczos sería trabajo tirado. Presupuesto en
@@ -493,6 +650,7 @@ export async function buildVideo(
     let scaledBytes = 0;
     const SCALED_BUDGET = 300e6;
     for (let i = 0; i < frameGetters.length; i++) {
+      throwIfCancelled(opts.signal, 'Video export cancelled.');
       ctx.fillStyle = 'white';
       ctx.fillRect(0, 0, w, h);
       const hit = scaled.get(frameGetters[i]);
@@ -516,15 +674,22 @@ export async function buildVideo(
       onProgress?.(i + 1, frameGetters.length);
     }
     first.close();
+    await audioDone;
     await output.finalize();
     recycleIdle(); // el remuestreo de frames grandes infla la memoria WASM
     if (!target.buffer) throw new Error('The video encoder produced no output.');
-    return { bytes: new Uint8Array(target.buffer), mime: chosen.mime, ext: chosen.ext };
+    return {
+      bytes: new Uint8Array(target.buffer),
+      mime: chosen.mime,
+      ext: chosen.ext,
+      audio: !!audioSource,
+    };
   } finally {
     // close() de un ImageBitmap ya cerrado no lanza (queda "detached"), así
     // que el camino bueno pasa por aquí sin enterarse
     openBmp?.close();
     first.close();
+    audio?.input.dispose();
     // cancel() suelta encoder y muxer; sobre un Output ya finalizado solo
     // dejaría un aviso en consola, por eso se mira el estado. Su propio fallo
     // se registra y no se relanza: taparía el error de verdad
@@ -604,9 +769,10 @@ interface PreparedPngs {
 async function prepareFramePngs(
   frames: Blob[],
   onProgress?: (i: number, n: number) => void,
-  opts: { targetH?: number } = {},
+  opts: ExportOptions = {},
 ): Promise<PreparedPngs> {
   if (!frames.length) throw new Error('There are no frames to build the video.');
+  throwIfCancelled(opts.signal, 'Video export cancelled.');
   // dimensiones por Blob ÚNICO (la línea de tiempo repite dibujos) y con
   // concurrencia acotada: un lote no-PNG lanzaría cientos de decodes a la vez
   const uniq = [...new Set(frames)];
@@ -639,6 +805,7 @@ async function prepareFramePngs(
   const ctx = context2d(canvas);
   const rendered = new Map<Blob, Blob>(); // mismo Blob repetido (dedup) → un solo render
   for (let i = 0; i < frames.length; i++) {
+    throwIfCancelled(opts.signal, 'Video export cancelled.');
     let b = rendered.get(frames[i]);
     if (!b) {
       const bmp = await decodeFrameBitmap(frames[i]);
@@ -670,15 +837,47 @@ function movTooBig(estBytes: number, kind: string): Error {
   );
 }
 
+interface MovResult {
+  bytes: Bytes;
+  audio: boolean;
+}
+
 async function framesToMov(
   blobs: Blob[],
   fps: number,
   codecArgs: string[],
   onEncodeProgress?: (p: number) => void,
-): Promise<Bytes> {
-  const { withFF, FFFSType } = await import('./avi.ts');
+  opts: ExportOptions = {},
+): Promise<MovResult> {
+  const { withFF, FFFSType, abortFF } = await import('./avi.ts');
+  throwIfCancelled(opts.signal, 'Video export cancelled.');
+  // el audio, si el original lo tiene: ffmpeg lo lee del archivo montado
+  // (WORKERFS, sin copiarlo) del tramo de los fotogramas y lo deja como
+  // PCM, que es lo que llevan los MOV de edición. mediabunny solo decide si
+  // HAY pista: un original sin sonido daría un MOV mudo sin avisar.
+  let withAudio = false;
+  if (opts.audio) {
+    const a = await openAudio(opts.audio.file).catch((e: unknown) => {
+      console.warn('[video] could not open the original for its audio:', e);
+      return null;
+    });
+    if (a) {
+      withAudio = await audioReaches(a.track, opts.audio);
+      a.input.dispose();
+    } else {
+      console.warn(`[video] ${opts.audio.file.name} has no audio track this browser can read`);
+    }
+  }
+  const audioFrom = withAudio ? opts.audio : undefined;
+  const duration = blobs.length / fps;
   // sesión exclusiva: la instancia de ffmpeg se comparte con la extracción
   return withFF(async (ff) => {
+    // cancelar = terminar la instancia (exec no se interrumpe de otro modo);
+    // la llamada en curso rechaza y abajo se reconoce por la señal
+    const onAbort = (): void => {
+      void abortFF();
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     const onProg = onEncodeProgress
       ? ({ progress }: { progress: number }) => {
           if (progress > 0 && progress <= 1) onEncodeProgress(progress);
@@ -686,6 +885,7 @@ async function framesToMov(
       : null;
     if (onProg) ff.on('progress', onProg);
     try {
+      throwIfCancelled(opts.signal, 'Video export cancelled.');
       await ff.createDir('/frames');
       await ff.mount(
         FFFSType.WORKERFS,
@@ -697,6 +897,14 @@ async function framesToMov(
         },
         '/frames',
       );
+      if (audioFrom) {
+        await ff.createDir('/audio');
+        await ff.mount(
+          FFFSType.WORKERFS,
+          { blobs: [{ name: 'in', data: audioFrom.file }] },
+          '/audio',
+        );
+      }
       await ff.exec([
         // sin `-threads`: la prueba del multihilo solo cubre DEcodificar, y
         // un codificador con hilos se cuelga en Chrome (ver avi.ts); ffmpeg
@@ -708,6 +916,24 @@ async function framesToMov(
         String(fps),
         '-i',
         '/frames/f_%06d.png',
+        ...(audioFrom
+          ? [
+              // -ss/-t ANTES del -i: recorte a la entrada, del tramo exacto
+              '-ss',
+              audioFrom.start.toFixed(4),
+              '-t',
+              duration.toFixed(4),
+              '-i',
+              '/audio/in',
+              '-map',
+              '0:v:0',
+              '-map',
+              '1:a:0',
+              '-c:a',
+              'pcm_s16le',
+              '-shortest',
+            ]
+          : []),
         ...codecArgs,
         'out.mov',
       ]);
@@ -716,13 +942,25 @@ async function framesToMov(
         throw new Error('The MOV muxer returned text instead of bytes.');
       if (!data.length) throw new Error('The MOV muxer produced no output.');
       // readFile copia el archivo fuera de la memoria WASM: ArrayBuffer propio
-      return data as Bytes;
+      return { bytes: data as Bytes, audio: !!audioFrom };
+    } catch (e) {
+      // la instancia terminada por onAbort rechaza lo que estuviera en
+      // curso: es la parada, no un fallo
+      throwIfCancelled(opts.signal, 'Video export cancelled.');
+      throw e;
     } finally {
+      opts.signal?.removeEventListener('abort', onAbort);
       if (onProg) ff.off('progress', onProg);
       try {
         await ff.unmount('/frames');
       } catch {
         /* sin montar */
+      }
+      try {
+        await ff.unmount('/audio');
+        await ff.deleteDir('/audio');
+      } catch {
+        /* sin audio, o sin montar */
       }
       try {
         await ff.deleteDir('/frames');
@@ -749,13 +987,13 @@ export async function buildVideoLossless(
   frames: Blob[],
   fps: number,
   onProgress?: (i: number, n: number) => void,
-  opts: { targetH?: number } = {},
+  opts: ExportOptions = {},
 ): Promise<VideoResult> {
   const { blobs } = await prepareFramePngs(frames, onProgress, opts);
   const total = blobs.reduce((a, b) => a + b.size, 0);
   if (total > MAX_MOV_BYTES) throw movTooBig(total, 'lossless');
-  const bytes = await framesToMov(blobs, fps, ['-c:v', 'copy']);
-  return { bytes, mime: 'video/quicktime', ext: 'mov' };
+  const { bytes, audio } = await framesToMov(blobs, fps, ['-c:v', 'copy'], undefined, opts);
+  return { bytes, mime: 'video/quicktime', ext: 'mov', audio };
 }
 
 /**
@@ -768,7 +1006,7 @@ export async function buildVideoProres(
   frames: Blob[],
   fps: number,
   onProgress?: (p: number) => void,
-  opts: { targetH?: number } = {},
+  opts: ExportOptions = {},
 ): Promise<VideoResult> {
   // preparación (reescalado/recomposición) como 0–30 % de la barra; la
   // codificación de ffmpeg ocupa el resto
@@ -780,7 +1018,7 @@ export async function buildVideoProres(
   // ProRes 4444 ronda 6–7 bits por píxel: estimar antes de codificar minutos
   const est = outW * outH * 0.85 * blobs.length;
   if (est > MAX_MOV_BYTES) throw movTooBig(est, 'ProRes');
-  const bytes = await framesToMov(
+  const { bytes, audio } = await framesToMov(
     blobs,
     fps,
     [
@@ -804,6 +1042,7 @@ export async function buildVideoProres(
       'apl0',
     ],
     (p) => onProgress?.(0.3 + 0.7 * p),
+    opts,
   );
-  return { bytes, mime: 'video/quicktime', ext: 'mov' };
+  return { bytes, mime: 'video/quicktime', ext: 'mov', audio };
 }
