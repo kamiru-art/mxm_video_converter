@@ -15,3 +15,29 @@ export function errMsg(e: unknown): string {
 export class BadRangeError extends Error {
   readonly badRange = true;
 }
+
+/** Parada pedida por el usuario (botón Cancel) a mitad de una tarea larga:
+ *  generar hojas, procesar escaneos, reconstruir el video. No es un fallo:
+ *  quien lo recoge lo anuncia como parada y no como error. */
+export class CancelledError extends Error {
+  readonly cancelled = true;
+  constructor(what = 'Cancelled.') {
+    super(what);
+    this.name = 'CancelledError';
+  }
+}
+
+/** ¿Es una parada pedida (CancelledError, o el AbortError del navegador)? */
+export function isCancelled(e: unknown): boolean {
+  return (
+    e instanceof CancelledError ||
+    (e instanceof DOMException && e.name === 'AbortError') ||
+    (!!e && typeof e === 'object' && 'cancelled' in e && e.cancelled === true)
+  );
+}
+
+/** Lanza CancelledError si la señal ya está abortada: la comprobación que
+ *  cada bucle largo hace entre una unidad de trabajo y la siguiente. */
+export function throwIfCancelled(signal: AbortSignal | undefined, what?: string): void {
+  if (signal?.aborted) throw new CancelledError(what);
+}

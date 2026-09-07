@@ -136,6 +136,18 @@ available:
 - MOV, with one PNG image for each frame, for a result without losses
 - MOV, with the ProRes 4444 codec, for video editors
 
+The final video can carry the sound of the original clip. The frames come
+from a stretch of that clip at the project's frame rate, so the sound of the
+same stretch falls into place by itself: phase ① notes where the stretch
+began, and phase ④ takes the audio from there, cut to the length of the
+sequence. The video from phase ① is used when it is still loaded; in another
+session, drop the clip in the Sound section. If you change the frame rate,
+the drawings and the sound drift apart, and the page says so.
+
+Every long task has a Cancel button: extracting frames, generating the
+sheets, processing a batch of scans, the rescue sheets and the final video.
+While one runs, the options of that panel are locked.
+
 The application reads MP4, WebM, AVI and MOV files. It decodes them with
 WebCodecs. If the browser cannot decode a file, the application uses
 `ffmpeg.wasm`. Thus the application also reads the MOV files of cameras, for

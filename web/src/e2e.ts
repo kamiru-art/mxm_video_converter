@@ -1,13 +1,13 @@
 // Prueba de punta a punta EN EL NAVEGADOR: hoja → "escaneo" girado →
 // procesado → frames recuperados. Verifica el núcleo WASM + workers + glue.
 
-import { errMsg } from './errors.ts';
+import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame } from './gen.ts';
 import { generateSheets, packImageData, settingsForCore } from './gen.ts';
 import { run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
 import { defaultSettings } from './settings.ts';
-import type { DetectOutput, Layout, PrinterProfile, ScanResult, Settings } from './types.ts';
+import type { Bytes, DetectOutput, Layout, PrinterProfile, ScanResult, Settings } from './types.ts';
 import { context2d } from './ui.ts';
 
 const logEl = document.getElementById('log');
@@ -82,6 +82,46 @@ async function main(): Promise<void> {
     });
     const sheetBlob = out.files.get('e2e_p1.png');
     if (!sheetBlob || !(sheetBlob instanceof Blob)) throw new Error('sheet was not generated');
+
+    // cancelar: una señal ya abortada corta antes de la primera hoja; abortar
+    // al terminar la primera corta antes de la segunda. Sale como
+    // CancelledError, no como fallo, y la generación siguiente funciona
+    const expectCancelled = async (p: Promise<unknown>, what: string): Promise<void> => {
+      try {
+        await p;
+      } catch (e) {
+        if (isCancelled(e)) return;
+        throw new Error(`${what}: ${errMsg(e)}`);
+      }
+      throw new Error(`${what}: did not cancel`);
+    };
+    const pre = new AbortController();
+    pre.abort();
+    await expectCancelled(
+      generateSheets({ settings: s, frames, labels, includeFrames: false, signal: pre.signal }),
+      'generateSheets with an aborted signal',
+    );
+    const mid = new AbortController();
+    let sheetsReady = 0;
+    await expectCancelled(
+      generateSheets({
+        settings: { ...s, cols: 1, rows: 1, fmt_pdf: false, fmt_tiff: false },
+        frames,
+        labels,
+        includeFrames: false,
+        signal: mid.signal,
+        onProgress: (_d, _t, note) => {
+          if (/ready$/.test(note)) {
+            sheetsReady++;
+            mid.abort();
+          }
+        },
+      }),
+      'generateSheets aborted after the first sheet',
+    );
+    if (sheetsReady !== 1)
+      throw new Error(`cancel: ${sheetsReady} sheets were made before stopping`);
+    log('cancelar la generación: antes de empezar y tras la primera hoja ✓');
     const tif = out.files.get('e2e_p1.tif');
     if (!(tif instanceof Blob) || !tif.size) throw new Error('TIFF export missing');
     const sheetPng = new Uint8Array(await sheetBlob.arrayBuffer());
@@ -532,6 +572,27 @@ async function main(): Promise<void> {
         log(`OPFS: ${back.length} bytes ida y vuelta`);
 
         const getters = got.map((b) => () => createImageBitmap(b));
+        // cancelar la exportación tras el primer fotograma: CancelledError, y
+        // el codificador queda libre para la siguiente (Chrome limita las
+        // sesiones de codificación abiertas)
+        const vctl = new AbortController();
+        let encoded = 0;
+        try {
+          await buildVideo(
+            getters,
+            2,
+            (i) => {
+              encoded = i;
+              if (i === 1) vctl.abort();
+            },
+            { signal: vctl.signal },
+          );
+          throw new Error('buildVideo did not cancel');
+        } catch (e) {
+          if (!isCancelled(e)) throw new Error(`buildVideo cancel: ${errMsg(e)}`);
+        }
+        if (encoded !== 1) throw new Error(`buildVideo cancel: ${encoded} frames encoded`);
+        log('cancelar la exportación tras el primer fotograma ✓');
         const out2 = await buildVideo(getters, 2);
         log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
         if (out2.bytes.length < 5000) throw new Error('suspiciously small output video');
@@ -541,9 +602,99 @@ async function main(): Promise<void> {
         log(`video reescalado a 120p: ${out3.ext} de ${out3.bytes.length} bytes`);
         if (out3.bytes.length < 2000) throw new Error('scaled video output too small');
 
+        // audio del original en el video final: el tramo [start, start + N/fps)
+        // del clip, recortado a la muestra y con el reloj de los fotogramas.
+        // La muestra lleva un tono de 440 Hz que pasa a 880 Hz en t = 1.5 s:
+        // con start = 0.5 s, el cambio tiene que caer en t = 1.0 s del video
+        const aresp = await fetch('/e2e_sample_audio.mp4');
+        const lossFrames = got.slice(0, 4);
+        if (aresp.ok) {
+          const asrc = new File([await aresp.arrayBuffer()], 'e2e_sample_audio.mp4', {
+            type: 'video/mp4',
+          });
+          const mb = await import('mediabunny');
+          /** Canal 0 del audio de un archivo, como una sola señal a su ritmo. */
+          const audioOf = async (
+            bytes: Bytes,
+            type: string,
+          ): Promise<{ codec: string | null; rate: number; pcm: Float32Array } | null> => {
+            const input = new mb.Input({
+              source: new mb.BlobSource(new Blob([bytes], { type })),
+              formats: mb.ALL_FORMATS,
+            });
+            try {
+              const track = await input.getPrimaryAudioTrack();
+              if (!track) return null;
+              const rate = track.sampleRate;
+              const dur = await track.computeDuration();
+              const pcm = new Float32Array(Math.ceil((dur + 0.1) * rate));
+              const sink = new mb.AudioSampleSink(track);
+              for await (const smp of sink.samples()) {
+                const ch = smp.toAudioBuffer().getChannelData(0);
+                const at = Math.round(smp.timestamp * rate);
+                if (at >= 0) pcm.set(ch.subarray(0, Math.min(ch.length, pcm.length - at)), at);
+                smp.close();
+              }
+              return { codec: track.codec, rate, pcm };
+            } finally {
+              input.dispose();
+            }
+          };
+          /** Frecuencia dominante en [t0, t1), por cruces por cero. */
+          const hz = (a: { rate: number; pcm: Float32Array }, t0: number, t1: number): number => {
+            let n = 0;
+            const i0 = Math.round(t0 * a.rate);
+            const i1 = Math.round(t1 * a.rate);
+            for (let i = i0 + 1; i < i1; i++) if (a.pcm[i - 1] < 0 !== a.pcm[i] < 0) n++;
+            return n / 2 / (t1 - t0);
+          };
+          const near = (v: number, want: number): boolean => Math.abs(v - want) < want * 0.1;
+          // 4 fotogramas a 2 fps: 2 s de video con el audio de [0.5, 2.5) s
+          const outA = await buildVideo(getters.slice(0, 4), 2, null, {
+            audio: { file: asrc, start: 0.5 },
+          });
+          if (!outA.audio) throw new Error('MP4 export reports no audio track');
+          const a = await audioOf(outA.bytes, outA.mime);
+          if (!a) throw new Error('MP4 export has no audio track');
+          const len = a.pcm.length / a.rate - 0.1;
+          const f1 = hz(a, 0.2, 0.8);
+          const f2 = hz(a, 1.2, 1.8);
+          log(
+            `audio en el ${outA.ext}: ${a.codec} ${a.rate} Hz, ${len.toFixed(2)} s; ${f1.toFixed(0)} Hz al principio, ${f2.toFixed(0)} Hz al final`,
+          );
+          if (Math.abs(len - 2) > 0.15)
+            throw new Error(`audio lasts ${len.toFixed(2)} s, expected 2`);
+          if (!near(f1, 440) || !near(f2, 880))
+            throw new Error(`audio is not in sync: ${f1.toFixed(0)} / ${f2.toFixed(0)} Hz`);
+          // el mismo tramo en el MOV sin pérdida, como PCM por ffmpeg.wasm
+          const { buildVideoLossless: lossless } = await import('./video.ts');
+          const outLA = await lossless(lossFrames, 2, undefined, {
+            audio: { file: asrc, start: 0.5 },
+          });
+          if (!outLA.audio) throw new Error('MOV export reports no audio track');
+          const la = await audioOf(outLA.bytes, outLA.mime);
+          if (!la) throw new Error('lossless MOV has no audio track');
+          const llen = la.pcm.length / la.rate - 0.1;
+          const lf1 = hz(la, 0.2, 0.8);
+          const lf2 = hz(la, 1.2, 1.8);
+          log(
+            `audio en el MOV: ${la.codec} ${la.rate} Hz, ${llen.toFixed(2)} s; ${lf1.toFixed(0)} / ${lf2.toFixed(0)} Hz`,
+          );
+          if (Math.abs(llen - 2) > 0.15 || !near(lf1, 440) || !near(lf2, 880))
+            throw new Error(
+              `MOV audio wrong: ${llen.toFixed(2)} s, ${lf1.toFixed(0)} / ${lf2.toFixed(0)} Hz`,
+            );
+          // un original SIN audio: el video sale mudo y lo dice
+          const outNo = await buildVideo(getters.slice(0, 2), 2, null, {
+            audio: { file: vblob, start: 0 },
+          });
+          if (outNo.audio) throw new Error('a silent source produced an audio track');
+        } else {
+          log('· (sin muestra con audio: prueba de audio omitida)');
+        }
+
         // exportación lossless: PNG en MOV por stream copy (ffmpeg.wasm)
         const { buildVideoLossless } = await import('./video.ts');
-        const lossFrames = got.slice(0, 4);
         const outL = await buildVideoLossless(lossFrames, 2);
         const headL = new TextDecoder('latin1').decode(outL.bytes.slice(0, 16));
         log(`lossless MOV: ${outL.bytes.length} bytes (${outL.ext})`);

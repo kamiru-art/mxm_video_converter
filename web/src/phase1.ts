@@ -1,6 +1,6 @@
 // Fase ① — Generar hojas de contacto.
 
-import { errMsg } from './errors.ts';
+import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame, PackItem } from './gen.ts';
 import {
   generateSheets,
@@ -33,6 +33,7 @@ import type {
 } from './types.ts';
 import type { SelectOption } from './ui.ts';
 import {
+  cancelButton,
   check,
   context2d,
   download,
@@ -41,6 +42,7 @@ import {
   etaClock,
   field,
   fmtBytes,
+  lockControls,
   numberInput,
   originalPageNumbers,
   pngUrl,
@@ -112,6 +114,14 @@ export const ph1: Phase1State = {
 
 function stem(name: string): string {
   return name.replace(/\.[^.]+$/, '');
+}
+
+/** El video del que salieron los fotogramas cargados, mientras siga
+ *  siendo ese el proyecto: la fase ④ le saca el audio para el video final
+ *  sin pedirlo otra vez. Null cuando el proyecto viene de imágenes. */
+let loadedVideo: File | null = null;
+export function currentVideo(): File | null {
+  return loadedVideo;
 }
 
 function formatLabel(s: Settings, num: number): string {
@@ -257,8 +267,12 @@ export function mountPhase1(root: HTMLElement): void {
     stopBtn.disabled = false;
     stopBtn.textContent = 'Stop';
     stopBtn.style.display = '';
+    // todo el panel bloqueado salvo Stop: cambiar el rango o soltar otro
+    // video a mitad no afectaba a lo que corría, pero parecía que sí
+    const unlock = lockControls(paper, [stopBtn]);
     extractProg.show();
     clearFrames();
+    loadedVideo = video;
     await clearFrameCache();
     let cached = 0; // fotogramas que dejó ffmpeg.wasm como PNG (en disco)
     try {
@@ -295,7 +309,15 @@ export function mountPhase1(root: HTMLElement): void {
             `frame ${i}${est ? ` of ~${est}` : ''} · ${eta(i, est ?? 0)}`,
           ),
       });
-      project.videoMeta = { fps_extraccion: meta.fps, origen: meta.origen };
+      // el tramo extraído queda en el layout: la fase ④ toma de ahí el
+      // audio original para el video final
+      const start = parseFloat(startIn.value) || 0;
+      project.videoMeta = {
+        fps_extraccion: meta.fps,
+        origen: meta.origen,
+        inicio_s: start,
+        fin_s: meta.fps ? start + meta.count / meta.fps : undefined,
+      };
       if (meta.cancelled) {
         toast(
           meta.count
@@ -323,6 +345,7 @@ export function mountPhase1(root: HTMLElement): void {
       toast(`Extraction failed: ${errMsg(e)}`, 'err');
     } finally {
       extracting = null;
+      unlock();
       extractBtn.disabled = false;
       stopBtn.style.display = 'none';
       extractProg.hide();
@@ -400,6 +423,7 @@ export function mountPhase1(root: HTMLElement): void {
             needsWasmDecode,
           });
         }
+        loadedVideo = null;
         project.videoMeta = { origen: 'images', fps_extraccion: 12 };
         if (rejected.length) {
           toast(
@@ -898,17 +922,22 @@ export function mountPhase1(root: HTMLElement): void {
     { class: 'btn sun', style: 'width:100%; margin-top:8px' },
     'Generate sheets (ZIP)',
   );
+  // Cancelar a mitad: un proyecto largo son minutos, y lo normal es haber
+  // visto en la barra que el formato o el rango no era el que se quería.
+  // El ZIP a medias se descarta; el proyecto sigue cargado.
+  const genCancel = cancelButton('Cancel');
   genBtn.addEventListener('click', async () => {
     const plan = computePlan();
     if (!plan.printed.length) {
       toast('There are no frames to print.', 'err');
       return;
     }
-    genBtn.disabled = true;
-    // otra extracción a mitad vaciaría el proyecto y la caché de disco de
-    // los que el ZIP aún está leyendo
-    const extractWas = extractBtn.disabled;
-    extractBtn.disabled = true;
+    const ctl = genCancel.arm();
+    // TODO el panel bloqueado (formatos, rejilla, nombres, el video…) salvo
+    // Cancel: nada de eso cambia la generación en curso, y otra extracción
+    // a mitad vaciaría el proyecto y la caché de disco de los que el ZIP
+    // aún está leyendo
+    const unlock = lockControls(paper, [genCancel.button]);
     genProg.show();
     // los PNG de los fotogramas que viven en el video, para el ZIP, en una
     // pasada compartida (ver framePngs); se codifican al empaquetar
@@ -955,6 +984,7 @@ export function mountPhase1(root: HTMLElement): void {
         includeFrames: ph1.includeFrames,
         prefetch: (chunk) => prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
         sink,
+        signal: ctl.signal,
         onProgress: (d, t, note) => genProg.set(d / t, `${note} · ${eta(d, t)}`),
       });
       project.layoutJson = out.layoutJson;
@@ -969,14 +999,18 @@ export function mountPhase1(root: HTMLElement): void {
         'ok',
       );
     } catch (e) {
-      console.error(e);
-      toast(`Generation failed: ${errMsg(e)}`, 'err');
+      if (isCancelled(e)) {
+        toast('Generation cancelled. Nothing was written; the frames stay loaded.');
+      } else {
+        console.error(e);
+        toast(`Generation failed: ${errMsg(e)}`, 'err');
+      }
       // el ZIP a medias no se queda en el disco
       await sink?.abort().catch(() => {});
     } finally {
       pngs?.cancel();
-      genBtn.disabled = false;
-      extractBtn.disabled = extractWas;
+      genCancel.disarm();
+      unlock();
       genProg.hide();
     }
   });
@@ -1222,6 +1256,7 @@ export function mountPhase1(root: HTMLElement): void {
           hasAlpha: false,
         });
       }
+      loadedVideo = null;
       project.videoMeta = { origen: 'demo', fps_extraccion: 6 };
       // una sola hoja: el ejemplo se imprime, se escanea y se rearma entero
       Object.assign(s, {
@@ -1466,6 +1501,7 @@ export function mountPhase1(root: HTMLElement): void {
     })(),
     genBtn,
     sizeInfo,
+    el('div', { class: 'row tight', style: 'justify-content:center' }, genCancel.button),
     genProg.root,
     warnBox,
 

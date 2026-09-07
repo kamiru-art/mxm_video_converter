@@ -1,21 +1,25 @@
 // Fase ④ — Reconstruir el video final desde los fotogramas procesados.
 
-import { errMsg } from './errors.ts';
+import { errMsg, isCancelled } from './errors.ts';
+import { currentVideo } from './phase1.ts';
 import { ph2 } from './phase2.ts';
 import { project } from './project.ts';
 import type { Layout, TimelineItem } from './types.ts';
 import {
+  cancelButton,
+  check,
   download,
   dropzone,
   el,
   field,
+  lockControls,
   numberInput,
   progressBar,
   sanitizeLabel,
   select,
   toast,
 } from './ui.ts';
-import type { VideoResult } from './video.ts';
+import type { AudioFrom, VideoResult } from './video.ts';
 import { buildVideo, buildVideoLossless, buildVideoProres, decodeFrameBitmap } from './video.ts';
 
 /** Un fotograma disponible para el video: el Blob PNG (o el archivo suelto). */
@@ -159,6 +163,66 @@ export function mountPhase4(root: HTMLElement): void {
   const nameIn = el('input', { type: 'text', placeholder: '= project name' });
   const prog = progressBar();
   prog.hide();
+
+  // ── audio del original ──────────────────────────────────────
+  // Los fotogramas son un tramo del video a N fps: el sonido de ese mismo
+  // tramo, recortado a lo que dura la secuencia, cae en su sitio solo. El
+  // video de la fase ① se usa sin pedirlo mientras sea el mismo proyecto;
+  // en otra sesión se suelta aquí.
+  let droppedAudio: File | null = null;
+  let appliedStart: number | null = null; // inicio_s del layout ya volcado al campo
+  const audioCheck = check('Add the sound of the original video, in sync with the frames', true);
+  const audioStartIn = numberInput(0, { min: 0, step: 0.01 });
+  const audioInfo = el('div', { class: 'hint' });
+  const audioDz = dropzone({
+    label: 'Original video (for its audio)',
+    sublabel: 'Optional: the clip the frames came from. Only its sound is used.',
+    accept: 'video/*,.mov,.mp4,.mkv,.webm,.avi,.mpg,.mpeg,.m4v',
+    onFiles: ([f]) => {
+      droppedAudio = f;
+      audioCheck.input.checked = true;
+      refreshAudioInfo();
+    },
+  });
+  interface AudioPick {
+    file: File;
+    from: string;
+  }
+  function audioPick(): AudioPick | null {
+    if (droppedAudio) return { file: droppedAudio, from: 'dropped here' };
+    const v = currentVideo();
+    const l = currentLayout();
+    // el de la fase ① vale si el layout es de ese mismo video (o no dice)
+    if (v && (!l?.video?.origen || l.video.origen === v.name)) return { file: v, from: 'phase ①' };
+    return null;
+  }
+  function audioFrom(): AudioFrom | undefined {
+    const pick = audioPick();
+    if (!pick || !audioCheck.input.checked) return undefined;
+    const start = parseFloat(audioStartIn.value);
+    return { file: pick.file, start: Number.isFinite(start) && start > 0 ? start : 0 };
+  }
+  function refreshAudioInfo(): void {
+    const pick = audioPick();
+    const l = currentLayout();
+    if (!pick) {
+      audioInfo.textContent =
+        'No original video at hand: drop it above to add its sound. The video comes out silent otherwise.';
+      return;
+    }
+    const fpsOut = parseFloat(fpsIn.value) || 0;
+    const fpsSrc = l?.video?.fps_extraccion ?? 0;
+    const start = parseFloat(audioStartIn.value) || 0;
+    let txt = `Audio from ${pick.file.name} (${pick.from}), from ${start.toFixed(2)} s of it.`;
+    if (fpsSrc && fpsOut && Math.abs(fpsOut - fpsSrc) > 1e-6) {
+      const ratio = fpsOut / fpsSrc;
+      txt += ` The frames were extracted at ${fpsSrc} fps: at ${fpsOut} fps the drawings run ${ratio.toFixed(2)}× ${ratio > 1 ? 'faster' : 'slower'} than the sound and drift apart. Use ${fpsSrc} fps to keep them together.`;
+    }
+    audioInfo.textContent = txt;
+  }
+  audioCheck.input.addEventListener('change', refreshAudioInfo);
+  audioStartIn.addEventListener('change', refreshAudioInfo);
+  fpsIn.addEventListener('change', refreshAudioInfo);
   const preview = el('video', {
     controls: '',
     style: 'max-width:100%; border-radius:6px; margin-top:10px; display:none',
@@ -188,6 +252,15 @@ export function mountPhase4(root: HTMLElement): void {
       ? `Layout: ${l.proyecto || 'project'} · ${l.timeline?.length || 'no'} positions in the timeline`
       : 'Load a layout.json (or process scans in phase ②).';
     if (l?.video?.fps_extraccion) fpsIn.value = String(l.video.fps_extraccion);
+    // dónde empieza el tramo en el original: lo dice el layout desde que
+    // la fase ① lo apunta; uno antiguo deja el 0 y se corrige a mano. Solo
+    // al cambiar de layout: volver a la pestaña no pisa lo tecleado
+    const start = l?.video?.inicio_s;
+    if (start != null && start !== appliedStart) {
+      audioStartIn.value = String(start);
+      appliedStart = start;
+    }
+    refreshAudioInfo();
     const disponibles = availableMap();
     stateInfo.textContent = `${disponibles.size} frames available (phase ② in memory + whatever you drop here).`;
     if (l) {
@@ -224,6 +297,10 @@ export function mountPhase4(root: HTMLElement): void {
     { class: 'btn sun', style: 'width:100%; margin-top:10px' },
     'Rebuild video',
   );
+  // cancelar a mitad: una exportación 4K larga son minutos. Todo el panel
+  // queda bloqueado mientras corre: la calidad o la resolución ya no cambian
+  // lo que se está codificando
+  const buildCancel = cancelButton('Cancel');
   buildBtn.addEventListener('click', async () => {
     const l = currentLayout();
     if (!l) {
@@ -243,8 +320,16 @@ export function mountPhase4(root: HTMLElement): void {
     )
       return;
     buildBtn.disabled = true;
+    const ctl = buildCancel.arm();
+    const unlock = lockControls(paper, [buildCancel.button]);
     prog.show();
     try {
+      const audio = audioFrom();
+      const common = {
+        targetH: resSel.value === 'original' ? 0 : parseInt(resSel.value, 10),
+        audio,
+        signal: ctl.signal,
+      };
       // un getter por dibujo ÚNICO (files repite objetos para los dedup):
       // buildVideo cachea los reescalados por identidad del getter
       const getterOf = new Map<Available, () => Promise<ImageBitmap>>();
@@ -257,7 +342,6 @@ export function mountPhase4(root: HTMLElement): void {
         return g;
       });
       const fps = parseFloat(fpsIn.value) || 12;
-      const targetH = resSel.value === 'original' ? 0 : parseInt(resSel.value, 10);
       let out: VideoResult;
       if (qualSel.value === 'lossless') {
         const blobs = files.map((f) => f.data);
@@ -265,7 +349,7 @@ export function mountPhase4(root: HTMLElement): void {
           blobs,
           fps,
           (i, n) => prog.set(i / (n + 1), `preparing frame ${i}/${n}`),
-          { targetH },
+          common,
         );
       } else if (qualSel.value === 'prores') {
         const blobs = files.map((f) => f.data);
@@ -274,7 +358,7 @@ export function mountPhase4(root: HTMLElement): void {
           blobs,
           fps,
           (p) => prog.set(p, `encoding ProRes ${Math.round(p * 100)}%`),
-          { targetH },
+          common,
         );
       } else {
         const format = fmtSel.value === 'mp4' ? 'mp4' : fmtSel.value === 'webm' ? 'webm' : 'auto';
@@ -282,9 +366,17 @@ export function mountPhase4(root: HTMLElement): void {
           format,
           quality: qualSel.value,
           bitrateMbps: parseFloat(bitrateIn.value) || 0,
-          targetH,
+          ...common,
         });
       }
+      // se pidió audio y no lo hay: que no pase en silencio, nunca mejor dicho
+      if (audio && !out.audio) {
+        toast(
+          `${audio.file.name} has no audio track this browser can read: the video is silent.`,
+          'err',
+        );
+      }
+      const sound = out.audio ? ' With the original sound.' : '';
       const base = sanitizeLabel(nameIn.value.trim() || l.proyecto || 'video');
       const name = `${base}.${out.ext}`;
       download(out.bytes, name, out.mime);
@@ -295,19 +387,25 @@ export function mountPhase4(root: HTMLElement): void {
         preview.style.display = 'none';
         toast(
           qualSel.value === 'prores'
-            ? `ProRes MOV saved (${fps} fps). Open it in QuickTime or your editor; browsers cannot preview it.`
-            : `Lossless MOV saved (${fps} fps). Open it in DaVinci Resolve, Premiere, VLC or IINA; QuickTime and browsers cannot play PNG video. For a QuickTime-playable master use the ProRes 4444 quality.`,
+            ? `ProRes MOV saved (${fps} fps).${sound} Open it in QuickTime or your editor; browsers cannot preview it.`
+            : `Lossless MOV saved (${fps} fps).${sound} Open it in DaVinci Resolve, Premiere, VLC or IINA; QuickTime and browsers cannot play PNG video. For a QuickTime-playable master use the ProRes 4444 quality.`,
           'ok',
         );
       } else {
         preview.src = URL.createObjectURL(new Blob([out.bytes], { type: out.mime }));
         preview.style.display = '';
-        toast(`Video rebuilt (${out.ext.toUpperCase()}, ${fps} fps).`, 'ok');
+        toast(`Video rebuilt (${out.ext.toUpperCase()}, ${fps} fps).${sound}`, 'ok');
       }
     } catch (e) {
-      console.error(e);
-      toast(`Encoding failed: ${errMsg(e)}`, 'err');
+      if (isCancelled(e)) {
+        toast('Video export cancelled.');
+      } else {
+        console.error(e);
+        toast(`Encoding failed: ${errMsg(e)}`, 'err');
+      }
     } finally {
+      buildCancel.disarm();
+      unlock();
       buildBtn.disabled = false;
       prog.hide();
     }
@@ -363,6 +461,19 @@ export function mountPhase4(root: HTMLElement): void {
       field('Resolution', resSel),
     ),
     resInfo,
+    el('h3', {}, 'Sound'),
+    audioDz,
+    el(
+      'div',
+      { class: 'row' },
+      audioCheck.label,
+      field(
+        'Audio starts at (s)',
+        audioStartIn,
+        'Where the extracted range began in the original; filled in from the layout.',
+      ),
+    ),
+    audioInfo,
     el(
       'div',
       { class: 'hint' },
@@ -370,6 +481,7 @@ export function mountPhase4(root: HTMLElement): void {
     ),
     field('File name', nameIn),
     buildBtn,
+    el('div', { class: 'row tight', style: 'justify-content:center' }, buildCancel.button),
     prog.root,
   );
 

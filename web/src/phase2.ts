@@ -1,6 +1,6 @@
 // Fase ② — Procesar escaneos: de la hoja pintada/expuesta a fotogramas.
 
-import { errMsg } from './errors.ts';
+import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame } from './gen.ts';
 import { generateSheets, resolveCyanCurve } from './gen.ts';
 import { poolSize, recycleIdle, run } from './pool.ts';
@@ -10,6 +10,7 @@ import { defaultSettings } from './settings.ts';
 import type { Bytes, DetectOutput, Layout, ScanOutput, ScanResult, Settings } from './types.ts';
 import type { GalleryItem } from './ui.ts';
 import {
+  cancelButton,
   check,
   context2d,
   download,
@@ -17,6 +18,7 @@ import {
   el,
   field,
   lightbox,
+  lockControls,
   numberInput,
   pngUrl,
   progressBar,
@@ -321,6 +323,24 @@ export function mountPhase2(root: HTMLElement): void {
   }
 
   let processing = false;
+  // Cancelar el lote: no se toman más escaneos de la cola; los que ya
+  // corren en un worker terminan solos (el núcleo no se interrumpe) y sus
+  // filas entran en el informe. Todo el panel queda bloqueado mientras
+  // tanto: cambiar el bleed o el modo a mitad no cambiaba nada del lote.
+  const batchCancel = cancelButton('Cancel');
+  let unlockPanels: (() => void) | null = null;
+  function lockWhileProcessing(keep: Element[]): void {
+    const a = lockControls(paper, keep);
+    const b = lockControls(bench, keep);
+    unlockPanels = () => {
+      a();
+      b();
+      // los selectores de hoja creados durante el lote nacieron apagados
+      for (const sel of bench.querySelectorAll<HTMLSelectElement>('.assign-sel')) {
+        sel.disabled = !ph2.layout || !loadedScans.has(sel.dataset.scan ?? '');
+      }
+    };
+  }
 
   /** Opciones de detección comunes a todo el lote. */
   function currentOpts(): ScanOpts {
@@ -451,6 +471,8 @@ export function mountPhase2(root: HTMLElement): void {
     }
     processing = true;
     reprocessBtn.disabled = true;
+    const ctl = batchCancel.arm();
+    lockWhileProcessing([batchCancel.button]);
     prog.show();
     try {
       const ctx = await makeContext();
@@ -459,22 +481,36 @@ export function mountPhase2(root: HTMLElement): void {
       describeMachine(ctx.gpu, width);
       let done = 0;
       const queue = [...files];
+      const note = (): string =>
+        ctl.signal.aborted
+          ? `cancelling: finishing the scan(s) already running (${done}/${files.length} done)`
+          : `${done}/${files.length} scans`;
+      ctl.signal.addEventListener('abort', () => prog.set(done / files.length, note()), {
+        once: true,
+      });
       await Promise.all(
         Array.from({ length: width }, async () => {
-          for (let f = queue.shift(); f; f = queue.shift()) {
+          for (let f = queue.shift(); f && !ctl.signal.aborted; f = queue.shift()) {
             try {
               addResult(await runOne(f, ctx));
             } catch (e) {
               toast(`Error in one scan: ${errMsg(e)}`, 'err');
             }
             done++;
-            prog.set(done / files.length, `${done}/${files.length} scans`);
+            prog.set(done / files.length, note());
           }
         }),
       );
       recycleIdle(); // liberar la memoria WASM que infló el lote
       renderSummary();
-      toast('Processing finished. Check the report.', 'ok');
+      // cancelado cuando ya corrían todos: terminaron igual, no hubo parada
+      if (ctl.signal.aborted && done < files.length) {
+        toast(
+          `Cancelled after ${done} of ${files.length} scan(s). Those are in the report; the rest stay loaded for Reprocess.`,
+        );
+      } else {
+        toast('Processing finished. Check the report.', 'ok');
+      }
     } catch (e) {
       // la zona de soltar y el botón de reprocesar lanzan el lote sin await:
       // lo que falle al preparar el contexto (GPU, layout) no lo ve nadie más
@@ -482,6 +518,9 @@ export function mountPhase2(root: HTMLElement): void {
       toast(`Could not process the scans: ${errMsg(e)}`, 'err');
     } finally {
       prog.hide();
+      batchCancel.disarm();
+      unlockPanels?.();
+      unlockPanels = null;
       processing = false;
       reprocessBtn.disabled = false;
       refreshReprocess();
@@ -512,6 +551,8 @@ export function mountPhase2(root: HTMLElement): void {
     }
     processing = true;
     reprocessBtn.disabled = true;
+    // un solo escaneo: segundos, sin cancelar (el núcleo no se interrumpe)
+    lockWhileProcessing([]);
     prog.show();
     prog.set(0.35, `reprocessing ${name}…`);
     let ran = false;
@@ -537,6 +578,8 @@ export function mountPhase2(root: HTMLElement): void {
       toast(`Could not reprocess “${name}”: ${errMsg(e)}`, 'err');
     } finally {
       prog.hide();
+      unlockPanels?.();
+      unlockPanels = null;
       processing = false;
       reprocessBtn.disabled = false;
       refreshReprocess();
@@ -592,8 +635,10 @@ export function mountPhase2(root: HTMLElement): void {
     const cur = ph2.assign[scanName];
     const sel = select(sheetChoices(scanName), cur == null ? '' : String(cur));
     sel.className = 'assign-sel';
+    sel.dataset.scan = scanName;
     sel.title = 'Tell the app which sheet this scan is';
-    sel.disabled = !ph2.layout || !loadedScans.has(scanName);
+    // durante un lote nace apagado: lockWhileProcessing lo enciende al final
+    sel.disabled = !ph2.layout || !loadedScans.has(scanName) || processing;
     sel.addEventListener('change', async () => {
       const previous = ph2.assign[scanName];
       if (sel.value === '') delete ph2.assign[scanName];
@@ -963,6 +1008,7 @@ export function mountPhase2(root: HTMLElement): void {
   });
   const rescueProg = progressBar();
   rescueProg.hide();
+  const rescueCancel = cancelButton('Cancel');
   const rescueBtn = el(
     'button',
     {
@@ -1006,6 +1052,8 @@ export function mountPhase2(root: HTMLElement): void {
           return;
         }
         rescueBtn.disabled = true;
+        const ctl = rescueCancel.arm();
+        const unlock = lockControls(rescueSection, [rescueCancel.button]);
         rescueProg.show();
         try {
           // un layout v2 trae el bloque de ajustes completo: los valores por
@@ -1059,6 +1107,7 @@ export function mountPhase2(root: HTMLElement): void {
             timeline: [],
             videoMeta: ph2.layout.video ?? {},
             includeFrames: true,
+            signal: ctl.signal,
             onProgress: (d, t, note) => rescueProg.set(d / t, note),
           });
           const zip = await makeZip(out.files);
@@ -1068,9 +1117,15 @@ export function mountPhase2(root: HTMLElement): void {
             'ok',
           );
         } catch (e) {
-          console.error(e);
-          toast(`Rescue failed: ${errMsg(e)}`, 'err');
+          if (isCancelled(e)) {
+            toast('Rescue sheets cancelled.');
+          } else {
+            console.error(e);
+            toast(`Rescue failed: ${errMsg(e)}`, 'err');
+          }
         } finally {
+          rescueCancel.disarm();
+          unlock();
           rescueBtn.disabled = false;
           rescueProg.hide();
         }
@@ -1085,7 +1140,7 @@ export function mountPhase2(root: HTMLElement): void {
     el('h2', {}, 'Rescue sheets'),
     rescueDz,
     rescueInfo,
-    el('div', { class: 'btn-row' }, rescueBtn),
+    el('div', { class: 'btn-row' }, rescueBtn, rescueCancel.button),
     rescueProg.root,
   );
 
@@ -1181,6 +1236,7 @@ export function mountPhase2(root: HTMLElement): void {
     scansDz,
     demoBtn,
     reprocessBtn,
+    el('div', { class: 'row tight', style: 'justify-content:center' }, batchCancel.button),
     specsInfo,
     prog.root,
   );

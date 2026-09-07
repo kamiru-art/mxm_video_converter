@@ -19,8 +19,11 @@ export interface RawRgba {
 
 /** Lo que devuelve encode_frame: el PNG sin pérdida a resolución nativa (si
  *  se pidió) y la miniatura (si se pidió), como píxeles crudos. Crudos y no
- *  como ImageBitmap a propósito: Safari dibujaba basura con un ImageBitmap
- *  transferido desde un worker, y 147 KB de RGBA no tienen nada que fallar. */
+ *  como ImageBitmap porque el hilo principal la vuelca de todos modos en un
+ *  OffscreenCanvas propio (ProjectFrame.thumb), y 147 KB de RGBA se
+ *  transfieren igual de rápido y sin depender de la GPU del worker. (Los
+ *  ImageBitmap transferidos en las dos direcciones llegan bien también en
+ *  Safari: medido en frames.ts.) */
 export interface EncodedFrame {
   png: Blob | null;
   thumb: RawRgba | null;

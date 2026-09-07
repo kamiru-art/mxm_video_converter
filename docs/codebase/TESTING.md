@@ -53,6 +53,19 @@ and a ZIP are generated from frames that live in the video, and the PNG the
 ZIP produces is byte-identical to the one the eager extraction made of the
 same frame. The `ffmpeg.wasm` sample is extracted with `lazy: true` too and
 must still deliver PNGs, and the OPFS cache does a byte-exact round trip.
+Cancellation is covered where it is cheap to prove: `generateSheets` with an
+already-aborted signal must throw `CancelledError` before the first sheet,
+and aborting from `onProgress` after the first sheet must stop before the
+second; `buildVideo` aborted after the first encoded frame must throw the
+same error and leave the encoder free for the next export (Chrome caps the
+open encoding sessions). The audio test uses a third generated sample,
+`e2e_sample_audio.mp4`, whose tone steps from 440 Hz to 880 Hz at 1.5 s:
+an MP4 built from four frames at 2 fps with audio from 0.5 s must carry a
+track of about 2 s whose dominant frequency (zero crossings) is 440 Hz in
+the first half and 880 Hz in the second, which proves the cut and the
+re-timing at once; the same stretch goes through the lossless MOV path
+(ffmpeg, PCM) with the same check, and a silent source must produce a
+video without an audio track and say so.
 The PDF that phase 1 assembles from the streamed chunks must be one whole
 file: header first, `%%EOF` last, `startxref` pointing at the table, and
 the page image declared with the PNG predictor; the Rust tests of
