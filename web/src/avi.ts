@@ -336,20 +336,46 @@ function multiThreadWorks(): Promise<boolean> {
   return mtProbe;
 }
 
+/** Tope para traer el núcleo (32 MB en trozos) e instanciarlo. Generoso: en
+ *  una conexión lenta son minutos de descarga legítima. Pero con tope: un
+ *  `fetch` que no vuelve —una red que se cae a media descarga, un trozo que
+ *  el service worker sirve a medias— dejaba la exportación esperando para
+ *  siempre con la barra quieta, sin error y sin nada que hacer salvo
+ *  recargar. */
+const CORE_LOAD_MS = 300e3;
+
 async function loadCore(): Promise<FFmpeg> {
   if (ffmpegThreads() === 'multi' && (await multiThreadWorks())) {
-    const ff = await loadVariant('mt');
-    console.info(`[ffmpeg] multithreaded core, ${threadCount()} threads`);
-    return ff;
+    try {
+      const ff = await withTimeout(
+        loadVariant('mt'),
+        CORE_LOAD_MS,
+        'loading the multithreaded video converter',
+      );
+      console.info(`[ffmpeg] multithreaded core, ${threadCount()} threads`);
+      return ff;
+    } catch (e) {
+      console.warn(
+        '[ffmpeg] the multithreaded core did not load, using the single-threaded one:',
+        e,
+      );
+    }
   }
   mtFailed = true;
-  const ff = await loadVariant('st');
+  const ff = await withTimeout(loadVariant('st'), CORE_LOAD_MS, 'loading the video converter');
   console.info('[ffmpeg] single-threaded core');
   return ff;
 }
 
 function getFF(): Promise<FFmpeg> {
-  if (!ffPromise) ffPromise = loadCore();
+  // una carga fallida NO se queda cacheada: la siguiente exportación vuelve
+  // a intentarlo, que con una red intermitente es lo único que hace falta
+  if (!ffPromise) {
+    ffPromise = loadCore().catch((e: unknown) => {
+      ffPromise = null;
+      throw e;
+    });
+  }
   return ffPromise;
 }
 
@@ -393,6 +419,65 @@ export function withFF<T>(fn: (ff: FFmpeg) => Promise<T>): Promise<T> {
   });
   ffQueue = run.catch(() => {});
   return run;
+}
+
+/**
+ * Un `exec` que no puede quedarse colgado para siempre. ffmpeg corre dentro
+ * de un worker y en WebAssembly: si el módulo se atasca —el núcleo
+ * multihilo lo hace con según qué códec y navegador, ver la prueba de
+ * arriba—, `exec` no vuelve NUNCA. No hay error, no hay nada: la barra de
+ * progreso se queda quieta y la exportación parece eterna, que es
+ * exactamente lo que no puede pasar.
+ *
+ * Aquí se vigila que ffmpeg dé señales de vida (progreso o líneas de log) y,
+ * si calla más de `stallMs`, se termina la instancia y se lanza un error que
+ * la interfaz puede contar. Cancelar sigue funcionando igual: quien llama
+ * termina la instancia por su cuenta y el `exec` rechaza.
+ */
+export function execWatched(
+  ff: FFmpeg,
+  args: string[],
+  stallMs: number,
+  what: string,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const alive = (): void => {
+      if (settled) return;
+      clearTimeout(timer);
+      timer = setTimeout(stalled, stallMs);
+    };
+    const onLog = (): void => alive();
+    const onProgress = (): void => alive();
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ff.off('log', onLog);
+      ff.off('progress', onProgress);
+      fn();
+    };
+    function stalled(): void {
+      finish(() => {
+        // la instancia atascada no se recupera: terminarla libera su memoria
+        // y hace rechazar al exec que nunca iba a volver
+        void abortFF();
+        reject(
+          new Error(
+            `${what} stopped responding: ${(stallMs / 1000).toFixed(0)} s without a sign of life from the in-browser converter. Try again, and if it happens every time, use a lower resolution or split the range.`,
+          ),
+        );
+      });
+    }
+    ff.on('log', onLog);
+    ff.on('progress', onProgress);
+    alive();
+    ff.exec(args).then(
+      () => finish(resolve),
+      (e: unknown) => finish(() => reject(e instanceof Error ? e : new Error(String(e)))),
+    );
+  });
 }
 
 // El archivo de entrada se monta como WORKERFS: ffmpeg lee del Blob bajo

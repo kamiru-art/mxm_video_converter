@@ -1,7 +1,7 @@
 // Fase ④ — Reconstruir el video final desde los fotogramas procesados.
 
 import { errMsg, isCancelled } from './errors.ts';
-import { clearOutputs } from './opfs.ts';
+import { clearOutputs, holdFrames } from './opfs.ts';
 import { currentVideo } from './phase1.ts';
 import { ph2 } from './phase2.ts';
 import { project } from './project.ts';
@@ -20,7 +20,7 @@ import {
   select,
   toast,
 } from './ui.ts';
-import type { AudioFrom, VideoResult } from './video.ts';
+import type { AudioFrom, ExportStage, VideoResult } from './video.ts';
 import { buildVideo, buildVideoLossless, buildVideoProres, decodeFrameBitmap } from './video.ts';
 
 /** Un fotograma disponible para el video: el Blob PNG (o el archivo suelto). */
@@ -321,6 +321,7 @@ export function mountPhase4(root: HTMLElement): void {
     )
       return;
     buildBtn.disabled = true;
+    let release: (() => void) | undefined;
     const ctl = buildCancel.arm();
     const unlock = lockControls(paper, [buildCancel.button]);
     prog.show();
@@ -328,11 +329,32 @@ export function mountPhase4(root: HTMLElement): void {
       // el MOV ProRes se escribe en el disco privado del navegador: fuera
       // los de exportaciones anteriores que ya nadie descarga
       await clearOutputs(10 * 60e3);
+      // y que nadie borre los fotogramas de debajo mientras se leen (la
+      // fase ② los borra al vaciar su informe)
+      release = holdFrames();
       const audio = audioFrom();
+      // qué está pasando, no sólo cuánto va: una exportación larga que sólo
+      // enseña un número parece colgada en cuanto el número deja de subir
+      let stage: ExportStage = 'preparing';
+      let lastFrac = 0;
+      const step = (frac: number, text: string): void => {
+        lastFrac = frac;
+        prog.set(frac, text);
+      };
       const common = {
         targetH: resSel.value === 'original' ? 0 : parseInt(resSel.value, 10),
         audio,
         signal: ctl.signal,
+        // ninguna fase se queda sin rótulo: un número quieto y sin nombre
+        // es lo que hace que una exportación larga parezca colgada
+        onStage: (s: ExportStage, p?: number): void => {
+          stage = s;
+          if (s === 'sound') {
+            prog.set(lastFrac, `reading the sound of the original… ${Math.round((p ?? 0) * 100)}%`);
+          }
+          if (s === 'encoding') prog.set(lastFrac, 'starting the encoder…');
+          if (s === 'writing') prog.set(lastFrac, 'writing the video file…');
+        },
       };
       // un getter por dibujo ÚNICO (files repite objetos para los dedup):
       // buildVideo cachea los reescalados por identidad del getter
@@ -352,16 +374,26 @@ export function mountPhase4(root: HTMLElement): void {
         out = await buildVideoLossless(
           blobs,
           fps,
-          (i, n) => prog.set(i / (n + 1), `preparing frame ${i}/${n}`),
+          (i, n) =>
+            step(
+              i / (n + 1),
+              stage === 'writing' ? `writing frame ${i}/${n}` : `preparing frame ${i}/${n}`,
+            ),
           common,
         );
       } else if (qualSel.value === 'prores') {
         const blobs = files.map((f) => f.data);
-        prog.set(0.02, 'encoding ProRes…');
+        step(0.02, 'encoding ProRes…');
         out = await buildVideoProres(
           blobs,
           fps,
-          (p) => prog.set(p, `encoding ProRes ${Math.round(p * 100)}%`),
+          (p) =>
+            step(
+              p,
+              stage === 'preparing'
+                ? `preparing frames ${Math.round((p / 0.3) * 100)}%`
+                : `encoding ProRes ${Math.round(p * 100)}%`,
+            ),
           common,
         );
       } else {
@@ -373,10 +405,11 @@ export function mountPhase4(root: HTMLElement): void {
           ...common,
         });
       }
-      // se pidió audio y no lo hay: que no pase en silencio, nunca mejor dicho
+      // se pidió audio y no lo hay: que no pase en silencio, nunca mejor
+      // dicho, y con el motivo de verdad, que no siempre es el mismo
       if (audio && !out.audio) {
         toast(
-          `${audio.file.name} has no audio track this browser can read: the video is silent.`,
+          `${out.audioNote ?? `${audio.file.name} has no audio track this browser can read`}: the video is silent.`,
           'err',
         );
       }
@@ -408,6 +441,7 @@ export function mountPhase4(root: HTMLElement): void {
         toast(`Encoding failed: ${errMsg(e)}`, 'err');
       }
     } finally {
+      release?.();
       buildCancel.disarm();
       unlock();
       buildBtn.disabled = false;

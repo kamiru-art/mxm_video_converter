@@ -116,25 +116,31 @@ async function stressProres(params: URLSearchParams): Promise<void> {
   const w = parseInt(params.get('w') ?? '2160', 10);
   const h = parseInt(params.get('h') ?? '3840', 10);
   const fps = parseFloat(params.get('fps') ?? '12');
-  const c = new OffscreenCanvas(w, h);
-  const ctx = context2d(c);
+  // `vary`: fotogramas de tamaños que difieren en 1–2 px, como los recortes
+  // de escaneos de verdad. Fuerza el camino de recomposición (el passthrough
+  // no se toca) y con él encode_png_rgba
+  const vary = !!params.get('vary');
   const frames: Blob[] = [];
   let pngBytes = 0;
   for (let i = 0; i < n; i++) {
+    const fw = vary ? w - (i % 3) : w;
+    const fh = vary ? h - ((i + 1) % 3) : h;
+    const c = new OffscreenCanvas(fw, fh);
+    const ctx = context2d(c);
     // un degradado que gira, texto y unos discos: contenido distinto en
     // cada fotograma, con detalle suficiente para que ProRes no lo regale
-    const g = ctx.createLinearGradient(0, 0, w, h);
+    const g = ctx.createLinearGradient(0, 0, fw, fh);
     g.addColorStop(0, `hsl(${(i * 7) % 360} 70% 60%)`);
     g.addColorStop(1, `hsl(${(i * 7 + 180) % 360} 70% 30%)`);
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, fw, fh);
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     for (let k = 0; k < 40; k++) {
       const a = (i / n) * Math.PI * 2 + k * 0.4;
       ctx.beginPath();
       ctx.arc(
-        w / 2 + Math.cos(a) * (w / 3),
-        h / 2 + Math.sin(a) * (h / 3),
+        fw / 2 + Math.cos(a) * (fw / 3),
+        fh / 2 + Math.sin(a) * (fh / 3),
         20 + k * 3,
         0,
         Math.PI * 2,
@@ -142,15 +148,15 @@ async function stressProres(params: URLSearchParams): Promise<void> {
       ctx.fill();
     }
     ctx.fillStyle = 'black';
-    ctx.font = `${Math.round(h / 12)}px sans-serif`;
-    ctx.fillText(`frame ${i + 1}`, w / 10, h / 2);
+    ctx.font = `${Math.round(fh / 12)}px sans-serif`;
+    ctx.fillText(`frame ${i + 1}`, fw / 10, fh / 2);
     // a disco como BYTES, igual que los recortes de la fase ②: un Blob de
     // convertToBlob cuenta contra el cupo de Blobs de Chrome (~500 MB en
     // total) hasta que el recolector lo suelta, y pasado el cupo los
     // siguientes ya no se pueden leer (ver opfs.ts)
     const blob = await storeProcessedFrame(
       `stress_${i + 1}`,
-      await encodePng(ctx.getImageData(0, 0, w, h)),
+      await encodePng(ctx.getImageData(0, 0, fw, fh)),
     );
     frames.push(blob);
     pngBytes += blob.size;
@@ -159,12 +165,16 @@ async function stressProres(params: URLSearchParams): Promise<void> {
   log(`${n} fotogramas ${w}×${h}: ${(pngBytes / 1e6).toFixed(0)} MB de PNG`);
   let audio: { file: File; start: number } | undefined;
   if (params.get('audio')) {
-    const aresp = await fetch('/e2e_sample_audio.mp4');
-    if (!aresp.ok) throw new Error('no audio sample');
+    // `asrc=big`: un clip de 60 s y 117 MB, como el original de un proyecto
+    // de verdad, en vez de la muestra de 3 s de la suite
+    const name = params.get('asrc') === 'big' ? 'e2e_big_audio.mp4' : 'e2e_sample_audio.mp4';
+    const aresp = await fetch(`/${name}`);
+    if (!aresp.ok) throw new Error(`no audio sample: ${name}`);
     audio = {
-      file: new File([await aresp.arrayBuffer()], 'e2e_sample_audio.mp4', { type: 'video/mp4' }),
-      start: 0.5,
+      file: new File([await aresp.arrayBuffer()], name, { type: 'video/mp4' }),
+      start: parseFloat(params.get('astart') ?? '0.5'),
     };
+    log(`audio: ${name}, ${(audio.file.size / 1e6).toFixed(0)} MB, desde ${audio.start} s`);
   }
   const { buildVideoLossless, buildVideoProres } = await import('./video.ts');
   const lossless = params.get('quality') === 'lossless';
@@ -190,6 +200,7 @@ async function stressProres(params: URLSearchParams): Promise<void> {
   );
   const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
   if (mem) log(`heap JS usado: ${(mem.usedJSHeapSize / 1e6).toFixed(0)} MB`);
+  if (audio && !out.audio) throw new Error('the export dropped the audio track');
   const mb = await import('mediabunny');
   const input = new mb.Input({ source: new mb.BlobSource(blob), formats: mb.ALL_FORMATS });
   try {
@@ -206,6 +217,16 @@ async function stressProres(params: URLSearchParams): Promise<void> {
       bytes += p.byteLength;
     }
     const dur = await track.computeDuration();
+    if (audio) {
+      const at = await input.getPrimaryAudioTrack();
+      if (!at) throw new Error('the MOV has no audio track');
+      const adur = await at.computeDuration();
+      log(
+        `audio del MOV: ${at.codec} ${at.numberOfChannels} ch a ${at.sampleRate} Hz, ${adur.toFixed(3)} s`,
+      );
+      if (Math.abs(adur - n / fps) > 0.05)
+        throw new Error(`audio lasts ${adur.toFixed(3)} s, video ${(n / fps).toFixed(3)} s`);
+    }
     // mediabunny no conoce el códec PNG (codec null) pero lee la tabla de
     // muestras igual: cuenta, tamaños y tiempos
     log(
@@ -218,7 +239,9 @@ async function stressProres(params: URLSearchParams): Promise<void> {
       Math.abs(dur - n / fps) > 0.01
     )
       throw new Error(`joined MOV is wrong: ${count} frames, ${dur.toFixed(3)} s`);
-    if (lossless && bytes !== pngBytesTotal)
+    // sin `vary` los PNG entran tal cual (passthrough): en muestras, el MOV
+    // pesa exactamente lo que ellos. Con `vary` se recomponen y pesan otra cosa
+    if (lossless && !vary && bytes !== pngBytesTotal)
       throw new Error(`PNG samples total ${bytes} bytes, source PNGs ${pngBytesTotal}`);
   } finally {
     input.dispose();
@@ -821,7 +844,13 @@ async function main(): Promise<void> {
           const audioOf = async (
             bytes: Bytes | Blob,
             type: string,
-          ): Promise<{ codec: string | null; rate: number; pcm: Float32Array } | null> => {
+          ): Promise<{
+            codec: string | null;
+            rate: number;
+            channels: number;
+            dur: number;
+            pcm: Float32Array;
+          } | null> => {
             const input = new mb.Input({
               source: new mb.BlobSource(new Blob([bytes], { type })),
               formats: mb.ALL_FORMATS,
@@ -839,7 +868,7 @@ async function main(): Promise<void> {
                 if (at >= 0) pcm.set(ch.subarray(0, Math.min(ch.length, pcm.length - at)), at);
                 smp.close();
               }
-              return { codec: track.codec, rate, pcm };
+              return { codec: track.codec, rate, channels: track.numberOfChannels, dur, pcm };
             } finally {
               input.dispose();
             }
@@ -913,6 +942,96 @@ async function main(): Promise<void> {
             audio: { file: vblob, start: 0 },
           });
           if (outNo.audio) throw new Error('a silent source produced an audio track');
+
+          // ── el sonido en los dos MOV, combinación a combinación ──────
+          // Los mismos 4 fotogramas (2 s a 2 fps) con orígenes distintos:
+          // estéreo a 44.1 kHz, 5.1 (que se queda en dos canales porque un
+          // MOV de edición no lleva más), un tramo que el original ya no
+          // cubre (silencio hasta el final, pero la pista dura lo que el
+          // video), un tramo que ni empieza dentro y un original mudo.
+          const { buildVideoProres: proresQ } = await import('./video.ts');
+          /** Nivel eficaz del canal 0: distingue sonido de silencio. */
+          const rms = (a: { pcm: Float32Array }): number => {
+            let sum = 0;
+            for (const v of a.pcm) sum += v * v;
+            return Math.sqrt(sum / Math.max(1, a.pcm.length));
+          };
+          const cases: {
+            file: string;
+            start: number;
+            channels: number | null;
+            note: string;
+            /** El original sólo suena en el canal central: la mezcla a dos
+             *  canales tiene que traerlo, no tirarlo. */
+            loud?: boolean;
+          }[] = [
+            {
+              file: 'e2e_sample_audio_stereo.mp4',
+              start: 0.5,
+              channels: 2,
+              note: 'estéreo 44.1 kHz',
+            },
+            {
+              file: 'e2e_sample_audio_51.mp4',
+              start: 0.5,
+              channels: 2,
+              note: '5.1 → 2 canales',
+              loud: true,
+            },
+            {
+              file: 'e2e_sample_audio.mp4',
+              start: 2.5,
+              channels: 1,
+              note: 'el original se acaba antes',
+            },
+            { file: 'e2e_sample_audio.mp4', start: 5, channels: null, note: 'el tramo no existe' },
+            { file: 'e2e_sample.mp4', start: 0, channels: null, note: 'original mudo' },
+          ];
+          for (const c of cases) {
+            const r = await fetch(`/${c.file}`);
+            if (!r.ok) {
+              log(`· (sin ${c.file}: caso omitido)`);
+              continue;
+            }
+            const f = new File([await r.arrayBuffer()], c.file, { type: 'video/mp4' });
+            for (const quality of ['lossless', 'prores'] as const) {
+              const opts = { audio: { file: f, start: c.start }, chunkBytes: 1 };
+              const built =
+                quality === 'lossless'
+                  ? await lossless(lossFrames, 2, undefined, opts)
+                  : await proresQ(lossFrames, 2, undefined, opts);
+              const track = await audioOf(built.bytes, built.mime);
+              if (c.channels === null) {
+                if (built.audio || track)
+                  throw new Error(`${quality}, ${c.note}: an audio track appeared out of nowhere`);
+                continue;
+              }
+              // 5.1: si este navegador no decodifica esa disposición, el
+              // video sale mudo y avisa; lo que no puede es colgarse ni
+              // escribir una pista rota
+              if (!built.audio) {
+                log(`· ${quality}, ${c.note}: el navegador no lo decodifica, video mudo`);
+                if (track)
+                  throw new Error(`${quality}, ${c.note}: silent flag but a track is there`);
+                continue;
+              }
+              if (!track) throw new Error(`${quality}, ${c.note}: audio flag but no track`);
+              if (track.channels > 2)
+                throw new Error(`${quality}, ${c.note}: ${track.channels} channels in the MOV`);
+              if (Math.abs(track.dur - 2) > 0.05)
+                throw new Error(
+                  `${quality}, ${c.note}: audio lasts ${track.dur.toFixed(2)} s, video 2 s`,
+                );
+              const level = rms(track);
+              if (c.loud && level < 0.05)
+                throw new Error(
+                  `${quality}, ${c.note}: the centre channel did not reach the mix (rms ${level.toFixed(3)})`,
+                );
+              log(
+                `· ${quality}, ${c.note}: ${track.codec} ${track.channels} ch a ${track.rate} Hz, ${track.dur.toFixed(2)} s, rms ${level.toFixed(3)} ✓`,
+              );
+            }
+          }
         } else {
           log('· (sin muestra con audio: prueba de audio omitida)');
         }
