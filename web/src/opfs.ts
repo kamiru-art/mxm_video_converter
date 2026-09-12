@@ -13,11 +13,18 @@
 import type { Bytes } from './types.ts';
 
 const DIR = 'frames';
+/** Los fotogramas recortados de los escaneos (fase ②). Un proyecto largo
+ *  son cientos de PNG grandes: Chrome guarda los Blobs en memoria hasta
+ *  unos 500 MB en total y, pasado eso, los que siguen dejan de poder
+ *  leerse ("NotReadableError", medido en Chrome 152 con 180 fotogramas 4K:
+ *  fallan del nº 87 en adelante). Un Blob que viene de un archivo de OPFS
+ *  no cuenta: lo sirve el disco. */
+const PROCESSED = 'processed';
 /** Salidas (el ZIP y el PDF a medio armar): escritas a trozos, nunca enteras
  *  en memoria. Un Blob leído de aquí lo sirve el disco. */
 const OUT = 'out';
 
-let dirPromise: Promise<FileSystemDirectoryHandle | null> | null = null;
+const dirPromises = new Map<string, Promise<FileSystemDirectoryHandle | null>>();
 /** Un vaciado de la caché de fotogramas en curso: esa carpeta no se vuelve
  *  a crear hasta que termine, o el borrado se llevaría por delante los
  *  archivos nuevos. (Las salidas van por nombre único y por edad.) */
@@ -33,37 +40,47 @@ function supported(): boolean {
   );
 }
 
-function cacheDir(): Promise<FileSystemDirectoryHandle | null> {
-  if (!dirPromise) {
-    dirPromise = (async () => {
+function cacheDir(name = DIR): Promise<FileSystemDirectoryHandle | null> {
+  let p = dirPromises.get(name);
+  if (!p) {
+    p = (async () => {
       if (!supported()) return null;
       await clearing;
       try {
         const root = await navigator.storage.getDirectory();
-        return await root.getDirectoryHandle(DIR, { create: true });
+        return await root.getDirectoryHandle(name, { create: true });
       } catch {
         return null; // sin cuota, modo privado, política del navegador…
       }
     })();
+    dirPromises.set(name, p);
   }
-  return dirPromise;
+  return p;
 }
 
-/** Guarda `blob` en disco y devuelve un Blob respaldado por el archivo. Si
- *  no se puede, devuelve el mismo `blob` (en memoria): nunca falla. */
-export async function storeFrame(name: string, blob: Blob): Promise<Blob> {
-  const dir = await cacheDir();
-  if (!dir) return blob;
+/** Guarda `data` en disco y devuelve un Blob respaldado por el archivo. Si
+ *  no se puede, devuelve un Blob en memoria: nunca falla. Mejor bytes que un
+ *  Blob: un Blob en memoria cuenta contra el cupo de Chrome (ver PROCESSED)
+ *  hasta que el recolector lo suelta, y los bytes no. */
+export async function storeFrame(
+  name: string,
+  data: Bytes | Blob,
+  dirName = DIR,
+  type = 'image/png',
+): Promise<Blob> {
+  const asBlob = (): Blob => (data instanceof Blob ? data : new Blob([data], { type }));
+  const dir = await cacheDir(dirName);
+  if (!dir) return asBlob();
   try {
     const handle = await dir.getFileHandle(name, { create: true });
     const w = await handle.createWritable();
-    await w.write(blob);
+    await w.write(data);
     await w.close();
     return await handle.getFile();
   } catch (e) {
     const err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     console.warn(`[opfs] frame kept in memory (${err})`);
-    return blob;
+    return asBlob();
   }
 }
 
@@ -165,6 +182,53 @@ export async function openOutput(
   }
 }
 
+/** Un archivo de salida para un muxer que escribe por POSICIÓN: el MOV
+ *  vuelve al principio del `mdat` a cerrar su tamaño cuando termina. El
+ *  stream de OPFS acepta `{type: 'write', position, data}`, que es justo lo
+ *  que manda el StreamTarget de mediabunny, así que se le entrega tal cual.
+ *  Quien escribe cierra el stream; `file()` devuelve el archivo entero,
+ *  servido por el disco. null si no hay OPFS: el muxer se queda en memoria. */
+export interface SeekableOutput {
+  readonly writable: FileSystemWritableFileStream;
+  file(): Promise<Blob>;
+  /** Descarta lo escrito (un fallo o una parada a mitad). */
+  abort(): Promise<void>;
+}
+
+export async function openSeekableOutput(
+  name: string,
+  type: string,
+): Promise<SeekableOutput | null> {
+  const dir = await outDir();
+  if (!dir) return null;
+  try {
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    return {
+      writable,
+      async file() {
+        const f = await handle.getFile();
+        return new Blob([f], { type });
+      },
+      async abort() {
+        try {
+          await writable.abort();
+        } catch {
+          /* ya cerrado */
+        }
+        try {
+          await dir.removeEntry(name);
+        } catch {
+          /* ya no está */
+        }
+      },
+    };
+  } catch (e) {
+    console.warn(`[opfs] output "${name}" kept in memory:`, e);
+    return null;
+  }
+}
+
 /** Borra las salidas viejas: todas al montar la fase, y al empezar una
  *  generación las de hace más de `olderThanMs` (la descarga de la anterior
  *  puede seguir leyendo la suya). */
@@ -194,18 +258,34 @@ export async function clearOutputs(olderThanMs = 0): Promise<void> {
   }
 }
 
+let processedSeq = 0;
+
+/** Un fotograma recortado de un escaneo, a disco con nombre ÚNICO: la
+ *  misma etiqueta vuelve a salir cuando se escanea otra vez la misma hoja,
+ *  y pisar el archivo rompería el Blob del recorte anterior, que el informe
+ *  sigue mostrando. */
+export function storeProcessedFrame(label: string, png: Bytes | Blob): Promise<Blob> {
+  return storeFrame(`${++processedSeq}-${label}.png`, png, PROCESSED);
+}
+
 /** Vacía la caché. Al empezar una extracción y al montar la fase: un
  *  proyecto no sobrevive a la recarga, así que sus archivos tampoco. */
-export function clearFrameCache(): Promise<void> {
-  dirPromise = null;
+export function clearFrameCache(dirName = DIR): Promise<void> {
+  dirPromises.delete(dirName);
   if (!supported()) return Promise.resolve();
   clearing = clearing.then(async () => {
     try {
       const root = await navigator.storage.getDirectory();
-      await root.removeEntry(DIR, { recursive: true });
+      await root.removeEntry(dirName, { recursive: true });
     } catch {
       /* no existía, o el navegador no deja */
     }
   });
   return clearing;
+}
+
+/** Fuera los recortes de la fase ②: al montarla (los de la sesión
+ *  anterior) y al vaciar el informe, que es cuando ya nadie los referencia. */
+export function clearProcessedCache(): Promise<void> {
+  return clearFrameCache(PROCESSED);
 }

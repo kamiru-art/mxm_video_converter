@@ -4,12 +4,14 @@
 // Filosofía de calidad: cada fotograma extraído se guarda como PNG (sin
 // pérdida) a resolución nativa; no se aplica ningún filtro de color.
 
+import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import type {
   AudioCodec,
   InputAudioTrack,
   InputVideoTrack,
   OutputFormat,
   Quality,
+  Target,
   VideoCodec,
   WrappedCanvas,
 } from 'mediabunny';
@@ -21,15 +23,23 @@ import {
   BufferTarget,
   CanvasSink,
   CanvasSource,
+  EncodedAudioPacketSource,
+  EncodedPacket,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
   getFirstEncodableAudioCodec,
   getFirstEncodableVideoCodec,
   Input,
+  MovOutputFormat,
   Mp4OutputFormat,
   Output,
+  QTFF,
   QUALITY_HIGH,
   QUALITY_LOW,
   QUALITY_MEDIUM,
   QUALITY_VERY_HIGH,
+  StreamTarget,
+  WAVE,
   WebMOutputFormat,
 } from 'mediabunny';
 import { BadRangeError, throwIfCancelled } from './errors.ts';
@@ -108,6 +118,10 @@ export interface ExportOptions {
    *  además se termina la instancia, que es lo único que interrumpe un
    *  exec (ver avi.ts). Sale como CancelledError. */
   signal?: AbortSignal;
+  /** Sólo ProRes: tamaño del MOV que produce cada pasada de ffmpeg antes
+   *  de unirlo al archivo final. La E2E lo baja para ejercitar la unión de
+   *  varios trozos con pocos fotogramas. */
+  chunkBytes?: number;
 }
 
 export interface BuildVideoOptions extends ExportOptions {
@@ -117,7 +131,9 @@ export interface BuildVideoOptions extends ExportOptions {
 }
 
 export interface VideoResult {
-  bytes: Bytes;
+  /** Un Blob cuando el archivo está en el disco privado del navegador (la
+   *  ProRes, que no tiene tope de tamaño): leerlo no ocupa memoria. */
+  bytes: Bytes | Blob;
   mime: string;
   ext: string;
   /** Lleva la pista de audio del original. */
@@ -823,17 +839,37 @@ async function prepareFramePngs(
   return { blobs, outW, outH };
 }
 
+/** El original tiene sonido en el tramo pedido, o no lo tiene: sólo se
+ *  decide con mediabunny (si HAY pista); leerlo es cosa de ffmpeg, que abre
+ *  cualquier códec. Un original mudo daría un MOV mudo sin avisar. */
+async function audioIfPresent(opts: ExportOptions): Promise<AudioFrom | undefined> {
+  if (!opts.audio) return undefined;
+  const a = await openAudio(opts.audio.file).catch((e: unknown) => {
+    console.warn('[video] could not open the original for its audio:', e);
+    return null;
+  });
+  if (!a) {
+    console.warn(`[video] ${opts.audio.file.name} has no audio track this browser can read`);
+    return undefined;
+  }
+  const reaches = await audioReaches(a.track, opts.audio);
+  a.input.dispose();
+  return reaches ? opts.audio : undefined;
+}
+
 /** Muxa/codifica la secuencia de PNGs a un MOV con ffmpeg.wasm.
  *  WORKERFS: los PNG se leen desde los Blobs sin copiarlos a la memoria
  *  WASM; solo el MOV de salida vive en ella. */
-// El MOV de salida vive en la memoria WASM de ffmpeg (~2 GB útiles): las
-// exportaciones que lo excederían se rechazan con un mensaje claro en vez de
-// morir con un abort opaco del módulo.
+// El MOV de salida vive en el sistema de archivos de ffmpeg.wasm y sale
+// copiado entero (readFile): por encima de ~1.4 GB el módulo aborta sin
+// mensaje. La exportación sin pérdida (PNG en MOV) es una sola pasada y se
+// rechaza antes con un mensaje claro; la ProRes va por trozos (más abajo) y
+// no tiene tope.
 const MAX_MOV_BYTES = 1.4e9;
 
 function movTooBig(estBytes: number, kind: string): Error {
   return new Error(
-    `This ${kind} export would be about ${(estBytes / 1e9).toFixed(1)} GB; the in-browser muxer can hold about 1.4 GB. Lower the resolution, split the range, or download the processed frames ZIP from the Scans report and assemble it in your editor.`,
+    `This ${kind} export would be about ${(estBytes / 1e9).toFixed(1)} GB; the in-browser muxer can hold about 1.4 GB. Pick the ProRes 4444 quality (no size limit), lower the resolution, split the range, or download the processed frames ZIP from the Scans report and assemble it in your editor.`,
   );
 }
 
@@ -853,22 +889,8 @@ async function framesToMov(
   throwIfCancelled(opts.signal, 'Video export cancelled.');
   // el audio, si el original lo tiene: ffmpeg lo lee del archivo montado
   // (WORKERFS, sin copiarlo) del tramo de los fotogramas y lo deja como
-  // PCM, que es lo que llevan los MOV de edición. mediabunny solo decide si
-  // HAY pista: un original sin sonido daría un MOV mudo sin avisar.
-  let withAudio = false;
-  if (opts.audio) {
-    const a = await openAudio(opts.audio.file).catch((e: unknown) => {
-      console.warn('[video] could not open the original for its audio:', e);
-      return null;
-    });
-    if (a) {
-      withAudio = await audioReaches(a.track, opts.audio);
-      a.input.dispose();
-    } else {
-      console.warn(`[video] ${opts.audio.file.name} has no audio track this browser can read`);
-    }
-  }
-  const audioFrom = withAudio ? opts.audio : undefined;
+  // PCM, que es lo que llevan los MOV de edición.
+  const audioFrom = await audioIfPresent(opts);
   const duration = blobs.length / fps;
   // sesión exclusiva: la instancia de ffmpeg se comparte con la extracción
   return withFF(async (ff) => {
@@ -886,17 +908,7 @@ async function framesToMov(
     if (onProg) ff.on('progress', onProg);
     try {
       throwIfCancelled(opts.signal, 'Video export cancelled.');
-      await ff.createDir('/frames');
-      await ff.mount(
-        FFFSType.WORKERFS,
-        {
-          blobs: blobs.map((data, i) => ({
-            name: `f_${String(i + 1).padStart(6, '0')}.png`,
-            data,
-          })),
-        },
-        '/frames',
-      );
+      await mountFrames(ff, blobs);
       if (audioFrom) {
         await ff.createDir('/audio');
         await ff.mount(
@@ -937,12 +949,8 @@ async function framesToMov(
         ...codecArgs,
         'out.mov',
       ]);
-      const data = await ff.readFile('out.mov');
-      if (typeof data === 'string')
-        throw new Error('The MOV muxer returned text instead of bytes.');
-      if (!data.length) throw new Error('The MOV muxer produced no output.');
-      // readFile copia el archivo fuera de la memoria WASM: ArrayBuffer propio
-      return { bytes: data as Bytes, audio: !!audioFrom };
+      const data = await readOutput(ff, 'out.mov', 'The MOV muxer');
+      return { bytes: data, audio: !!audioFrom };
     } catch (e) {
       // la instancia terminada por onAbort rechaza lo que estuviera en
       // curso: es la parada, no un fallo
@@ -951,21 +959,12 @@ async function framesToMov(
     } finally {
       opts.signal?.removeEventListener('abort', onAbort);
       if (onProg) ff.off('progress', onProg);
-      try {
-        await ff.unmount('/frames');
-      } catch {
-        /* sin montar */
-      }
+      await unmountFrames(ff);
       try {
         await ff.unmount('/audio');
         await ff.deleteDir('/audio');
       } catch {
         /* sin audio, o sin montar */
-      }
-      try {
-        await ff.deleteDir('/frames');
-      } catch {
-        /* ya no está */
       }
       try {
         await ff.deleteFile('out.mov');
@@ -974,6 +973,50 @@ async function framesToMov(
       }
     }
   });
+}
+
+/** Monta la secuencia entera como /frames/f_000001.png… (WORKERFS: ffmpeg
+ *  lee cada Blob bajo demanda, sin copiarlo). */
+async function mountFrames(ff: FFmpeg, blobs: Blob[]): Promise<void> {
+  const { FFFSType } = await import('./avi.ts');
+  await ff.createDir('/frames');
+  await ff.mount(
+    FFFSType.WORKERFS,
+    {
+      blobs: blobs.map((data, i) => ({
+        name: `f_${String(i + 1).padStart(6, '0')}.png`,
+        data,
+      })),
+    },
+    '/frames',
+  );
+}
+
+async function unmountFrames(ff: FFmpeg): Promise<void> {
+  try {
+    await ff.unmount('/frames');
+  } catch {
+    /* sin montar */
+  }
+  try {
+    await ff.deleteDir('/frames');
+  } catch {
+    /* ya no está */
+  }
+}
+
+/** Saca un archivo de ffmpeg (readFile lo copia fuera de su memoria:
+ *  ArrayBuffer propio) y lo borra de allí. */
+async function readOutput(ff: FFmpeg, name: string, who: string): Promise<Bytes> {
+  const data = await ff.readFile(name);
+  if (typeof data === 'string') throw new Error(`${who} returned text instead of bytes.`);
+  if (!data.length) throw new Error(`${who} produced no output.`);
+  try {
+    await ff.deleteFile(name);
+  } catch {
+    /* ya no está */
+  }
+  return data as Bytes;
 }
 
 /**
@@ -996,10 +1039,150 @@ export async function buildVideoLossless(
   return { bytes, mime: 'video/quicktime', ext: 'mov', audio };
 }
 
+// ── ProRes por trozos ────────────────────────────────────────────────────
+//
+// ffmpeg.wasm codifica la secuencia en TROZOS de unos cientos de MB, cada
+// uno un MOV ProRes propio que sale de su memoria nada más terminar; mediabunny
+// los une (copia de paquetes, sin recodificar) en un solo MOV escrito por
+// trozos en el disco privado del navegador (OPFS), con el audio como PCM. El
+// pico de memoria es de dos copias de un trozo, dure lo que dure la
+// película: un ProRes de 5 GB sale igual que uno de 200 MB. Antes el MOV
+// entero vivía en la memoria de ffmpeg y todo lo que pasaba de 1.4 GB se
+// rechazaba (Old Fires, 180 fotogramas 4K: 1.6 GB).
+
+/** MOV que produce cada pasada de ffmpeg antes de sacarlo de su memoria. */
+const PRORES_CHUNK_BYTES = 200e6;
+/** ProRes 4444 ronda 6–7 bits por píxel: sirve para dimensionar los trozos. */
+const PRORES_BYTES_PER_PX = 0.85;
+
+const PRORES_ARGS = [
+  '-c:v',
+  'prores_ks',
+  '-profile:v',
+  '4444',
+  '-pix_fmt',
+  'yuv444p10le',
+  '-vf',
+  'scale=out_color_matrix=bt709:flags=lanczos+accurate_rnd+full_chroma_int',
+  '-colorspace',
+  'bt709',
+  '-color_primaries',
+  'bt709',
+  '-color_trc',
+  'bt709',
+  '-movflags',
+  'write_colr',
+  '-vendor',
+  'apl0',
+];
+
+/** Lo que se le pide a ffmpeg arriba, marcado en el `colr` del MOV final:
+ *  el demuxer no trae el rango (el `nclc` de QuickTime no lo lleva) y sin
+ *  él mediabunny no escribe el atom. yuv444p10le sale en rango limitado. */
+const PRORES_COLOR: VideoColorSpaceInit = {
+  primaries: 'bt709',
+  transfer: 'bt709',
+  matrix: 'bt709',
+  fullRange: false,
+};
+
+/** Dónde escribe el muxer del MOV final: en OPFS (por posición: el MOV
+ *  cierra el tamaño del mdat al final) o, sin OPFS, en memoria. */
+interface MovTarget {
+  target: Target;
+  finish(): Promise<Bytes | Blob>;
+  abort(): Promise<void>;
+}
+
+async function openMovTarget(): Promise<MovTarget> {
+  const { openSeekableOutput } = await import('./opfs.ts');
+  const disk = await openSeekableOutput(`${Date.now()}-prores.mov`, 'video/quicktime');
+  if (disk) {
+    return {
+      target: new StreamTarget(disk.writable, { chunked: true }),
+      finish: () => disk.file(),
+      abort: () => disk.abort(),
+    };
+  }
+  const target = new BufferTarget();
+  return {
+    target,
+    async finish() {
+      if (!target.buffer) throw new Error('The MOV muxer produced no output.');
+      return new Uint8Array(target.buffer);
+    },
+    async abort() {},
+  };
+}
+
+/** Copia los paquetes del MOV de un trozo a la pista de salida, con el
+ *  tiempo que le toca a cada fotograma en la secuencia entera. */
+async function appendProresChunk(
+  chunk: Blob,
+  video: EncodedVideoPacketSource,
+  firstFrame: number,
+  count: number,
+  fps: number,
+  outW: number,
+  outH: number,
+): Promise<void> {
+  const input = new Input({ source: new BlobSource(chunk), formats: [QTFF] });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (track?.codec !== 'prores')
+      throw new Error('ffmpeg produced a chunk without a ProRes track.');
+    const sink = new EncodedPacketSink(track);
+    let j = 0;
+    for await (const p of sink.packets()) {
+      // el primer paquete de todo el MOV lleva la configuración del
+      // decodificador: el fourcc (ap4h), el tamaño y el espacio de color
+      const meta: EncodedVideoChunkMetadata | undefined =
+        firstFrame === 0 && j === 0
+          ? {
+              decoderConfig: {
+                ...((await track.getDecoderConfig()) ?? { codec: 'ap4h' }),
+                codedWidth: outW,
+                codedHeight: outH,
+                colorSpace: PRORES_COLOR,
+              },
+            }
+          : undefined;
+      await video.add(
+        new EncodedPacket(p.data, 'key', (firstFrame + j) / fps, 1 / fps, firstFrame + j),
+        meta,
+      );
+      j++;
+    }
+    if (j !== count) throw new Error(`ffmpeg wrote ${j} frames of a chunk of ${count}.`);
+  } finally {
+    input.dispose();
+  }
+}
+
+/** El audio del tramo, ya como PCM 16 bits (un WAV que hizo ffmpeg), a la
+ *  pista de audio del MOV final: copia de paquetes. */
+async function appendPcmAudio(wav: Blob, audio: EncodedAudioPacketSource): Promise<void> {
+  const input = new Input({ source: new BlobSource(wav), formats: [WAVE] });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    if (track?.codec !== 'pcm-s16') throw new Error('ffmpeg did not produce 16-bit PCM audio.');
+    const decoderConfig = await track.getDecoderConfig();
+    const sink = new EncodedPacketSink(track);
+    let first = true;
+    for await (const p of sink.packets()) {
+      await audio.add(p, first && decoderConfig ? { decoderConfig } : undefined);
+      first = false;
+    }
+  } finally {
+    input.dispose();
+  }
+}
+
 /**
  * ProRes 4444 (prores_ks): el máster "de edición" que QuickTime y todos los
  * editores reproducen. Visualmente sin pérdida (10 bits 4:4:4), pero no
  * bit a bit como el PNG en MOV. Matriz BT.709 marcada en el contenedor.
+ * Sin tope de tamaño: ver "ProRes por trozos" arriba.
  * onProgress(fraction 0..1) durante la codificación.
  */
 export async function buildVideoProres(
@@ -1015,34 +1198,142 @@ export async function buildVideoProres(
     (i, n) => onProgress?.(0.3 * (i / n)),
     opts,
   );
-  // ProRes 4444 ronda 6–7 bits por píxel: estimar antes de codificar minutos
-  const est = outW * outH * 0.85 * blobs.length;
-  if (est > MAX_MOV_BYTES) throw movTooBig(est, 'ProRes');
-  const { bytes, audio } = await framesToMov(
-    blobs,
-    fps,
-    [
-      '-c:v',
-      'prores_ks',
-      '-profile:v',
-      '4444',
-      '-pix_fmt',
-      'yuv444p10le',
-      '-vf',
-      'scale=out_color_matrix=bt709:flags=lanczos+accurate_rnd+full_chroma_int',
-      '-colorspace',
-      'bt709',
-      '-color_primaries',
-      'bt709',
-      '-color_trc',
-      'bt709',
-      '-movflags',
-      'write_colr',
-      '-vendor',
-      'apl0',
-    ],
-    (p) => onProgress?.(0.3 + 0.7 * p),
-    opts,
-  );
-  return { bytes, mime: 'video/quicktime', ext: 'mov', audio };
+  const n = blobs.length;
+  const perFrame = outW * outH * PRORES_BYTES_PER_PX;
+  const chunkBytes = opts.chunkBytes ?? PRORES_CHUNK_BYTES;
+  const chunkFrames = Math.max(1, Math.min(n, Math.floor(chunkBytes / perFrame)));
+  const duration = n / fps;
+  const { withFF, FFFSType, abortFF } = await import('./avi.ts');
+  throwIfCancelled(opts.signal, 'Video export cancelled.');
+  const audioFrom = await audioIfPresent(opts);
+
+  const out = await openMovTarget();
+  const output = new Output({ format: new MovOutputFormat(), target: out.target });
+  const video = new EncodedVideoPacketSource('prores');
+  output.addVideoTrack(video, { frameRate: fps, hasOnlyKeyPackets: true });
+  const audio = audioFrom ? new EncodedAudioPacketSource('pcm-s16') : null;
+  if (audio) output.addAudioTrack(audio);
+  try {
+    await output.start();
+    // sesión exclusiva: la instancia de ffmpeg se comparte con la extracción
+    await withFF(async (ff) => {
+      const onAbort = (): void => {
+        void abortFF();
+      };
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      let chunkStart = 0;
+      let chunkCount = 0;
+      // `time` son los microsegundos de video ya escritos en la pasada en
+      // curso: fotogramas del trozo, sumados a los de los trozos anteriores
+      const onProg = ({ time }: { time: number }): void => {
+        if (!(time > 0)) return;
+        const done = chunkStart + Math.min(chunkCount, (time / 1e6) * fps);
+        onProgress?.(0.3 + 0.7 * (done / n));
+      };
+      ff.on('progress', onProg);
+      try {
+        throwIfCancelled(opts.signal, 'Video export cancelled.');
+        await mountFrames(ff, blobs);
+        if (audioFrom && audio) {
+          await ff.createDir('/audio');
+          await ff.mount(
+            FFFSType.WORKERFS,
+            { blobs: [{ name: 'in', data: audioFrom.file }] },
+            '/audio',
+          );
+          await ff.exec([
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            // -ss/-t ANTES del -i: recorte a la entrada, del tramo exacto
+            '-ss',
+            audioFrom.start.toFixed(4),
+            '-t',
+            duration.toFixed(4),
+            '-i',
+            '/audio/in',
+            '-vn',
+            '-c:a',
+            'pcm_s16le',
+            '-f',
+            'wav',
+            'audio.wav',
+          ]);
+          const wav = await readOutput(ff, 'audio.wav', 'The audio converter');
+          await appendPcmAudio(new Blob([wav], { type: 'audio/wav' }), audio);
+        }
+        for (chunkStart = 0; chunkStart < n; chunkStart += chunkFrames) {
+          throwIfCancelled(opts.signal, 'Video export cancelled.');
+          chunkCount = Math.min(chunkFrames, n - chunkStart);
+          await ff.exec([
+            // sin `-threads`: la prueba del multihilo solo cubre
+            // DEcodificar, y un codificador con hilos se cuelga en Chrome
+            // (ver avi.ts); ffmpeg decide solo según el núcleo que corre
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-framerate',
+            String(fps),
+            '-start_number',
+            String(chunkStart + 1),
+            '-i',
+            '/frames/f_%06d.png',
+            '-frames:v',
+            String(chunkCount),
+            ...PRORES_ARGS,
+            'chunk.mov',
+          ]);
+          const bytes = await readOutput(ff, 'chunk.mov', 'The ProRes encoder');
+          throwIfCancelled(opts.signal, 'Video export cancelled.');
+          await appendProresChunk(
+            new Blob([bytes], { type: 'video/quicktime' }),
+            video,
+            chunkStart,
+            chunkCount,
+            fps,
+            outW,
+            outH,
+          );
+          onProgress?.(0.3 + 0.7 * ((chunkStart + chunkCount) / n));
+        }
+      } catch (e) {
+        // la instancia terminada por onAbort rechaza lo que estuviera en
+        // curso: es la parada, no un fallo
+        throwIfCancelled(opts.signal, 'Video export cancelled.');
+        throw e;
+      } finally {
+        opts.signal?.removeEventListener('abort', onAbort);
+        ff.off('progress', onProg);
+        await unmountFrames(ff);
+        try {
+          await ff.unmount('/audio');
+          await ff.deleteDir('/audio');
+        } catch {
+          /* sin audio, o sin montar */
+        }
+        for (const f of ['chunk.mov', 'audio.wav']) {
+          try {
+            await ff.deleteFile(f);
+          } catch {
+            /* ya no está */
+          }
+        }
+      }
+    });
+    await output.finalize();
+    const bytes = await out.finish();
+    return { bytes, mime: 'video/quicktime', ext: 'mov', audio: !!audio };
+  } catch (e) {
+    // cancel() cierra el archivo a medias; abort() lo borra del disco. Su
+    // propio fallo se registra y no se relanza: taparía el error de verdad
+    if (output.state !== 'finalized') {
+      try {
+        await output.cancel();
+      } catch (e2) {
+        console.warn('[video] could not cancel the MOV muxer cleanly:', e2);
+      }
+    }
+    await out.abort();
+    throw e;
+  }
 }
