@@ -26,35 +26,10 @@ export interface PngMovOptions {
   signal?: AbortSignal;
   /** Fotogramas escritos hasta ahora, de n. */
   onProgress?: (i: number, n: number) => void;
-}
-
-/** Lee un WAV PCM de 16 bits (fmt + data). */
-export function parseWav(bytes: Bytes): PcmAudio {
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const tag = (o: number): string => String.fromCharCode(...bytes.subarray(o, o + 4));
-  if (bytes.length < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE')
-    throw new Error('The audio pass did not produce a WAV file.');
-  let channels = 0;
-  let sampleRate = 0;
-  let bits = 0;
-  let pcm: Bytes | null = null;
-  for (let p = 12; p + 8 <= bytes.length; ) {
-    const id = tag(p);
-    let size = dv.getUint32(p + 4, true);
-    const body = p + 8;
-    if (size > bytes.length - body) size = bytes.length - body; // tamaño sin cerrar
-    if (id === 'fmt ') {
-      channels = dv.getUint16(body + 2, true);
-      sampleRate = dv.getUint32(body + 4, true);
-      bits = dv.getUint16(body + 14, true);
-    } else if (id === 'data') {
-      pcm = bytes.subarray(body, body + size);
-    }
-    p = body + size + (size & 1);
-  }
-  if (!pcm || !channels || !sampleRate || bits !== 16)
-    throw new Error('The audio pass did not produce 16-bit PCM.');
-  return { pcm, channels, sampleRate };
+  /** Los PNG llevan canal alfa: la descripción de muestra dice 32 bits en
+   *  vez de 24. Quien llama lo sabe de TODOS los fotogramas; mirar sólo el
+   *  primero se equivocaría con una secuencia mezclada. */
+  alpha?: boolean;
 }
 
 /** Escala de tiempo entera para `fps` (12 → 12/1; 29.97 → 2997/100). */
@@ -217,7 +192,10 @@ function stsdSowt(channels: number, sampleRate: number): Bytes {
       u16(16),
       u16(0), // id de compresión
       u16(0), // tamaño de paquete
-      u32(sampleRate << 16),
+      // 16.16 sin signo: por encima de 65535 Hz no cabe y desbordaría. Se
+      // deja en cero, que es lo que escribe ffmpeg, y el ritmo verdadero lo
+      // lleva el `mdhd` de la pista, que es de donde lo leen los lectores
+      u32(sampleRate <= 0xffff ? sampleRate * 0x10000 : 0),
     ),
   );
 }
@@ -261,13 +239,6 @@ function co64(offsets: number[]): Bytes {
   return fbox('co64', 0, u32(offsets.length), table);
 }
 
-/** Profundidad del stsd según el IHDR del primer PNG: 32 con alfa, 24 sin. */
-async function pngDepth(first: Blob): Promise<number> {
-  const head = new Uint8Array(await first.slice(0, 26).arrayBuffer());
-  const colorType = head.length >= 26 ? head[25] : 2;
-  return colorType === 4 || colorType === 6 ? 32 : 24;
-}
-
 /**
  * Escribe en `out` el MOV completo: `frames` en orden (con repetidos), a
  * `fps`, todos PNG de `w`×`h`; `audio` opcional, desde el instante cero. El
@@ -285,8 +256,10 @@ export async function writePngMov(
 ): Promise<void> {
   const n = frames.length;
   if (!n) throw new Error('There are no frames to build the video.');
+  if (!Number.isFinite(fps) || fps <= 0)
+    throw new Error('The frames per second must be a number greater than zero.');
   const { timescale, delta } = frameTiming(fps);
-  const depth = await pngDepth(frames[0]);
+  const depth = opts.alpha === false ? 24 : 32;
   const bpf = audio ? 2 * audio.channels : 0; // bytes por muestra de audio
   const nSamples = audio ? Math.floor(audio.pcm.length / bpf) : 0;
   const rate = audio?.sampleRate ?? 1;
@@ -385,7 +358,11 @@ export async function writePngMov(
     throwIfCancelled(opts.signal, 'Video export cancelled.');
     if ('frame' in piece) {
       await out.write(frames[piece.frame]);
-      opts.onProgress?.(++written, n);
+      // el contador, FUERA de la llamada opcional: `f?.(++written)` no
+      // evalúa sus argumentos cuando no hay callback, y el recuento se
+      // quedaba a cero
+      written++;
+      opts.onProgress?.(written, n);
     } else if (audio) {
       await out.write(
         audio.pcm.subarray(piece.sample0 * bpf, (piece.sample0 + piece.samples) * bpf),
@@ -393,4 +370,7 @@ export async function writePngMov(
     }
   }
   await out.write(moov);
+  // lo escrito TIENE que ser lo que el mdat anunció: si no, el archivo sale
+  // truncado y sin moov, y el navegador lo habría dado por bueno
+  if (written !== n) throw new Error(`The MOV muxer wrote ${written} of ${n} frames.`);
 }

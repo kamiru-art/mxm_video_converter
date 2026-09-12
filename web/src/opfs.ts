@@ -11,6 +11,7 @@
 // hasta ahora, que Chrome también pagina a disco por su cuenta.
 
 import type { Bytes } from './types.ts';
+import { sanitizeLabel } from './ui.ts';
 
 const DIR = 'frames';
 /** Los fotogramas recortados de los escaneos (fase ②). Un proyecto largo
@@ -74,13 +75,37 @@ export async function storeFrame(
   const asBlob = (): Blob => (data instanceof Blob ? data : new Blob([data], { type }));
   const dir = await cacheDir(dirName);
   if (!dir) return asBlob();
+  let w: FileSystemWritableFileStream | null = null;
   try {
     const handle = await dir.getFileHandle(name, { create: true });
-    const w = await handle.createWritable();
+    w = await handle.createWritable();
     await w.write(data);
     await w.close();
+    w = null;
     return await handle.getFile();
   } catch (e) {
+    // la escritura a medias se cierra: si no, el navegador se queda con su
+    // archivo temporal y con el bloqueo de la entrada hasta recargar
+    if (w) {
+      try {
+        await w.abort();
+      } catch {
+        /* ya cerrada */
+      }
+      try {
+        await dir.removeEntry(name);
+      } catch {
+        /* ya no está */
+      }
+    }
+    // el disco lleno NO se disimula: seguir en memoria acaba en un
+    // "NotReadableError" mucho más tarde y en otro sitio (ver PROCESSED),
+    // y el usuario nunca sabría que lo que falta es espacio
+    if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+      throw new Error(
+        'The browser ran out of room on disk for this project. Free space (or empty the site data of this browser) and try again.',
+      );
+    }
     const err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     console.warn(`[opfs] frame kept in memory (${err})`);
     return asBlob();
@@ -268,12 +293,37 @@ let processedSeq = 0;
  *  y pisar el archivo rompería el Blob del recorte anterior, que el informe
  *  sigue mostrando. */
 export function storeProcessedFrame(label: string, png: Bytes | Blob): Promise<Blob> {
-  return storeFrame(`${++processedSeq}-${label}.png`, png, PROCESSED);
+  // la etiqueta viene del layout y puede traer barras o dos puntos, que
+  // OPFS rechaza; el número por delante ya hace único el nombre, así que la
+  // etiqueta es sólo para poder mirar la carpeta y entender qué hay
+  return storeFrame(`${++processedSeq}-${sanitizeLabel(label)}.png`, png, PROCESSED);
+}
+
+let readers = 0;
+
+/** Mientras una exportación lee los fotogramas del disco, NADIE los borra.
+ *  La fase ② los borra al montarse y al vaciar su informe, y la ① al
+ *  extraer: cualquiera de esas cosas, hecha en otra pestaña de la
+ *  aplicación mientras el muxer copiaba, le quitaba los archivos de debajo.
+ *  Devuelve la función que suelta el préstamo. (Entre PESTAÑAS distintas no
+ *  alcanza: OPFS es del origen, no de la pestaña.) */
+export function holdFrames(): () => void {
+  readers++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    readers--;
+  };
 }
 
 /** Vacía la caché. Al empezar una extracción y al montar la fase: un
  *  proyecto no sobrevive a la recarga, así que sus archivos tampoco. */
 export function clearFrameCache(dirName = DIR): Promise<void> {
+  if (readers > 0) {
+    console.warn(`[opfs] "${dirName}" kept: an export is reading it`);
+    return Promise.resolve();
+  }
   dirPromises.delete(dirName);
   if (!supported()) return Promise.resolve();
   clearing = clearing.then(async () => {

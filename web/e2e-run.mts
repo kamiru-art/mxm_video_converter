@@ -71,6 +71,44 @@ if (!existsSync(withAudio)) {
     { stdio: 'ignore' },
   );
 }
+// Variantes de SONIDO para la batería de combinaciones de la exportación:
+// estéreo a 44.1 kHz (otra frecuencia y otro número de canales que la
+// muestra de arriba, que es mono a 48 kHz) y 5.1, que hay que reducir a dos
+// canales porque un MOV de edición con 'sowt' no lleva más.
+for (const [name, ch, rate] of [
+  ['e2e_sample_audio_stereo.mp4', 2, 44100],
+  ['e2e_sample_audio_51.mp4', 6, 48000],
+] as const) {
+  const file = join(DIST, name);
+  if (existsSync(file)) continue;
+  spawnSync(
+    'ffmpeg',
+    [
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=size=320x180:rate=12:duration=3',
+      '-f',
+      'lavfi',
+      '-i',
+      ch === 2
+        ? `aevalsrc='sin(2*PI*t*(440+440*gte(t,1.5)))':s=${rate}:d=3:c=stereo`
+        : // 5.1 con el tono SÓLO en el canal central, que es donde va el
+          // diálogo: si la mezcla a estéreo se quedara con el frontal
+          // izquierdo y el derecho, el resultado sería silencio y la prueba
+          // lo vería
+          `aevalsrc='0|0|sin(2*PI*t*(440+440*gte(t,1.5)))|0|0|0':s=${rate}:d=3:c=5.1`,
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-shortest',
+      '-y',
+      file,
+    ],
+    { stdio: 'ignore' },
+  );
+}
 // AVI con códec MPEG-4 ASP: WebCodecs no lo decodifica, así que ejercita el
 // camino de respaldo con ffmpeg.wasm.
 const avi = join(DIST, 'e2e_sample.avi');
