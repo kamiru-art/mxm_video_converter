@@ -100,8 +100,9 @@ async function encodePng(img: ImageData): Promise<Bytes> {
   return png;
 }
 
-/** Prueba de CARGA de la exportación ProRes, aparte de la suite (no corre
- *  en CI: son minutos): `e2e.html?stress=prores&frames=180&w=2160&h=3840`
+/** Prueba de CARGA de la exportación ProRes (o, con `quality=lossless`, la
+ *  de PNG en MOV), aparte de la suite (no corre en CI: son minutos):
+ *  `e2e.html?stress=prores&frames=180&w=2160&h=3840`
  *  hace fotogramas sintéticos distintos entre sí de ese tamaño y los
  *  exporta como haría la fase ④, por trozos y al disco privado. El
  *  proyecto Old Fires (180 fotogramas 4K, 1.6 GB estimados) es lo que
@@ -165,26 +166,27 @@ async function stressProres(params: URLSearchParams): Promise<void> {
       start: 0.5,
     };
   }
-  const { buildVideoProres } = await import('./video.ts');
+  const { buildVideoLossless, buildVideoProres } = await import('./video.ts');
+  const lossless = params.get('quality') === 'lossless';
+  const kind = lossless ? 'PNG en MOV' : 'ProRes';
   const t0 = performance.now();
   let lastPct = -1;
-  const out = await buildVideoProres(
-    frames,
-    fps,
-    (p) => {
-      const pct = Math.floor(p * 10) * 10;
-      if (pct !== lastPct) {
-        lastPct = pct;
-        log(`… ProRes ${pct} % a los ${((performance.now() - t0) / 1000).toFixed(0)} s`);
-      }
-    },
-    { audio },
-  );
+  const onPct = (p: number): void => {
+    const pct = Math.floor(p * 10) * 10;
+    if (pct !== lastPct) {
+      lastPct = pct;
+      log(`… ${kind} ${pct} % a los ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+    }
+  };
+  const out = lossless
+    ? await buildVideoLossless(frames, fps, (i, m) => onPct(i / m), { audio })
+    : await buildVideoProres(frames, fps, onPct, { audio });
   const secs = (performance.now() - t0) / 1000;
   const blob = new Blob([out.bytes], { type: out.mime });
-  (globalThis as { e2eOutput?: Blob }).e2eOutput = blob;
+  (globalThis as { e2eOutput?: Blob; e2eFrames?: Blob[] }).e2eOutput = blob;
+  (globalThis as { e2eOutput?: Blob; e2eFrames?: Blob[] }).e2eFrames = frames;
   log(
-    `ProRes: ${(blob.size / 1e6).toFixed(0)} MB en ${secs.toFixed(0)} s (${(secs / n).toFixed(2)} s por fotograma), ${out.bytes instanceof Blob ? 'en disco' : 'en memoria'}${out.audio ? ', con audio' : ''}`,
+    `${kind}: ${(blob.size / 1e6).toFixed(0)} MB en ${secs.toFixed(0)} s (${(secs / n).toFixed(2)} s por fotograma), ${out.bytes instanceof Blob ? 'en disco' : 'en memoria'}${out.audio ? ', con audio' : ''}`,
   );
   const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
   if (mem) log(`heap JS usado: ${(mem.usedJSHeapSize / 1e6).toFixed(0)} MB`);
@@ -204,11 +206,20 @@ async function stressProres(params: URLSearchParams): Promise<void> {
       bytes += p.byteLength;
     }
     const dur = await track.computeDuration();
+    // mediabunny no conoce el códec PNG (codec null) pero lee la tabla de
+    // muestras igual: cuenta, tamaños y tiempos
     log(
-      `MOV unido: ${track.codec} ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas (${(bytes / 1e6).toFixed(0)} MB de video), ${dur.toFixed(3)} s`,
+      `MOV: ${track.codec ?? 'png'} ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas (${(bytes / 1e6).toFixed(0)} MB de video), ${dur.toFixed(3)} s`,
     );
-    if (track.codec !== 'prores' || count !== n || Math.abs(dur - n / fps) > 0.01)
+    const pngBytesTotal = frames.reduce((a, f) => a + f.size, 0);
+    if (
+      track.codec !== (lossless ? null : 'prores') ||
+      count !== n ||
+      Math.abs(dur - n / fps) > 0.01
+    )
       throw new Error(`joined MOV is wrong: ${count} frames, ${dur.toFixed(3)} s`);
+    if (lossless && bytes !== pngBytesTotal)
+      throw new Error(`PNG samples total ${bytes} bytes, source PNGs ${pngBytesTotal}`);
   } finally {
     input.dispose();
   }
@@ -957,6 +968,39 @@ async function main(): Promise<void> {
           } finally {
             input.dispose();
           }
+        }
+        // sin pérdida respecto a la pasada única: los mismos fotogramas en
+        // UN trozo (lo que hacía la exportación antes) deben dar, paquete a
+        // paquete, los mismos bytes que en 4 trozos. prores_ks es intra: cada
+        // fotograma se codifica solo, y la unión copia los paquetes tal cual
+        {
+          const outOne = await buildVideoProres(lossFrames, 2, undefined, { chunkBytes: 1e15 });
+          const hashes = async (bytes: Bytes | Blob): Promise<string[]> => {
+            const input = new mb.Input({
+              source: new mb.BlobSource(new Blob([bytes])),
+              formats: mb.ALL_FORMATS,
+            });
+            try {
+              const track = await input.getPrimaryVideoTrack();
+              if (!track) throw new Error('ProRes MOV has no video track');
+              const out: string[] = [];
+              for await (const p of new mb.EncodedPacketSink(track).packets()) {
+                const d = await crypto.subtle.digest('SHA-256', new Uint8Array(p.data));
+                out.push(
+                  [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join(''),
+                );
+              }
+              return out;
+            } finally {
+              input.dispose();
+            }
+          };
+          const [h4, h1] = await Promise.all([hashes(outP.bytes), hashes(outOne.bytes)]);
+          if (h4.length !== h1.length || h4.some((h, i) => h !== h1[i]))
+            throw new Error('ProRes in 4 pieces differs from ProRes in one pass');
+          log(
+            `ProRes en 4 trozos = ProRes en una pasada, paquete a paquete (${h4.length} SHA-256) ✓`,
+          );
         }
       } else {
         log('· (sin muestra de video: prueba de WebCodecs omitida)');

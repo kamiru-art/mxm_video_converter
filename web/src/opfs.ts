@@ -20,6 +20,9 @@ const DIR = 'frames';
  *  fallan del nº 87 en adelante). Un Blob que viene de un archivo de OPFS
  *  no cuenta: lo sirve el disco. */
 const PROCESSED = 'processed';
+/** Los fotogramas que la exportación recompone (reescalado, TIFF, recortes
+ *  de tamaños dispares): mismo motivo. */
+const EXPORT = 'export';
 /** Salidas (el ZIP y el PDF a medio armar): escritas a trozos, nunca enteras
  *  en memoria. Un Blob leído de aquí lo sirve el disco. */
 const OUT = 'out';
@@ -282,6 +285,19 @@ export function clearFrameCache(dirName = DIR): Promise<void> {
     }
   });
   return clearing;
+}
+
+let exportSeq = 0;
+
+/** Un fotograma recompuesto para la exportación, a disco. */
+export function storeExportFrame(png: Bytes | Blob): Promise<Blob> {
+  return storeFrame(`${++exportSeq}.png`, png, EXPORT);
+}
+
+/** Fuera los recompuestos de la exportación anterior: al empezar otra, que
+ *  es cuando ya nadie los referencia (el panel bloquea una segunda a la vez). */
+export function clearExportCache(): Promise<void> {
+  return clearFrameCache(EXPORT);
 }
 
 /** Fuera los recortes de la fase ②: al montarla (los de la sesión

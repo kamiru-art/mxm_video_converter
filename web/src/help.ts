@@ -120,10 +120,9 @@ MOV file: pixel-identical to the processed frames, at any resolution. It
 opens in editors (DaVinci Resolve, Premiere) and in VLC or IINA; QuickTime
 Player and browsers no longer decode PNG video. For a master that QuickTime
 plays, pick <strong>ProRes 4444</strong>: visually lossless, 10-bit,
-edit-ready, and without a size limit (the app encodes it in pieces and joins
-them on disk, so a long 4K master of several gigabytes works; the Lossless
-MOV is one pass and stops at about 1.4 GB). The other qualities use the
-browser encoder, which is always lossy. Every digital step in this app stores lossless PNG, so scan → frames
+edit-ready. Neither MOV has a size limit: both are written to disk as they
+are made, so a long 4K or 8K master of several gigabytes works. The other
+qualities use the browser encoder, which is always lossy. Every digital step in this app stores lossless PNG, so scan → frames
 → Lossless MOV loses nothing.</p>
 
 <h3>Calibration (when you need precision)</h3>

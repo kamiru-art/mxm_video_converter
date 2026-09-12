@@ -120,6 +120,10 @@ const handlers: Handlers = {
     const out = bytes(core.resize_rgba(a.rgba, a.w, a.h, a.outW, a.outH));
     return { value: out, transfer: [out.buffer] };
   },
+  encode_png_rgba: (a) => {
+    const png = bytes(core.encode_png_rgba(a.rgba, a.w, a.h));
+    return { value: png, transfer: [png.buffer] };
+  },
   encode_tiff: (a) => {
     const tif = bytes(core.encode_tiff(a.png));
     return { value: tif, transfer: [tif.buffer] };

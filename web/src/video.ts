@@ -149,8 +149,6 @@ interface MediabunnyProbe {
   height: number;
 }
 
-type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
-
 // El Input devuelto es del LLAMADOR: `track` cuelga de él y sigue haciendo
 // falta para decodificar, así que quien lo recibe tiene que llamar a
 // input.dispose() (cierra el lector del Blob y los decodificadores abiertos).
@@ -357,16 +355,6 @@ export async function decodeVideoFrames(
   } finally {
     probe.input.dispose();
   }
-}
-
-function canvasToBlob(canvas: AnyCanvas, type: string): Promise<Blob> {
-  if ('convertToBlob' in canvas) return canvas.convertToBlob({ type });
-  return new Promise((res, rej) =>
-    canvas.toBlob((b) => {
-      if (b) res(b);
-      else rej(new Error('The browser could not encode the frame as PNG.'));
-    }, type),
-  );
 }
 
 /** Compone el alfa sobre BLANCO in situ (Uint8ClampedArray: redondea al
@@ -816,6 +804,13 @@ async function prepareFramePngs(
     onProgress?.(frames.length, frames.length);
     return { blobs: frames, outW, outH };
   }
+  // cada recomposición sale del núcleo como bytes y va al disco privado
+  // (OPFS): un Blob de convertToBlob por fotograma cuenta contra el cupo de
+  // Blobs de Chrome hasta que el recolector lo suelta, y pasado el cupo los
+  // siguientes ya no se pueden leer (ver opfs.ts). Los recortes de la fase
+  // ② varían 1–2 px entre sí, así que este camino es el habitual
+  const { clearExportCache, storeExportFrame } = await import('./opfs.ts');
+  await clearExportCache();
   const blobs: Blob[] = [];
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx = context2d(canvas);
@@ -829,7 +824,10 @@ async function prepareFramePngs(
       ctx.fillRect(0, 0, outW, outH);
       await drawFrameFitted(ctx, bmp, outW, outH);
       bmp.close();
-      b = await canvasToBlob(canvas, 'image/png');
+      const img = ctx.getImageData(0, 0, outW, outH);
+      const rgba = new Uint8Array(img.data.buffer);
+      const png = await run('encode_png_rgba', { rgba, w: outW, h: outH }, [rgba.buffer]);
+      b = await storeExportFrame(png);
       rendered.set(frames[i], b);
     }
     blobs.push(b);
@@ -855,124 +853,6 @@ async function audioIfPresent(opts: ExportOptions): Promise<AudioFrom | undefine
   const reaches = await audioReaches(a.track, opts.audio);
   a.input.dispose();
   return reaches ? opts.audio : undefined;
-}
-
-/** Muxa/codifica la secuencia de PNGs a un MOV con ffmpeg.wasm.
- *  WORKERFS: los PNG se leen desde los Blobs sin copiarlos a la memoria
- *  WASM; solo el MOV de salida vive en ella. */
-// El MOV de salida vive en el sistema de archivos de ffmpeg.wasm y sale
-// copiado entero (readFile): por encima de ~1.4 GB el módulo aborta sin
-// mensaje. La exportación sin pérdida (PNG en MOV) es una sola pasada y se
-// rechaza antes con un mensaje claro; la ProRes va por trozos (más abajo) y
-// no tiene tope.
-const MAX_MOV_BYTES = 1.4e9;
-
-function movTooBig(estBytes: number, kind: string): Error {
-  return new Error(
-    `This ${kind} export would be about ${(estBytes / 1e9).toFixed(1)} GB; the in-browser muxer can hold about 1.4 GB. Pick the ProRes 4444 quality (no size limit), lower the resolution, split the range, or download the processed frames ZIP from the Scans report and assemble it in your editor.`,
-  );
-}
-
-interface MovResult {
-  bytes: Bytes;
-  audio: boolean;
-}
-
-async function framesToMov(
-  blobs: Blob[],
-  fps: number,
-  codecArgs: string[],
-  onEncodeProgress?: (p: number) => void,
-  opts: ExportOptions = {},
-): Promise<MovResult> {
-  const { withFF, FFFSType, abortFF } = await import('./avi.ts');
-  throwIfCancelled(opts.signal, 'Video export cancelled.');
-  // el audio, si el original lo tiene: ffmpeg lo lee del archivo montado
-  // (WORKERFS, sin copiarlo) del tramo de los fotogramas y lo deja como
-  // PCM, que es lo que llevan los MOV de edición.
-  const audioFrom = await audioIfPresent(opts);
-  const duration = blobs.length / fps;
-  // sesión exclusiva: la instancia de ffmpeg se comparte con la extracción
-  return withFF(async (ff) => {
-    // cancelar = terminar la instancia (exec no se interrumpe de otro modo);
-    // la llamada en curso rechaza y abajo se reconoce por la señal
-    const onAbort = (): void => {
-      void abortFF();
-    };
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
-    const onProg = onEncodeProgress
-      ? ({ progress }: { progress: number }) => {
-          if (progress > 0 && progress <= 1) onEncodeProgress(progress);
-        }
-      : null;
-    if (onProg) ff.on('progress', onProg);
-    try {
-      throwIfCancelled(opts.signal, 'Video export cancelled.');
-      await mountFrames(ff, blobs);
-      if (audioFrom) {
-        await ff.createDir('/audio');
-        await ff.mount(
-          FFFSType.WORKERFS,
-          { blobs: [{ name: 'in', data: audioFrom.file }] },
-          '/audio',
-        );
-      }
-      await ff.exec([
-        // sin `-threads`: la prueba del multihilo solo cubre DEcodificar, y
-        // un codificador con hilos se cuelga en Chrome (ver avi.ts); ffmpeg
-        // decide solo según el núcleo que corre
-        '-hide_banner',
-        '-loglevel',
-        'error',
-        '-framerate',
-        String(fps),
-        '-i',
-        '/frames/f_%06d.png',
-        ...(audioFrom
-          ? [
-              // -ss/-t ANTES del -i: recorte a la entrada, del tramo exacto
-              '-ss',
-              audioFrom.start.toFixed(4),
-              '-t',
-              duration.toFixed(4),
-              '-i',
-              '/audio/in',
-              '-map',
-              '0:v:0',
-              '-map',
-              '1:a:0',
-              '-c:a',
-              'pcm_s16le',
-              '-shortest',
-            ]
-          : []),
-        ...codecArgs,
-        'out.mov',
-      ]);
-      const data = await readOutput(ff, 'out.mov', 'The MOV muxer');
-      return { bytes: data, audio: !!audioFrom };
-    } catch (e) {
-      // la instancia terminada por onAbort rechaza lo que estuviera en
-      // curso: es la parada, no un fallo
-      throwIfCancelled(opts.signal, 'Video export cancelled.');
-      throw e;
-    } finally {
-      opts.signal?.removeEventListener('abort', onAbort);
-      if (onProg) ff.off('progress', onProg);
-      await unmountFrames(ff);
-      try {
-        await ff.unmount('/audio');
-        await ff.deleteDir('/audio');
-      } catch {
-        /* sin audio, o sin montar */
-      }
-      try {
-        await ff.deleteFile('out.mov');
-      } catch {
-        /* sin archivo */
-      }
-    }
-  });
 }
 
 /** Monta la secuencia entera como /frames/f_000001.png… (WORKERFS: ffmpeg
@@ -1019,12 +899,79 @@ async function readOutput(ff: FFmpeg, name: string, who: string): Promise<Bytes>
   return data as Bytes;
 }
 
+/** El sonido del tramo, como WAV PCM 16 bits, por ffmpeg (abre cualquier
+ *  códec; lee el original montado sin copiarlo). Dentro de una sesión
+ *  withFF ya abierta. */
+async function execAudioWav(ff: FFmpeg, audioFrom: AudioFrom, duration: number): Promise<Bytes> {
+  const { FFFSType } = await import('./avi.ts');
+  await ff.createDir('/audio');
+  await ff.mount(FFFSType.WORKERFS, { blobs: [{ name: 'in', data: audioFrom.file }] }, '/audio');
+  try {
+    await ff.exec([
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      // -ss/-t ANTES del -i: recorte a la entrada, del tramo exacto
+      '-ss',
+      audioFrom.start.toFixed(4),
+      '-t',
+      duration.toFixed(4),
+      '-i',
+      '/audio/in',
+      '-vn',
+      '-c:a',
+      'pcm_s16le',
+      '-f',
+      'wav',
+      'audio.wav',
+    ]);
+    return await readOutput(ff, 'audio.wav', 'The audio converter');
+  } finally {
+    try {
+      await ff.unmount('/audio');
+      await ff.deleteDir('/audio');
+    } catch {
+      /* sin montar, o instancia terminada */
+    }
+    try {
+      await ff.deleteFile('audio.wav');
+    } catch {
+      /* ya no está */
+    }
+  }
+}
+
+/** Una sesión de ffmpeg sólo para el audio (la exportación sin pérdida no
+ *  lo necesita para nada más). Cancelar termina la instancia. */
+async function audioWav(
+  audioFrom: AudioFrom,
+  duration: number,
+  signal?: AbortSignal,
+): Promise<Bytes> {
+  const { withFF, abortFF } = await import('./avi.ts');
+  return withFF(async (ff) => {
+    const onAbort = (): void => {
+      void abortFF();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      throwIfCancelled(signal, 'Video export cancelled.');
+      return await execAudioWav(ff, audioFrom, duration);
+    } catch (e) {
+      throwIfCancelled(signal, 'Video export cancelled.');
+      throw e;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  });
+}
+
 /**
- * Exportación SIN pérdida: cada fotograma va como PNG dentro de un MOV
- * (stream copy, sin recodificar el video). Cualquier resolución, 8K
- * incluido. Lo abren los editores (DaVinci, Premiere) y reproductores con
- * ffmpeg (VLC, IINA); QuickTime Player ya no trae el códec PNG.
- * frames: array de Blob EN ORDEN (con repetidos). opts: { targetH }.
+ * Exportación SIN pérdida: cada fotograma va como PNG dentro de un MOV,
+ * byte a byte (muxer propio, pngmov.ts; sin tope de tamaño). Cualquier
+ * resolución, 8K incluido. Lo abren los editores (DaVinci, Premiere) y
+ * reproductores con ffmpeg (VLC, IINA); QuickTime Player ya no trae el
+ * códec PNG. frames: array de Blob EN ORDEN (con repetidos). opts: { targetH }.
  */
 export async function buildVideoLossless(
   frames: Blob[],
@@ -1032,11 +979,26 @@ export async function buildVideoLossless(
   onProgress?: (i: number, n: number) => void,
   opts: ExportOptions = {},
 ): Promise<VideoResult> {
-  const { blobs } = await prepareFramePngs(frames, onProgress, opts);
-  const total = blobs.reduce((a, b) => a + b.size, 0);
-  if (total > MAX_MOV_BYTES) throw movTooBig(total, 'lossless');
-  const { bytes, audio } = await framesToMov(blobs, fps, ['-c:v', 'copy'], undefined, opts);
-  return { bytes, mime: 'video/quicktime', ext: 'mov', audio };
+  const { blobs, outW, outH } = await prepareFramePngs(frames, onProgress, opts);
+  throwIfCancelled(opts.signal, 'Video export cancelled.');
+  const audioFrom = await audioIfPresent(opts);
+  const wav = audioFrom ? await audioWav(audioFrom, blobs.length / fps, opts.signal) : null;
+  const [{ openOutput }, { parseWav, writePngMov }] = await Promise.all([
+    import('./opfs.ts'),
+    import('./pngmov.ts'),
+  ]);
+  const out = await openOutput(`${Date.now()}-lossless.mov`, 'video/quicktime');
+  try {
+    await writePngMov(out, blobs, fps, outW, outH, wav ? parseWav(wav) : null, {
+      signal: opts.signal,
+      onProgress,
+    });
+    const bytes = await out.close();
+    return { bytes, mime: 'video/quicktime', ext: 'mov', audio: !!wav };
+  } catch (e) {
+    await out.abort();
+    throw e;
+  }
 }
 
 // ── ProRes por trozos ────────────────────────────────────────────────────
@@ -1203,7 +1165,7 @@ export async function buildVideoProres(
   const chunkBytes = opts.chunkBytes ?? PRORES_CHUNK_BYTES;
   const chunkFrames = Math.max(1, Math.min(n, Math.floor(chunkBytes / perFrame)));
   const duration = n / fps;
-  const { withFF, FFFSType, abortFF } = await import('./avi.ts');
+  const { withFF, abortFF } = await import('./avi.ts');
   throwIfCancelled(opts.signal, 'Video export cancelled.');
   const audioFrom = await audioIfPresent(opts);
 
@@ -1235,31 +1197,7 @@ export async function buildVideoProres(
         throwIfCancelled(opts.signal, 'Video export cancelled.');
         await mountFrames(ff, blobs);
         if (audioFrom && audio) {
-          await ff.createDir('/audio');
-          await ff.mount(
-            FFFSType.WORKERFS,
-            { blobs: [{ name: 'in', data: audioFrom.file }] },
-            '/audio',
-          );
-          await ff.exec([
-            '-hide_banner',
-            '-loglevel',
-            'error',
-            // -ss/-t ANTES del -i: recorte a la entrada, del tramo exacto
-            '-ss',
-            audioFrom.start.toFixed(4),
-            '-t',
-            duration.toFixed(4),
-            '-i',
-            '/audio/in',
-            '-vn',
-            '-c:a',
-            'pcm_s16le',
-            '-f',
-            'wav',
-            'audio.wav',
-          ]);
-          const wav = await readOutput(ff, 'audio.wav', 'The audio converter');
+          const wav = await execAudioWav(ff, audioFrom, duration);
           await appendPcmAudio(new Blob([wav], { type: 'audio/wav' }), audio);
         }
         for (chunkStart = 0; chunkStart < n; chunkStart += chunkFrames) {
@@ -1306,17 +1244,9 @@ export async function buildVideoProres(
         ff.off('progress', onProg);
         await unmountFrames(ff);
         try {
-          await ff.unmount('/audio');
-          await ff.deleteDir('/audio');
+          await ff.deleteFile('chunk.mov');
         } catch {
-          /* sin audio, o sin montar */
-        }
-        for (const f of ['chunk.mov', 'audio.wav']) {
-          try {
-            await ff.deleteFile(f);
-          } catch {
-            /* ya no está */
-          }
+          /* ya no está */
         }
       }
     });
