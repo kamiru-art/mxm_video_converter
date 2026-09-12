@@ -37,8 +37,209 @@ function synthFrame(w: number, h: number, base: [number, number, number]): RgbaI
   return { data: new Uint8Array(d.data.buffer), w, h };
 }
 
+/** PNG (RGBA 8 bits, deflate del navegador) SIN pasar por un Blob: ver
+ *  stressProres. Sólo para la prueba de carga. */
+async function encodePng(img: ImageData): Promise<Bytes> {
+  const { width: w, height: h, data } = img;
+  const raw = new Uint8Array((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++)
+    raw.set(data.subarray(y * w * 4, (y + 1) * w * 4), y * (w * 4 + 1) + 1);
+  const cs = new CompressionStream('deflate');
+  const writer = cs.writable.getWriter();
+  void writer.write(raw);
+  void writer.close();
+  const zParts: Uint8Array[] = [];
+  const reader = cs.readable.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    zParts.push(value);
+  }
+  const z = new Uint8Array(zParts.reduce((a, p) => a + p.length, 0));
+  let off = 0;
+  for (const p of zParts) {
+    z.set(p, off);
+    off += p.length;
+  }
+  const crcTable = new Uint32Array(256).map((_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (b: Uint8Array): number => {
+    let c = 0xffffffff;
+    for (const x of b) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, body: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(12 + body.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, body.length);
+    out.set(new TextEncoder().encode(type), 4);
+    out.set(body, 8);
+    dv.setUint32(8 + body.length, crc(out.subarray(4, 8 + body.length)));
+    return out;
+  };
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, w);
+  dv.setUint32(4, h);
+  ihdr.set([8, 6, 0, 0, 0], 8); // 8 bits, RGBA
+  const parts = [
+    new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', z),
+    chunk('IEND', new Uint8Array(0)),
+  ];
+  const png = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  off = 0;
+  for (const p of parts) {
+    png.set(p, off);
+    off += p.length;
+  }
+  return png;
+}
+
+/** Prueba de CARGA de la exportación ProRes (o, con `quality=lossless`, la
+ *  de PNG en MOV), aparte de la suite (no corre en CI: son minutos):
+ *  `e2e.html?stress=prores&frames=180&w=2160&h=3840`
+ *  hace fotogramas sintéticos distintos entre sí de ese tamaño y los
+ *  exporta como haría la fase ④, por trozos y al disco privado. El
+ *  proyecto Old Fires (180 fotogramas 4K, 1.6 GB estimados) es lo que
+ *  antes se rechazaba. `audio=1` añade el sonido de la muestra. El MOV
+ *  queda en `globalThis.e2eOutput` para sacarlo con puppeteer y pasarlo
+ *  por ffprobe o AVFoundation. */
+async function stressProres(params: URLSearchParams): Promise<void> {
+  const { storeProcessedFrame, clearProcessedCache } = await import('./opfs.ts');
+  await clearProcessedCache();
+  const n = parseInt(params.get('frames') ?? '180', 10);
+  const w = parseInt(params.get('w') ?? '2160', 10);
+  const h = parseInt(params.get('h') ?? '3840', 10);
+  const fps = parseFloat(params.get('fps') ?? '12');
+  const c = new OffscreenCanvas(w, h);
+  const ctx = context2d(c);
+  const frames: Blob[] = [];
+  let pngBytes = 0;
+  for (let i = 0; i < n; i++) {
+    // un degradado que gira, texto y unos discos: contenido distinto en
+    // cada fotograma, con detalle suficiente para que ProRes no lo regale
+    const g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, `hsl(${(i * 7) % 360} 70% 60%)`);
+    g.addColorStop(1, `hsl(${(i * 7 + 180) % 360} 70% 30%)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for (let k = 0; k < 40; k++) {
+      const a = (i / n) * Math.PI * 2 + k * 0.4;
+      ctx.beginPath();
+      ctx.arc(
+        w / 2 + Math.cos(a) * (w / 3),
+        h / 2 + Math.sin(a) * (h / 3),
+        20 + k * 3,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    }
+    ctx.fillStyle = 'black';
+    ctx.font = `${Math.round(h / 12)}px sans-serif`;
+    ctx.fillText(`frame ${i + 1}`, w / 10, h / 2);
+    // a disco como BYTES, igual que los recortes de la fase ②: un Blob de
+    // convertToBlob cuenta contra el cupo de Blobs de Chrome (~500 MB en
+    // total) hasta que el recolector lo suelta, y pasado el cupo los
+    // siguientes ya no se pueden leer (ver opfs.ts)
+    const blob = await storeProcessedFrame(
+      `stress_${i + 1}`,
+      await encodePng(ctx.getImageData(0, 0, w, h)),
+    );
+    frames.push(blob);
+    pngBytes += blob.size;
+    if ((i + 1) % 20 === 0) log(`… ${i + 1}/${n} fotogramas ${w}×${h} listos`);
+  }
+  log(`${n} fotogramas ${w}×${h}: ${(pngBytes / 1e6).toFixed(0)} MB de PNG`);
+  let audio: { file: File; start: number } | undefined;
+  if (params.get('audio')) {
+    const aresp = await fetch('/e2e_sample_audio.mp4');
+    if (!aresp.ok) throw new Error('no audio sample');
+    audio = {
+      file: new File([await aresp.arrayBuffer()], 'e2e_sample_audio.mp4', { type: 'video/mp4' }),
+      start: 0.5,
+    };
+  }
+  const { buildVideoLossless, buildVideoProres } = await import('./video.ts');
+  const lossless = params.get('quality') === 'lossless';
+  const kind = lossless ? 'PNG en MOV' : 'ProRes';
+  const t0 = performance.now();
+  let lastPct = -1;
+  const onPct = (p: number): void => {
+    const pct = Math.floor(p * 10) * 10;
+    if (pct !== lastPct) {
+      lastPct = pct;
+      log(`… ${kind} ${pct} % a los ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+    }
+  };
+  const out = lossless
+    ? await buildVideoLossless(frames, fps, (i, m) => onPct(i / m), { audio })
+    : await buildVideoProres(frames, fps, onPct, { audio });
+  const secs = (performance.now() - t0) / 1000;
+  const blob = new Blob([out.bytes], { type: out.mime });
+  (globalThis as { e2eOutput?: Blob; e2eFrames?: Blob[] }).e2eOutput = blob;
+  (globalThis as { e2eOutput?: Blob; e2eFrames?: Blob[] }).e2eFrames = frames;
+  log(
+    `${kind}: ${(blob.size / 1e6).toFixed(0)} MB en ${secs.toFixed(0)} s (${(secs / n).toFixed(2)} s por fotograma), ${out.bytes instanceof Blob ? 'en disco' : 'en memoria'}${out.audio ? ', con audio' : ''}`,
+  );
+  const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
+  if (mem) log(`heap JS usado: ${(mem.usedJSHeapSize / 1e6).toFixed(0)} MB`);
+  const mb = await import('mediabunny');
+  const input = new mb.Input({ source: new mb.BlobSource(blob), formats: mb.ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error('no video track');
+    const sink = new mb.EncodedPacketSink(track);
+    let count = 0;
+    let bytes = 0;
+    let last = -1;
+    for await (const p of sink.packets(undefined, undefined, { metadataOnly: true })) {
+      if (p.timestamp <= last) throw new Error('packets out of order');
+      last = p.timestamp;
+      count++;
+      bytes += p.byteLength;
+    }
+    const dur = await track.computeDuration();
+    // mediabunny no conoce el códec PNG (codec null) pero lee la tabla de
+    // muestras igual: cuenta, tamaños y tiempos
+    log(
+      `MOV: ${track.codec ?? 'png'} ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas (${(bytes / 1e6).toFixed(0)} MB de video), ${dur.toFixed(3)} s`,
+    );
+    const pngBytesTotal = frames.reduce((a, f) => a + f.size, 0);
+    if (
+      track.codec !== (lossless ? null : 'prores') ||
+      count !== n ||
+      Math.abs(dur - n / fps) > 0.01
+    )
+      throw new Error(`joined MOV is wrong: ${count} frames, ${dur.toFixed(3)} s`);
+    if (lossless && bytes !== pngBytesTotal)
+      throw new Error(`PNG samples total ${bytes} bytes, source PNGs ${pngBytesTotal}`);
+  } finally {
+    input.dispose();
+  }
+}
+
 async function main(): Promise<void> {
   try {
+    const params = new URLSearchParams(location.search);
+    if (params.get('stress') === 'prores') {
+      try {
+        await stressProres(params);
+      } catch (e) {
+        // dónde falló, no sólo qué: son minutos por intento
+        if (e instanceof Error && e.stack) log(e.stack);
+        throw e;
+      }
+      document.title = 'E2E-OK';
+      log('✅ STRESS OK');
+      return;
+    }
     const v = await run('version', {});
     log(`wasm ${v} cargado`);
 
@@ -593,14 +794,17 @@ async function main(): Promise<void> {
         }
         if (encoded !== 1) throw new Error(`buildVideo cancel: ${encoded} frames encoded`);
         log('cancelar la exportación tras el primer fotograma ✓');
+        /** Tamaño de una salida, esté en memoria (bytes) o en el disco (Blob). */
+        const sizeOf = (r: { bytes: Bytes | Blob }): number =>
+          r.bytes instanceof Blob ? r.bytes.size : r.bytes.length;
         const out2 = await buildVideo(getters, 2);
-        log(`video reconstruido: ${out2.ext} de ${out2.bytes.length} bytes`);
-        if (out2.bytes.length < 5000) throw new Error('suspiciously small output video');
+        log(`video reconstruido: ${out2.ext} de ${sizeOf(out2)} bytes`);
+        if (sizeOf(out2) < 5000) throw new Error('suspiciously small output video');
 
         // reescalado de salida: ejercita resize_rgba (Lanczos3 del núcleo)
         const out3 = await buildVideo(getters, 2, null, { targetH: 120 });
-        log(`video reescalado a 120p: ${out3.ext} de ${out3.bytes.length} bytes`);
-        if (out3.bytes.length < 2000) throw new Error('scaled video output too small');
+        log(`video reescalado a 120p: ${out3.ext} de ${sizeOf(out3)} bytes`);
+        if (sizeOf(out3) < 2000) throw new Error('scaled video output too small');
 
         // audio del original en el video final: el tramo [start, start + N/fps)
         // del clip, recortado a la muestra y con el reloj de los fotogramas.
@@ -608,14 +812,14 @@ async function main(): Promise<void> {
         // con start = 0.5 s, el cambio tiene que caer en t = 1.0 s del video
         const aresp = await fetch('/e2e_sample_audio.mp4');
         const lossFrames = got.slice(0, 4);
+        const mb = await import('mediabunny');
         if (aresp.ok) {
           const asrc = new File([await aresp.arrayBuffer()], 'e2e_sample_audio.mp4', {
             type: 'video/mp4',
           });
-          const mb = await import('mediabunny');
           /** Canal 0 del audio de un archivo, como una sola señal a su ritmo. */
           const audioOf = async (
-            bytes: Bytes,
+            bytes: Bytes | Blob,
             type: string,
           ): Promise<{ codec: string | null; rate: number; pcm: Float32Array } | null> => {
             const input = new mb.Input({
@@ -684,6 +888,26 @@ async function main(): Promise<void> {
             throw new Error(
               `MOV audio wrong: ${llen.toFixed(2)} s, ${lf1.toFixed(0)} / ${lf2.toFixed(0)} Hz`,
             );
+          // y en el ProRes por trozos: el audio va aparte (un WAV de ffmpeg
+          // que mediabunny copia como PCM) y debe caer en su sitio igual
+          const { buildVideoProres: prores } = await import('./video.ts');
+          const outPA = await prores(lossFrames, 2, undefined, {
+            audio: { file: asrc, start: 0.5 },
+            chunkBytes: 1,
+          });
+          if (!outPA.audio) throw new Error('ProRes export reports no audio track');
+          const pa = await audioOf(outPA.bytes, outPA.mime);
+          if (!pa) throw new Error('ProRes MOV has no audio track');
+          const plen = pa.pcm.length / pa.rate - 0.1;
+          const pf1 = hz(pa, 0.2, 0.8);
+          const pf2 = hz(pa, 1.2, 1.8);
+          log(
+            `audio en el ProRes: ${pa.codec} ${pa.rate} Hz, ${plen.toFixed(2)} s; ${pf1.toFixed(0)} / ${pf2.toFixed(0)} Hz`,
+          );
+          if (Math.abs(plen - 2) > 0.15 || !near(pf1, 440) || !near(pf2, 880))
+            throw new Error(
+              `ProRes audio wrong: ${plen.toFixed(2)} s, ${pf1.toFixed(0)} / ${pf2.toFixed(0)} Hz`,
+            );
           // un original SIN audio: el video sale mudo y lo dice
           const outNo = await buildVideo(getters.slice(0, 2), 2, null, {
             audio: { file: vblob, start: 0 },
@@ -696,22 +920,88 @@ async function main(): Promise<void> {
         // exportación lossless: PNG en MOV por stream copy (ffmpeg.wasm)
         const { buildVideoLossless } = await import('./video.ts');
         const outL = await buildVideoLossless(lossFrames, 2);
-        const headL = new TextDecoder('latin1').decode(outL.bytes.slice(0, 16));
-        log(`lossless MOV: ${outL.bytes.length} bytes (${outL.ext})`);
+        const headL = new TextDecoder('latin1').decode(
+          await new Blob([outL.bytes]).slice(0, 16).arrayBuffer(),
+        );
+        log(`lossless MOV: ${sizeOf(outL)} bytes (${outL.ext})`);
         if (outL.ext !== 'mov' || !headL.includes('ftyp'))
           throw new Error('lossless output is not a MOV');
         const totalPng = lossFrames.reduce((a, b) => a + b.size, 0);
-        if (outL.bytes.length < totalPng)
+        if (sizeOf(outL) < totalPng)
           throw new Error('lossless MOV smaller than its PNG frames (not stream-copied)');
 
-        // ProRes 4444 en el navegador (prores_ks de ffmpeg.wasm)
+        // ProRes 4444 en el navegador (prores_ks de ffmpeg.wasm), por
+        // trozos: chunkBytes diminuto para que 4 fotogramas salgan en 4
+        // pasadas de ffmpeg que mediabunny une en el disco (OPFS)
         const { buildVideoProres } = await import('./video.ts');
-        const outP = await buildVideoProres(lossFrames, 2);
+        const outP = await buildVideoProres(lossFrames, 2, undefined, { chunkBytes: 1 });
+        const blobP = new Blob([outP.bytes], { type: outP.mime });
         // el atom stsd con el fourcc va en el moov, al FINAL del archivo
-        const bodyP = new TextDecoder('latin1').decode(outP.bytes.slice(-65536));
-        log(`ProRes MOV: ${outP.bytes.length} bytes`);
+        const bodyP = new TextDecoder('latin1').decode(
+          await blobP.slice(Math.max(0, blobP.size - 65536)).arrayBuffer(),
+        );
+        log(
+          `ProRes MOV: ${blobP.size} bytes, ${outP.bytes instanceof Blob ? 'on disk' : 'in memory'}`,
+        );
         if (outP.ext !== 'mov' || !bodyP.includes('ap4h'))
           throw new Error('ProRes output lacks the ap4h codec atom');
+        // el MOV unido: una pista ProRes con los 4 fotogramas seguidos, 2 s
+        {
+          const input = new mb.Input({ source: new mb.BlobSource(blobP), formats: mb.ALL_FORMATS });
+          try {
+            const track = await input.getPrimaryVideoTrack();
+            if (!track) throw new Error('joined ProRes MOV has no video track');
+            const sink = new mb.EncodedPacketSink(track);
+            let count = 0;
+            let last = -1;
+            for await (const p of sink.packets()) {
+              if (p.timestamp <= last) throw new Error('ProRes packets out of order');
+              last = p.timestamp;
+              count++;
+            }
+            const dur = await track.computeDuration();
+            log(
+              `ProRes unido: ${track.codec} ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas, ${dur.toFixed(2)} s`,
+            );
+            if (track.codec !== 'prores' || count !== lossFrames.length || Math.abs(dur - 2) > 0.01)
+              throw new Error(`joined ProRes MOV is wrong: ${count} frames, ${dur.toFixed(2)} s`);
+          } finally {
+            input.dispose();
+          }
+        }
+        // sin pérdida respecto a la pasada única: los mismos fotogramas en
+        // UN trozo (lo que hacía la exportación antes) deben dar, paquete a
+        // paquete, los mismos bytes que en 4 trozos. prores_ks es intra: cada
+        // fotograma se codifica solo, y la unión copia los paquetes tal cual
+        {
+          const outOne = await buildVideoProres(lossFrames, 2, undefined, { chunkBytes: 1e15 });
+          const hashes = async (bytes: Bytes | Blob): Promise<string[]> => {
+            const input = new mb.Input({
+              source: new mb.BlobSource(new Blob([bytes])),
+              formats: mb.ALL_FORMATS,
+            });
+            try {
+              const track = await input.getPrimaryVideoTrack();
+              if (!track) throw new Error('ProRes MOV has no video track');
+              const out: string[] = [];
+              for await (const p of new mb.EncodedPacketSink(track).packets()) {
+                const d = await crypto.subtle.digest('SHA-256', new Uint8Array(p.data));
+                out.push(
+                  [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join(''),
+                );
+              }
+              return out;
+            } finally {
+              input.dispose();
+            }
+          };
+          const [h4, h1] = await Promise.all([hashes(outP.bytes), hashes(outOne.bytes)]);
+          if (h4.length !== h1.length || h4.some((h, i) => h !== h1[i]))
+            throw new Error('ProRes in 4 pieces differs from ProRes in one pass');
+          log(
+            `ProRes en 4 trozos = ProRes en una pasada, paquete a paquete (${h4.length} SHA-256) ✓`,
+          );
+        }
       } else {
         log('· (sin muestra de video: prueba de WebCodecs omitida)');
       }

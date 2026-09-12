@@ -1,6 +1,7 @@
 // Fase ④ — Reconstruir el video final desde los fotogramas procesados.
 
 import { errMsg, isCancelled } from './errors.ts';
+import { clearOutputs } from './opfs.ts';
 import { currentVideo } from './phase1.ts';
 import { ph2 } from './phase2.ts';
 import { project } from './project.ts';
@@ -324,6 +325,9 @@ export function mountPhase4(root: HTMLElement): void {
     const unlock = lockControls(paper, [buildCancel.button]);
     prog.show();
     try {
+      // el MOV ProRes se escribe en el disco privado del navegador: fuera
+      // los de exportaciones anteriores que ya nadie descarga
+      await clearOutputs(10 * 60e3);
       const audio = audioFrom();
       const common = {
         targetH: resSel.value === 'original' ? 0 : parseInt(resSel.value, 10),

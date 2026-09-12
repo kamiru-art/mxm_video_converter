@@ -504,6 +504,30 @@ pub fn scan_finish(
     Ok(scan_output_to_js(out))
 }
 
+/// Codifica un buffer RGBA de 8 bits como PNG (sin pérdida). La fase de video
+/// recompone aquí los fotogramas que reescala en vez de con `convertToBlob`:
+/// el resultado son bytes, que van al disco sin pasar por un Blob en memoria
+/// (Chrome deja de leer los Blobs pasado un cupo; ver web/src/opfs.ts).
+#[wasm_bindgen]
+pub fn encode_png_rgba(rgba: &[u8], w: usize, h: usize) -> Result<Vec<u8>, JsValue> {
+    let area = w
+        .checked_mul(h)
+        .ok_or_else(|| err("Image dimensions overflow"))?;
+    if area > MAX_IMAGE_PIXELS {
+        return Err(err(format!("Image too large ({w}×{h}).")));
+    }
+    if w == 0 || h == 0 || rgba.len() < area * 4 {
+        return Err(err("RGBA buffer does not match the given dimensions"));
+    }
+    let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba[..area * 4].to_vec())
+        .ok_or_else(|| err("RGBA buffer does not match the given dimensions"))?;
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgba8(buf)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| err(format!("PNG encode failed: {e}")))?;
+    Ok(out)
+}
+
 /// Remuestrea un buffer RGBA opaco con Lanczos3 (mismo filtro que las hojas).
 /// La fase de video escala aquí en vez de con el drawImage del navegador.
 #[wasm_bindgen]

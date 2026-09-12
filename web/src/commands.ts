@@ -97,6 +97,8 @@ export interface Commands {
     args: { rgba: Bytes; w: number; h: number; outW: number; outH: number };
     result: Bytes;
   };
+  /** PNG sin pérdida de un buffer RGBA de 8 bits: bytes, no un Blob. */
+  encode_png_rgba: { args: { rgba: Bytes; w: number; h: number }; result: Bytes };
   encode_tiff: { args: { png: Bytes }; result: Bytes };
   printer_test_png: { args: { paper: string; dpi: number }; result: Bytes };
   analyze_printer_test: {

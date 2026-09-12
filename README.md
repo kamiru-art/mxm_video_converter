@@ -136,6 +136,11 @@ available:
 - MOV, with one PNG image for each frame, for a result without losses
 - MOV, with the ProRes 4444 codec, for video editors
 
+Neither MOV export has a size limit. The PNG frames are copied into the
+file byte by byte, and the ProRes is encoded in pieces and joined; both are
+written to the disk of the browser as they are made, so a long 4K or 8K
+master of several gigabytes is possible.
+
 The final video can carry the sound of the original clip. The frames come
 from a stretch of that clip at the project's frame rate, so the sound of the
 same stretch falls into place by itself: phase ① notes where the stretch

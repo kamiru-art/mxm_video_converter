@@ -3,6 +3,7 @@
 import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame } from './gen.ts';
 import { generateSheets, resolveCyanCurve } from './gen.ts';
+import { clearProcessedCache, storeProcessedFrame } from './opfs.ts';
 import { poolSize, recycleIdle, run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
 import { project } from './project.ts';
@@ -104,6 +105,9 @@ function expectedLabels(layout: Layout): Map<string, number> {
 }
 
 export function mountPhase2(root: HTMLElement): void {
+  // los recortes de la sesión anterior no sirven: el informe no sobrevive
+  // a la recarga
+  void clearProcessedCache();
   const layoutInfo = el(
     'div',
     { class: 'hint' },
@@ -405,9 +409,18 @@ export function mountPhase2(root: HTMLElement): void {
       );
     }
     const asBlob = (u8: Bytes, type: string): Blob => new Blob([u8], { type });
+    // los recortes van al disco privado del navegador, como bytes y sin
+    // pasar por un Blob en memoria (ver opfs.ts): con un proyecto largo se
+    // pasa el cupo de Blobs de Chrome y la fase ④ ya no puede leerlos
+    const frames = await Promise.all(
+      (r.frames ?? []).map(async (fr) => ({
+        label: fr.label,
+        png: await storeProcessedFrame(fr.label, fr.png),
+      })),
+    );
     return {
       result: JSON.parse(r.result) as ScanResult,
-      frames: (r.frames ?? []).map((fr) => ({ label: fr.label, png: asBlob(fr.png, 'image/png') })),
+      frames,
       sinIdentificar: (r.sin_identificar ?? []).map((fr) => ({
         label: fr.label,
         png: asBlob(fr.png, 'image/png'),
@@ -794,6 +807,7 @@ export function mountPhase2(root: HTMLElement): void {
   function clearReport(keepAssign = false): void {
     for (const e of ph2.results) dropRows(e);
     ph2.results = [];
+    void clearProcessedCache(); // sus archivos en disco ya no los mira nadie
     if (!keepAssign) ph2.assign = {};
     reportTable.replaceChildren(reportHeader);
     rebuildFromResults();
