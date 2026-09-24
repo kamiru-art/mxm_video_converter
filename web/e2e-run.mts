@@ -7,14 +7,17 @@
 // enforces with `erasableSyntaxOnly`.
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
 const DIST = fileURLToPath(new URL('./dist', import.meta.url));
+// El informe de la corrida: se reescribe en cada una y no va al repositorio
+const ARTIFACT_DIR = fileURLToPath(new URL('../artifacts/e2e/', import.meta.url));
 
 // Sample video for the WebCodecs extract/encode test. Generated with ffmpeg
 // when available (local dev and the ubuntu CI runner both have it); the page
@@ -234,6 +237,51 @@ if (cspViolations.length) {
   console.log(`\nCSP: ${cspViolations.length} violation(s) against web/public/_headers:`);
   for (const v of new Set(cspViolations)) console.log(`  ${v}`);
 }
+const report = (await page.evaluate('globalThis.e2eReport').catch(() => null)) as {
+  steps: string[];
+  outputs: Record<string, string>;
+} | null;
+const chrome = await browser.version();
 await browser.close();
 server.close();
-process.exit(title === 'E2E-OK' && cspViolations.length === 0 ? 0 : 1);
+const passed = title === 'E2E-OK' && cspViolations.length === 0;
+
+// Informe verificable: entradas (muestras generadas, núcleo WASM, cabeceras
+// del sitio) y salidas por SHA-256, más cada paso comprobado. No lleva
+// tiempos ni fechas: con las mismas entradas, el mismo navegador y el mismo
+// ffmpeg, dos corridas escriben el mismo archivo byte a byte.
+const sha256 = (b: Uint8Array | string): string => createHash('sha256').update(b).digest('hex');
+const inputs: Record<string, string> = {};
+for (const f of (await readdir(DIST)).filter((n) => n.startsWith('e2e_sample')).sort())
+  inputs[`samples/${f}`] = sha256(await readFile(join(DIST, f)));
+for (const f of (await readdir(join(DIST, 'assets'))).filter((n) => n.endsWith('.wasm')).sort())
+  inputs[`wasm/${f.replace(/-[^-.]+\.wasm$/, '.wasm')}`] = sha256(
+    await readFile(join(DIST, 'assets', f)),
+  );
+inputs['public/_headers'] = sha256(HEADERS_FILE);
+const ffmpeg =
+  spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' }).stdout?.split('\n')[0] ?? null;
+const outputs = report?.outputs ?? {};
+const artifact = {
+  suite: 'browser-pipeline',
+  result: title,
+  passed,
+  checks: {
+    page_reached_E2E_OK: title === 'E2E-OK',
+    no_csp_violations: cspViolations.length === 0,
+  },
+  environment: { chrome, ffmpeg, node: process.version },
+  inputs,
+  outputs: Object.fromEntries(Object.entries(outputs).sort(([a], [b]) => (a < b ? -1 : 1))),
+  steps: report?.steps ?? [],
+  csp_violations: [...new Set(cspViolations)],
+};
+await mkdir(ARTIFACT_DIR, { recursive: true });
+const json = `${JSON.stringify(artifact, null, 2)}\n`;
+await writeFile(join(ARTIFACT_DIR, 'browser-pipeline.json'), json);
+await writeFile(
+  join(ARTIFACT_DIR, 'browser-pipeline.json.sha256'),
+  `${sha256(json)}  browser-pipeline.json\n`,
+);
+console.log(`\nArtifact: artifacts/e2e/browser-pipeline.json (sha256 ${sha256(json)})`);
+process.exit(passed ? 0 : 1);
