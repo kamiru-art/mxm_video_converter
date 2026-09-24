@@ -1671,8 +1671,19 @@ mod tests {
             img.px((l.page_w / 2) as usize, (l.page_h * 3 / 4) as usize),
             [255, 255, 255]
         );
+        // cyan_mirror viene activado: el negativo se imprime espejado para
+        // que la emulsión quede contra el papel. Cada fila tiene que salir
+        // invertida, y la página no es simétrica (el texto y la tira no lo
+        // son), así que una salida sin espejar no pasa por espejada.
+        let before = img.clone();
         let fin = finish_page(&s, img);
-        assert_eq!(fin.w as i64, l.page_w); // espejada, mismo tamaño
+        assert_eq!((fin.w, fin.h), (before.w, before.h));
+        assert_ne!(fin.data, before.data, "la página no salió espejada");
+        for y in 0..fin.h {
+            for x in 0..fin.w {
+                assert_eq!(fin.px(x, y), before.px(fin.w - 1 - x, y), "({x}, {y})");
+            }
+        }
     }
 
     #[test]

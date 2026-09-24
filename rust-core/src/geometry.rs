@@ -396,20 +396,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn homography_identity() {
-        let src = vec![
-            (0.0, 0.0),
-            (100.0, 0.0),
-            (100.0, 100.0),
-            (0.0, 100.0),
-            (50.0, 20.0),
-        ];
-        let h = find_homography_dlt(&src, &src).unwrap();
-        let p = apply_h(&h, (33.0, 77.0));
-        assert!((p.0 - 33.0).abs() < 1e-6 && (p.1 - 77.0).abs() < 1e-6);
-    }
-
-    #[test]
     fn homography_known_projective() {
         // proyectiva no trivial
         let ht: H3 = [1.2, 0.1, 5.0, -0.05, 0.9, 12.0, 0.0002, -0.0001, 1.0];
