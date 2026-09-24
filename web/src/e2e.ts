@@ -20,6 +20,24 @@ function log(s: string): void {
   console.log('[E2E]', s);
 }
 
+// Lo que e2e-run.mts vuelca en artifacts/e2e/: los pasos del log y el
+// SHA-256 de las salidas que no dependen del reloj ni de un codificador del
+// navegador (hojas, PDF, TIFF, layout, recortes del núcleo). Mismas entradas,
+// mismos bytes: dos corridas en la misma máquina dan el mismo informe. Los
+// videos codificados quedan fuera; de ellos cuenta lo que se comprueba.
+const outputs: Record<string, string> = {};
+(globalThis as { e2eReport?: unknown }).e2eReport = { steps: lines, outputs };
+async function digest(name: string, data: Uint8Array | Blob | string): Promise<void> {
+  const bytes =
+    typeof data === 'string'
+      ? new TextEncoder().encode(data)
+      : data instanceof Blob
+        ? new Uint8Array(await data.arrayBuffer())
+        : data.slice();
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  outputs[name] = Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 function synthFrame(w: number, h: number, base: [number, number, number]): RgbaImage {
   const c = new OffscreenCanvas(w, h);
   const ctx = context2d(c);
@@ -368,6 +386,10 @@ async function main(): Promise<void> {
       throw new Error(`PDF startxref (${startxref}) does not point at the xref table`);
     if (!/\/Predictor 15 \/Colors 3/.test(pdfText))
       throw new Error('PDF page is not the sheet PNG stream');
+    await digest('sheet/e2e_p1.png', sheetPng);
+    await digest('sheet/e2e.pdf', pdfBytes);
+    await digest('sheet/e2e_p1.tif', tif);
+    await digest('sheet/layout.json', layoutJson);
     log(
       `hoja generada (${sheetPng.length} bytes), PDF: ${pdfBytes.length} bytes con xref en ${startxref}, TIFF ok, layout: ids_por_hoja ✓`,
     );
@@ -384,6 +406,7 @@ async function main(): Promise<void> {
     sctx.drawImage(bmp, -bmp.width / 2, -bmp.height / 2);
     const scanBlob = await sc.convertToBlob({ type: 'image/png' });
     const scanBytes = new Uint8Array(await scanBlob.arrayBuffer());
+    await digest('scan/scan1.png', scanBytes);
     log(`escaneo simulado ${sc.width}×${sc.height}`);
 
     // fase ②: procesar (camino todo-en-WASM)
@@ -403,6 +426,7 @@ async function main(): Promise<void> {
       `scan ok=${result.ok} hoja=${result.hoja_numero} via=${result.via} marcadores=${result.marcadores}/${result.marcadores_total} escala=${result.escala} frames=${res.frames.length}`,
     );
     if (!result.ok || res.frames.length !== 4) throw new Error(`fase ② falló: ${res.result}`);
+    for (const f of res.frames) await digest(`scan/frames/${f.label}.png`, f.png);
     if (!String(result.via ?? '').startsWith('marker'))
       throw new Error(`expected marker-ID identification, got via=${result.via}`);
 
@@ -468,6 +492,7 @@ async function main(): Promise<void> {
     // fase ③: página de prueba de impresora + autoanálisis
     const test = await run('printer_test_png', { paper: 'A4', dpi: 150 });
     const testCopy = new Uint8Array(test);
+    await digest('calibration/printer_test_A4_150.png', testCopy);
     const prof = JSON.parse(
       await run('analyze_printer_test', { bytes: testCopy, paper: 'A4', dpi: 150, scanDpi: 150 }, [
         testCopy.buffer,
@@ -538,6 +563,7 @@ async function main(): Promise<void> {
       [pixels.buffer],
     );
     if (!sim.png) throw new Error('simulated blue print was not rendered');
+    await digest('cyanotype/simulated_print.png', sim.png);
     const cyBmp = await createImageBitmap(new Blob([sim.png], { type: 'image/png' }));
     const cc = new OffscreenCanvas(Math.round(cyBmp.width * 1.25), Math.round(cyBmp.height * 1.2));
     const cctx = context2d(cc);
@@ -567,6 +593,7 @@ async function main(): Promise<void> {
     );
     if (!cyResult.ok || cyRes.frames.length !== 2)
       throw new Error(`cianotipia falló: ${cyRes.result}`);
+    for (const f of cyRes.frames) await digest(`cyanotype/frames/${f.label}.png`, f.png);
 
     // ✋ asignación manual: mismo escaneo, pero con los QR ilegibles (se
     // quitan del layout). Este layout tiene una sola hoja, así que sin QR se
@@ -779,6 +806,8 @@ async function main(): Promise<void> {
             `exported frame differs from the eager PNG (${lazyPng.length} vs ${eager.length} bytes)`,
           );
         pngs.cancel();
+        await digest('video/lazy_p1.png', lazySheet);
+        await digest('video/frame_1.png', eager);
         log(
           `hojas desde el video: hoja ${lazySheet.size} bytes, ZIP ${lazyZip.size} bytes, PNG exportado idéntico al de la extracción ✓`,
         );

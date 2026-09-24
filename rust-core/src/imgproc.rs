@@ -457,13 +457,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn otsu_bimodal() {
-        let mut g = Gray::new(10, 10, 20);
-        for i in 50..100 {
-            g.data[i] = 220;
+    fn otsu_separates_ink_from_paper_away_from_mid_grey() {
+        // Cómo falla un umbral en un escaneo real: la tinta y el papel no
+        // quedan a los lados de 128. Una copia desvaída pone los dos por
+        // encima, un escaneo subexpuesto los dos por debajo, y la tinta
+        // ocupa mucha más superficie que el papel. Y siempre hay una mota de
+        // polvo negra y un brillo blanco. Un umbral fijo, o uno que parta el
+        // rango [mín, máx] por la mitad, deja toda la hoja de un color.
+        for (ink, paper) in [((150u8, 165u8), (200u8, 230u8)), ((20, 40), (70, 90))] {
+            let mut g = Gray::new(20, 10, 0);
+            for (i, v) in g.data.iter_mut().enumerate() {
+                *v = if i % 10 < 7 {
+                    ink.0 + (i % 7) as u8 * (ink.1 - ink.0) / 6
+                } else {
+                    paper.0 + (i % 3) as u8 * (paper.1 - paper.0) / 2
+                };
+            }
+            g.data[0] = 0;
+            g.data[1] = 255;
+            let t = otsu_threshold(&g);
+            let bin = threshold_binary(&g, t);
+            for (v, b) in g.data.iter().zip(&bin.data) {
+                let want = if *v >= paper.0 { 255 } else { 0 };
+                assert_eq!(
+                    *b, want,
+                    "tinta {ink:?} papel {paper:?}: umbral {t} deja {v} en {b}"
+                );
+            }
         }
-        let t = otsu_threshold(&g);
-        assert!((20..220).contains(&t));
     }
 
     #[test]

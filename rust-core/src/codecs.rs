@@ -372,15 +372,6 @@ mod tests {
             decode_peak_bytes(w, h, 6, 6, false, true) <= MAX_DECODE_BYTES,
             "A4@1200 16 bits tiene que entrar"
         );
-        // Y así es como se rechazaba antes: el cálculo viejo suponía un RGBA
-        // intermedio SIEMPRE (20 B/px en 16 bits) contra un tope de 1 GiB.
-        const TOPE_VIEJO: u64 = 1024 * 1024 * 1024;
-        assert!(
-            w * h * 20 > TOPE_VIEJO,
-            "2,59 GiB pedidos contra 1 GiB de tope"
-        );
-        assert!(una_copia <= TOPE_VIEJO, "y solo hacían falta 0,78 GiB");
-
         // A3 a 600 dpi en 16 bits, que también se rechazaba, ahora entra
         assert!(decode_peak_bytes(7016, 9921, 6, 6, false, true) <= MAX_DECODE_BYTES);
 

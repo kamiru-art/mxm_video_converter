@@ -28,3 +28,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Report of the browser E2E run (npm run test:e2e rewrites it every time)
+/artifacts/

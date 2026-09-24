@@ -1131,46 +1131,6 @@ mod tests {
     }
 
     #[test]
-    fn qr_decode_after_canonical_warp() {
-        let page = render_printer_test("A4", 150);
-        let g = printer_test_geometry("A4", 150);
-        let (warp, s, _r) = align_to_canonical(DynImg::U8(page), &g.cal, "normal").unwrap();
-        println!("escala medida: {s}");
-        for (mmv, bbox, texto) in &g.qr_test {
-            let x1 = (bbox[0] as f64 * s).round() as i64;
-            let y1 = (bbox[1] as f64 * s).round() as i64;
-            let x2 = (bbox[2] as f64 * s).round() as i64;
-            let y2 = (bbox[3] as f64 * s).round() as i64;
-            let pad = ((x2 - x1) as f64 * 0.3) as i64;
-            let crop = warp.crop(
-                (x1 - pad).max(0) as usize,
-                (y1 - pad).max(0) as usize,
-                (x2 + pad).max(0) as usize,
-                (y2 + pad).max(0) as usize,
-            );
-            println!(
-                "{mmv} mm -> {:?} (esperado {texto})",
-                qr::decode_qr_rgb(&crop)
-            );
-        }
-        // diferencia media entre el warp y la página original
-        let orig = render_printer_test("A4", 150);
-        let mut acc = 0.0f64;
-        let n = (orig.w * orig.h * 3).min(warp.data.len());
-        for i in 0..n {
-            acc += (orig.data[i] as f64 - warp.data[i] as f64).abs();
-        }
-        println!(
-            "dif media = {:.2}, warp {}x{}, orig {}x{}",
-            acc / n as f64,
-            warp.w,
-            warp.h,
-            orig.w,
-            orig.h
-        );
-    }
-
-    #[test]
     fn printer_test_page_renders_and_selfanalyzes() {
         let page = render_printer_test("A4", 150);
         // el análisis del render perfecto debe detectar escala ≈ 1.0

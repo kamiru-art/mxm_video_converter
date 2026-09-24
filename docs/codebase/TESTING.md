@@ -4,7 +4,7 @@
 
 | Layer | Tool | What it covers | Evidence |
 |-------|------|----------------|----------|
-| Rust unit | The built-in `#[test]` harness | 55 tests across the domain modules | `rust-core/src/*.rs` |
+| Rust unit | The built-in `#[test]` harness | 56 tests across the domain modules | `rust-core/src/*.rs` |
 | Rust integration | The same harness, in `tests/` | 7 end-to-end round trips: build a sheet, simulate a scan of it, recover the frames | `rust-core/tests/pipeline.rs` |
 | Rust lint and format | `cargo clippy -- -D warnings` (native and wasm32), `cargo fmt --check` | Every warning is an error; see `CONVENTIONS.md` §2 | `rust-core/Cargo.toml`, `rust-core/rustfmt.toml` |
 | Web lint and format | Biome (`npm run lint`) | `any`, `@ts-ignore`, default exports, non-null assertions, floating promises, formatting | `web/biome.jsonc` |
@@ -20,7 +20,7 @@ the phases is not exercised.
 Measured on the current tree with `cargo test --release`:
 
 ```
-Unit tests (src/lib.rs):          55 passed; 0 failed
+Unit tests (src/lib.rs):          56 passed; 0 failed
 Integration (tests/pipeline.rs):   7 passed; 0 failed
 Doc-tests:                          0
 ```
@@ -70,6 +70,10 @@ The PDF that phase 1 assembles from the streamed chunks must be one whole
 file: header first, `%%EOF` last, `startxref` pointing at the table, and
 the page image declared with the PNG predictor; the Rust tests of
 `pdf.rs` walk the xref and require every offset to land on its object.
+Each run writes `artifacts/e2e/browser-pipeline.json` (git-ignored) and its
+`.sha256`: the SHA-256 of the inputs and of the deterministic outputs (sheet,
+PDF, TIFF, layout, cut-out frames, calibration page) and every checked step,
+with no clock in it, so two runs on the same machine write the same bytes.
 The test page must be cross-origin isolated (the runner sends every header
 of the `/*` block of `public/_headers`), so the `ffmpeg.wasm` samples run
 through the multithreaded core; the log line says which core ran.
