@@ -3,6 +3,7 @@
 import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame } from './gen.ts';
 import { generateSheets, resolveCyanCurve } from './gen.ts';
+import { imageInfo } from './imageinfo.ts';
 import { clearProcessedCache, storeProcessedFrame } from './opfs.ts';
 import { poolSize, recycleIdle, run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
@@ -1084,17 +1085,25 @@ export function mountPhase2(root: HTMLElement): void {
           const frames: GenFrame[] = [];
           for (const { file } of found) {
             const isTiff = /\.(tif|tiff)$/i.test(file.name);
-            let getImageData: () => Promise<RgbaImage>;
+            let getImageData: (full: boolean) => Promise<RgbaImage>;
             let w = 16,
               h = 9,
-              hasAlpha = false;
-            if (isTiff) {
-              const bytesP = file.arrayBuffer().then((b) => new Uint8Array(b));
-              const decoded = await run('decode_image', { bytes: await bytesP });
-              w = decoded.w;
-              h = decoded.h;
-              hasAlpha = decoded.had_alpha;
-              getImageData = async () => ({ data: decoded.rgba, w: decoded.w, h: decoded.h });
+              hasAlpha = false,
+              sixteen = false;
+            const info = await imageInfo(file).catch(() => null);
+            if (info && (isTiff || info.sixteen)) {
+              // TIFF y 16 bits: el núcleo, y a la hoja en su profundidad
+              ({ w, h, sixteen } = info);
+              hasAlpha = info.alpha;
+              getImageData = async (full) => {
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                if (full && sixteen) {
+                  const r = await run('decode_image16', { bytes }, [bytes.buffer]);
+                  return { data: r.rgba16, w: r.w, h: r.h, deep: true };
+                }
+                const r = await run('decode_image', { bytes }, [bytes.buffer]);
+                return { data: r.rgba, w: r.w, h: r.h };
+              };
             } else {
               const bmp = await createImageBitmap(file);
               w = bmp.width;
@@ -1111,7 +1120,7 @@ export function mountPhase2(root: HTMLElement): void {
                 return { data: new Uint8Array(d.data.buffer), w: c.width, h: c.height };
               };
             }
-            frames.push({ name: file.name, blob: file, w, h, hasAlpha, getImageData });
+            frames.push({ name: file.name, blob: file, w, h, hasAlpha, sixteen, getImageData });
           }
           const settings = await resolveCyanCurve(ajustes, []);
           const out = await generateSheets({

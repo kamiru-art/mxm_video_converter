@@ -212,6 +212,11 @@ input[type="text"], input[type="number"], select {
   border: 1.5px solid var(--papel-sombra); border-radius: 6px;
   background: #FDFBF4; color: var(--tinta);
 }
+/* Safari cuenta el texto de la opción elegida como desborde del campo
+   aunque el <select> mida lo que su columna: a 390 px, "MOV video
+   (Resolve, Premiere, After Effects, VLC)" abría 150 px de scroll lateral
+   en la fase de video. Recortado, cabe; lo que no entra acaba en "…". */
+select { overflow: hidden; text-overflow: ellipsis; }
 input[type="color"] { padding: 1px; height: 32px; width: 52px; border: 1.5px solid var(--papel-sombra); border-radius: 6px; background: #FDFBF4; }
 input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--prusia-500); outline-offset: 1px; }
 input:disabled, select:disabled { opacity: .45; background: #ECE8DC; cursor: not-allowed; }
@@ -523,3 +528,34 @@ details.adv > summary { cursor: pointer; font-weight: 600; font-size: 13px; colo
 /* controles bloqueados mientras corre una tarea larga (ui.ts lockControls) */
 .locked .dropzone { opacity: .5; pointer-events: none; }
 .locked label.field > span, .locked h3 { opacity: .7; }
+
+/* ── vista previa del video final (player.ts) ── */
+.player { margin-top: 12px; }
+.player-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #000;
+}
+.player-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.player-bar input[type='range'] { flex: 1 1 160px; min-width: 0; }
+.player-info { font-variant-numeric: tabular-nums; }
+
+/* ── pautas de interfaz: tema oscuro nativo, toques sin retardo, salto al contenido ── */
+html { color-scheme: dark; }
+button, a, input, select, label, .dropzone { touch-action: manipulation; }
+.skip-link {
+  position: absolute; left: 8px; top: -48px; z-index: 100;
+  padding: 8px 12px; border-radius: 6px;
+  background: var(--sol); color: #10233F; font-weight: 600;
+}
+.skip-link:focus-visible { top: 8px; }

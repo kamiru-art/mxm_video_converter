@@ -664,25 +664,31 @@ fn crop_frame(
 ) -> Option<DynImg> {
     let mut fx1 = bbox[0] * s;
     let mut fy1 = bbox[1] * s;
-    let mut fx2 = bbox[2] * s;
-    let mut fy2 = bbox[3] * s;
     if let Some(ls) = local {
-        let (dx, dy) = ls.shift([fx1, fy1, fx2, fy2]);
+        let (dx, dy) = ls.shift([fx1, fy1, bbox[2] * s, bbox[3] * s]);
         fx1 += dx;
-        fx2 += dx;
         fy1 += dy;
-        fy2 += dy;
     }
-    let (x1, y1, x2, y2) = aplicar_bleed(fx1.round(), fy1.round(), fx2.round(), fy2.round(), bleed);
-    let (w, h) = warp.size();
-    let x1 = (x1.max(0.0)) as usize;
-    let y1 = (y1.max(0.0)) as usize;
-    let x2 = (x2.max(0.0) as usize).min(w);
-    let y2 = (y2.max(0.0) as usize).min(h);
-    if x2 <= x1 || y2 <= y1 {
+    // El TAMAÑO sale sólo del tamaño del bbox, y la esquina se redondea
+    // aparte: redondear los dos bordes por separado daba recortes que
+    // variaban 1–2 px de un fotograma a otro según dónde cayeran en la hoja,
+    // y el video final tenía que remuestrearlos todos a un tamaño común
+    // (un desplazamiento subpíxel: más blando, y en 8 bits). Así, fotogramas
+    // del mismo tamaño en el layout salen del mismo tamaño aquí, píxel a
+    // píxel, y la fase del video los copia sin tocarlos.
+    let (w, h) = ((bbox[2] - bbox[0]) * s, (bbox[3] - bbox[1]) * s);
+    let (x1, y1, x2, y2) = aplicar_bleed(0.0, 0.0, w.round(), h.round(), bleed);
+    let (cw, ch) = (x2 - x1, y2 - y1);
+    if !(cw >= 1.0 && ch >= 1.0) || !fits_image_budget(cw as u64, ch as u64) {
         return None;
     }
-    Some(warp.crop(x1, y1, x2, y2))
+    let (ox, oy) = ((fx1 + x1).round() as i64, (fy1 + y1).round() as i64);
+    let (iw, ih) = warp.size();
+    // del todo fuera de la hoja enderezada: no hay nada que recortar
+    if ox >= iw as i64 || oy >= ih as i64 || ox + cw as i64 <= 0 || oy + ch as i64 <= 0 {
+        return None;
+    }
+    Some(warp.crop_fixed(ox, oy, cw as usize, ch as usize))
 }
 
 fn crop_frame_rgb8(

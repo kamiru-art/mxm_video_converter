@@ -391,6 +391,26 @@ pub fn warp_rgb_fill(img: &Rgb, m: &H3, out_w: usize, out_h: usize, fill: [u8; 3
     }
 }
 
+/// `warp_rgb_fill` en 16 bits (la hoja de 16 bits con compensación de
+/// escala de impresora).
+pub fn warp_rgb16_fill(img: &Rgb16, m: &H3, out_w: usize, out_h: usize, fill: [u16; 3]) -> Rgb16 {
+    Rgb16 {
+        w: out_w,
+        h: out_h,
+        data: warp_generic(
+            &img.data,
+            img.w,
+            img.h,
+            m,
+            out_w,
+            out_h,
+            65535.0,
+            |v| v.round() as u16,
+            fill,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

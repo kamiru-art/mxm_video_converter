@@ -1,9 +1,7 @@
 //! Modo cianotipia: negativos digitales para imprimir en acetato.
 //! Port fiel del módulo original (densidad, curvas, tintas, simulación).
 
-use crate::geometry::Rng;
 use crate::img::{Gray, Rgb};
-use crate::imgproc::gaussian_blur_f32;
 
 pub fn hex_to_rgb(color: &str) -> [u8; 3] {
     let c = color.trim().trim_start_matches('#');
@@ -30,6 +28,19 @@ pub type InkStop = (f64, [u8; 3]);
 /// Sin stops: blanco (d=0) → ink_color (d=255). Con stops (ColorBlocker):
 /// interpolación entre paradas, ancladas en blanco si falta d=0.
 pub fn ink_ramp(ink_color: &str, stops: Option<&[InkStop]>) -> [[u8; 3]; 256] {
+    let exact = ink_ramp_exact(ink_color, stops);
+    let mut ramp = [[0u8; 3]; 256];
+    for (r, e) in ramp.iter_mut().zip(exact.iter()) {
+        for ch in 0..3 {
+            r[ch] = e[ch].round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    ramp
+}
+
+/// La misma rampa sin redondear sus puntos (el negativo de 16 bits la
+/// interpola entre ellos).
+pub fn ink_ramp_exact(ink_color: &str, stops: Option<&[InkStop]>) -> [[f64; 3]; 256] {
     let mut anchors: Vec<(f64, [f64; 3])> = Vec::new();
     match stops {
         Some(ss) if !ss.is_empty() => {
@@ -56,7 +67,7 @@ pub fn ink_ramp(ink_color: &str, stops: Option<&[InkStop]>) -> [[u8; 3]; 256] {
             ];
         }
     }
-    let mut ramp = [[0u8; 3]; 256];
+    let mut ramp = [[0f64; 3]; 256];
     for d in 0..256 {
         let x = d as f64;
         // buscar el segmento
@@ -72,7 +83,7 @@ pub fn ink_ramp(ink_color: &str, stops: Option<&[InkStop]>) -> [[u8; 3]; 256] {
             0.0
         };
         for ch in 0..3 {
-            ramp[d][ch] = (c0[ch] + (c1[ch] - c0[ch]) * t).round().clamp(0.0, 255.0) as u8;
+            ramp[d][ch] = (c0[ch] + (c1[ch] - c0[ch]) * t).clamp(0.0, 255.0);
         }
     }
     ramp
@@ -160,8 +171,8 @@ pub fn effective_lut(
     }
 }
 
-/// Convierte un fotograma a su negativo de cianotipia:
-/// gris → micro-contraste (clarity) → LUT (con dithering) → rampa de tinta.
+/// Negativo digital de una imagen de 8 bits (ver photo.rs, que es donde
+/// vive el camino: en f32 y con una sola cuantización al final).
 pub fn make_negative(
     img: &Rgb,
     lut: Option<&[f64]>,
@@ -169,40 +180,9 @@ pub fn make_negative(
     stops: Option<&[InkStop]>,
     clarity: f64,
 ) -> Rgb {
-    let gray = img.to_gray();
-    let mut gvals: Vec<f64> = gray.data.iter().map(|&v| v as f64).collect();
-    let c = clarity.clamp(0.0, 100.0);
-    if c > 0.0 {
-        let radio = ((gray.w.min(gray.h)) as f32 / 24.0).max(2.0);
-        let f32s: Vec<f32> = gray.data.iter().map(|&v| v as f32).collect();
-        let blur = gaussian_blur_f32(&f32s, gray.w, gray.h, radio);
-        for i in 0..gvals.len() {
-            gvals[i] = (gvals[i] + (c / 100.0) * (gvals[i] - blur[i] as f64)).clamp(0.0, 255.0);
-        }
-    }
-    let ramp = ink_ramp(ink_color, stops);
-    let has_lut = lut.is_some_and(|l| l.len() == 256);
-    let lut_arr: Vec<f64> = if has_lut {
-        lut.unwrap().to_vec()
-    } else {
-        (0..256).map(|i| i as f64).collect()
-    };
-    let mut rng = Rng::new(12345); // determinista: hojas reproducibles
-    let mut out = Vec::with_capacity(gray.w * gray.h * 3);
-    for &g in &gvals {
-        let gi = g.round().clamp(0.0, 255.0) as usize;
-        let mut d = lut_arr[gi];
-        if has_lut {
-            d += rng.jitter(); // dithering subcuántico: sin bandas
-        }
-        let di = d.round().clamp(0.0, 255.0) as usize;
-        out.extend_from_slice(&ramp[di]);
-    }
-    Rgb {
-        w: gray.w,
-        h: gray.h,
-        data: out,
-    }
+    let rgb: Vec<f32> = img.data.iter().map(|&v| v as f32).collect();
+    let d = crate::photo::densities(&rgb, img.w, img.h, lut, clarity);
+    crate::photo::ink8(&d, img.w, img.h, ink_color, stops)
 }
 
 /// Colorea un parche gris interpretándolo como densidad INVERTIDA

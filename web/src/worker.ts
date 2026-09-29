@@ -5,7 +5,7 @@
 
 import type { CommandName, Commands, RawRgba, WorkerRequest, WorkerResponse } from './commands.ts';
 import { errMsg } from './errors.ts';
-import type { Bytes, DecodedImage, RenderSheetOutput, ScanOutput } from './types.ts';
+import type { Bytes, DecodedImage, ImageInfo, RenderSheetOutput, ScanOutput } from './types.ts';
 import type { InitOutput } from './wasm/mxm_core.js';
 import init, * as core from './wasm/mxm_core.js';
 
@@ -92,6 +92,10 @@ const handlers: Handlers = {
     const r = core.decode_image(a.bytes) as DecodedImage;
     return { value: r, transfer: [r.rgba.buffer] };
   },
+  decode_image16: (a) => {
+    const r = core.decode_image16(a.bytes) as { w: number; h: number; rgba16: Bytes };
+    return { value: r, transfer: [r.rgba16.buffer] };
+  },
   scan_process: (a) => {
     const r = core.scan_process(
       a.bytes,
@@ -119,6 +123,11 @@ const handlers: Handlers = {
   resize_rgba: (a) => {
     const out = bytes(core.resize_rgba(a.rgba, a.w, a.h, a.outW, a.outH));
     return { value: out, transfer: [out.buffer] };
+  },
+  probe_image: (a) => core.probe_image(a.bytes) as ImageInfo,
+  conform_frame: (a) => {
+    const png = bytes(core.conform_frame(a.bytes, a.w, a.h, a.sixteen, a.alpha));
+    return { value: png, transfer: [png.buffer] };
   },
   encode_png_rgba: (a) => {
     const png = bytes(core.encode_png_rgba(a.rgba, a.w, a.h));

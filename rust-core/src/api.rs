@@ -11,6 +11,7 @@ use crate::dedup;
 use crate::img::{DynImg, Rgb};
 use crate::layoutfile;
 use crate::pdf::PdfBuilder;
+use crate::photo::FramePixels;
 use crate::scanproc::{
     base_report, detect_scan, finish_scan, process_scan, resolve_markers, FinishInput, LocalShift,
     ScanOptions, MAX_IMAGE_PIXELS,
@@ -48,6 +49,9 @@ struct FrameMeta {
     orig_file: Option<String>,
     /// offset en bytes dentro del buffer concatenado; -1 = sin píxeles
     offset: i64,
+    /// RGBA de 16 bits (little-endian, 8 bytes por píxel) en vez de 8.
+    #[serde(default)]
+    deep: bool,
 }
 
 fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsValue> {
@@ -61,7 +65,7 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
             // hostil puede enrollar w*h*4 y saltarse el bounds check
             let len =
                 m.w.checked_mul(m.h)
-                    .and_then(|p| p.checked_mul(4))
+                    .and_then(|p| p.checked_mul(if m.deep { 8 } else { 4 }))
                     .ok_or_else(|| err("Frame dimensions overflow"))?;
             let end = start
                 .checked_add(len)
@@ -69,7 +73,19 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
             if end > pixels.len() {
                 return Err(err("Pixel buffer shorter than the metadata"));
             }
-            Some(pixels[start..end].to_vec())
+            let bytes = &pixels[start..end];
+            Some(if m.deep {
+                FramePixels::Rgba16(
+                    bytes
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| u16::from_le_bytes(*b))
+                        .collect(),
+                )
+            } else {
+                FramePixels::Rgba8(bytes.to_vec())
+            })
         } else {
             None
         };
@@ -136,7 +152,13 @@ pub fn render_sheet(
         return Err(err(msg));
     }
     let out = Object::new();
-    if let Some(mut img) = res.image {
+    // la hoja de 16 bits es la que se entrega; la de 8 queda para la vista
+    // previa ("simulate"), que es sólo para mirar
+    if let (Some(img16), "final") = (res.image16, finish) {
+        let img16 = sheet::finish_page16(&s, img16);
+        let png = codecs::encode_png_dyn(&DynImg::U16(img16));
+        Reflect::set(&out, &"png".into(), &Uint8Array::from(png.as_slice())).ok();
+    } else if let Some(mut img) = res.image {
         match finish {
             "final" => img = sheet::finish_page(&s, img),
             "simulate" => {
@@ -209,13 +231,7 @@ pub fn dedup_hashes(meta_json: &str, pixels: &[u8]) -> Result<String, JsValue> {
     for f in frames {
         let rgba = f.rgba.ok_or_else(|| err("Frame without pixels"))?;
         // aplanar sobre blanco (lo que ve la impresión)
-        let mut rgb = Vec::with_capacity(f.w * f.h * 3);
-        for p in rgba.as_chunks::<4>().0 {
-            let a = p[3] as u32;
-            for c in 0..3 {
-                rgb.push(((p[c] as u32 * a + 255 * (255 - a)) / 255) as u8);
-            }
-        }
+        let rgb = rgba.rgb8_over_white();
         let h = dedup::dhash(&Rgb {
             w: f.w,
             h: f.h,
@@ -251,13 +267,7 @@ pub fn content_histogram(meta_json: &str, pixels: &[u8]) -> Result<String, JsVal
     let mut hist = [0.0f64; 256];
     for f in frames {
         if let Some(rgba) = f.rgba {
-            let mut rgb = Vec::with_capacity(f.w * f.h * 3);
-            for p in rgba.as_chunks::<4>().0 {
-                let a = p[3] as u32;
-                for c in 0..3 {
-                    rgb.push(((p[c] as u32 * a + 255 * (255 - a)) / 255) as u8);
-                }
-            }
+            let rgb = rgba.rgb8_over_white();
             cyan::accumulate_histogram(
                 &mut hist,
                 &Rgb {
@@ -282,6 +292,27 @@ pub fn effective_curve(lut_json: &str, strength: f64, adapt: f64, hist_json: &st
         Some(l) => serde_json::to_string(&l).unwrap(),
         None => "null".into(),
     }
+}
+
+/// Decodifica una imagen a RGBA de 16 bits (little-endian, 8 bytes por
+/// píxel), sin perder la profundidad: los fotogramas de 16 bits que van a
+/// una hoja. Devuelve {w, h, rgba16}.
+#[wasm_bindgen]
+pub fn decode_image16(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let img = codecs::decode_checked(bytes)
+        .map_err(err)?
+        .img
+        .into_rgba16();
+    let (w, h) = (img.width(), img.height());
+    let mut le = Vec::with_capacity(img.as_raw().len() * 2);
+    for v in img.as_raw() {
+        le.extend_from_slice(&v.to_le_bytes());
+    }
+    let out = Object::new();
+    Reflect::set(&out, &"w".into(), &JsValue::from_f64(w as f64)).ok();
+    Reflect::set(&out, &"h".into(), &JsValue::from_f64(h as f64)).ok();
+    Reflect::set(&out, &"rgba16".into(), &Uint8Array::from(le.as_slice())).ok();
+    Ok(out.into())
 }
 
 /// Decodifica una imagen (PNG/JPG/TIFF/BMP/WebP, 8/16 bits) a RGBA de 8 bits
@@ -521,11 +552,7 @@ pub fn encode_png_rgba(rgba: &[u8], w: usize, h: usize) -> Result<Vec<u8>, JsVal
     }
     let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba[..area * 4].to_vec())
         .ok_or_else(|| err("RGBA buffer does not match the given dimensions"))?;
-    let mut out = Vec::new();
-    image::DynamicImage::ImageRgba8(buf)
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .map_err(|e| err(format!("PNG encode failed: {e}")))?;
-    Ok(out)
+    codecs::encode_png(image::DynamicImage::ImageRgba8(buf)).map_err(err)
 }
 
 /// Remuestrea un buffer RGBA opaco con Lanczos3 (mismo filtro que las hojas).
@@ -715,7 +742,36 @@ impl Pdf {
     pub fn finish(&mut self) -> Result<Vec<u8>, JsValue> {
         self.inner
             .take()
-            .map(|b| b.finish())
-            .ok_or_else(|| err("PDF already finalized"))
+            .ok_or_else(|| err("PDF already finalized"))?
+            .finish()
+            .map_err(err)
     }
+}
+
+// ── Video final sin pérdida ─────────────────────────────────────
+
+/// Cabecera de una imagen sin decodificarla: {w, h, sixteen, alpha, png}.
+#[wasm_bindgen]
+pub fn probe_image(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let i = crate::conform::probe(bytes).map_err(err)?;
+    let out = Object::new();
+    Reflect::set(&out, &"w".into(), &JsValue::from_f64(i.w as f64)).ok();
+    Reflect::set(&out, &"h".into(), &JsValue::from_f64(i.h as f64)).ok();
+    Reflect::set(&out, &"sixteen".into(), &JsValue::from_bool(i.sixteen)).ok();
+    Reflect::set(&out, &"alpha".into(), &JsValue::from_bool(i.alpha)).ok();
+    Reflect::set(&out, &"png".into(), &JsValue::from_bool(i.png)).ok();
+    Ok(out.into())
+}
+
+/// Un fotograma como PNG de `w`×`h`, a 16 bits si `sixteen`, con alfa si
+/// `alpha`, sin bajar nunca la profundidad (ver conform.rs).
+#[wasm_bindgen]
+pub fn conform_frame(
+    bytes: &[u8],
+    w: u32,
+    h: u32,
+    sixteen: bool,
+    alpha: bool,
+) -> Result<Vec<u8>, JsValue> {
+    crate::conform::conform_png(bytes, w, h, sixteen, alpha).map_err(err)
 }

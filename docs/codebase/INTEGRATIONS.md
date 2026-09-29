@@ -12,7 +12,7 @@ loads.
 | Cloudflare Workers | Static hosting | Serves the built site at `mxm.sebastianlopez.me`, with the single-page-application fallback. | API token, held as a GitHub secret. | High: it is how the application reaches users. | `web/wrangler.jsonc`, `.github/workflows/ci.yml` |
 | GitHub Actions | CI/CD | Runs the Rust tests, builds the WebAssembly and the site, runs the browser test, deploys. | The workflow's own `GITHUB_TOKEN`, with `contents: read`. | High | `.github/workflows/ci.yml` |
 | Google Fonts | Static asset over the network | Web fonts for the interface. | None | Low: the page still works without them. | `web/src/sw.ts` (`FONT_HOSTS`) |
-| `ffmpeg.wasm` | Bundled asset, about 32 MB | Decodes what WebCodecs refuses, and muxes the two MOV exports. | None | Medium: without it, AVI files and some camera MOV files do not open, and the MOV exports are unavailable. | `web/src/avi.ts`, `web/prepare-ffmpeg.mts` |
+| `ffmpeg.wasm` | Bundled asset, about 32 MB | Decodes what WebCodecs refuses (AVI, camera MOV in HEVC 10-bit or ProRes). The export no longer uses it. | None | Medium: without it, AVI files and some camera MOV files do not open. The lossless export does not depend on it. | `web/src/avi.ts`, `web/prepare-ffmpeg.mts` |
 | Browser platform APIs | Runtime | WebAssembly, WebCodecs, WebGPU, Web Workers, `localStorage`, service worker, `createImageBitmap`. | None | High | `web/src/pool.ts`, `web/src/video.ts`, `web/src/webgpu.ts` |
 
 There is **no** database, no message queue, no cache server, no e-mail

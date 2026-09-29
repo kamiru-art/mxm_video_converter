@@ -28,6 +28,18 @@ const EXPORT = 'export';
  *  en memoria. Un Blob leído de aquí lo sirve el disco. */
 const OUT = 'out';
 
+/** Lo que se le entrega a un stream de OPFS: una vista que no cubre todo su
+ *  búfer se copia antes. Safari (26.5) escribe el ArrayBuffer ENTERO de una
+ *  vista, no sus bytes: el sonido del MOV va a trozos de un mismo búfer
+ *  (`pcm.subarray`) y el archivo salía con el búfer repetido por trozo,
+ *  corrupto y sin moov legible. Chrome y Firefox respetan la vista. */
+function exact(chunk: Bytes | Blob): Bytes | Blob {
+  if (chunk instanceof Blob) return chunk;
+  return chunk.byteOffset === 0 && chunk.byteLength === chunk.buffer.byteLength
+    ? chunk
+    : chunk.slice();
+}
+
 const dirPromises = new Map<string, Promise<FileSystemDirectoryHandle | null>>();
 /** Un vaciado de la caché de fotogramas en curso: esa carpeta no se vuelve
  *  a crear hasta que termine, o el borrado se llevaría por delante los
@@ -79,7 +91,7 @@ export async function storeFrame(
   try {
     const handle = await dir.getFileHandle(name, { create: true });
     w = await handle.createWritable();
-    await w.write(data);
+    await w.write(exact(data));
     await w.close();
     w = null;
     return await handle.getFile();
@@ -185,7 +197,7 @@ export async function openOutput(
     const w = await handle.createWritable();
     return {
       where: 'disk',
-      write: (chunk) => w.write(chunk),
+      write: (chunk) => w.write(exact(chunk)),
       async close() {
         await w.close();
         const f = await handle.getFile();

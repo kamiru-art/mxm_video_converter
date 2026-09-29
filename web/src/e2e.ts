@@ -26,7 +26,19 @@ function log(s: string): void {
 // mismos bytes: dos corridas en la misma máquina dan el mismo informe. Los
 // videos codificados quedan fuera; de ellos cuenta lo que se comprueba.
 const outputs: Record<string, string> = {};
-(globalThis as { e2eReport?: unknown }).e2eReport = { steps: lines, outputs };
+/** Archivos que el runner saca de la página para verificarlos por fuera
+ *  (con el ffmpeg de la máquina, no con el código que los escribió). */
+const e2eFiles: Record<string, Blob> = {};
+/** Qué fuente es cada fotograma del video sin pérdida, en orden. */
+const lossless: { sequence: string[] } = { sequence: [] };
+(globalThis as { e2eFiles?: unknown }).e2eFiles = e2eFiles;
+// las violaciones de CSP, oídas por la propia página: Safari no deja leer
+// su consola desde fuera, y así los tres navegadores las cuentan igual
+const csp: string[] = [];
+(globalThis as { e2eReport?: unknown }).e2eReport = { steps: lines, outputs, lossless, csp };
+document.addEventListener('securitypolicyviolation', (e) => {
+  csp.push(`${e.violatedDirective} blocked ${e.blockedURI || '(inline)'}`);
+});
 async function digest(name: string, data: Uint8Array | Blob | string): Promise<void> {
   const bytes =
     typeof data === 'string'
@@ -36,6 +48,12 @@ async function digest(name: string, data: Uint8Array | Blob | string): Promise<v
         : data.slice();
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   outputs[name] = Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** [ancho, alto, bits por canal] de un PNG, de su IHDR. */
+function pngHeader(png: Uint8Array): [number, number, number] {
+  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return [dv.getUint32(16), dv.getUint32(20), png[24]];
 }
 
 function synthFrame(w: number, h: number, base: [number, number, number]): RgbaImage {
@@ -56,12 +74,33 @@ function synthFrame(w: number, h: number, base: [number, number, number]): RgbaI
 }
 
 /** PNG (RGBA 8 bits, deflate del navegador) SIN pasar por un Blob: ver
- *  stressProres. Sólo para la prueba de carga. */
+ *  stressExport. */
 async function encodePng(img: ImageData): Promise<Bytes> {
-  const { width: w, height: h, data } = img;
-  const raw = new Uint8Array((w * 4 + 1) * h);
-  for (let y = 0; y < h; y++)
-    raw.set(data.subarray(y * w * 4, (y + 1) * w * 4), y * (w * 4 + 1) + 1);
+  return encodePngRaw(img.width, img.height, 8, 6, img.data);
+}
+
+/** PNG de `depth` bits (8 o 16) y tipo de color `colour` (2 RGB, 6 RGBA)
+ *  a partir de las muestras crudas, en big-endian si son de 16 bits: el
+ *  navegador no sabe escribir PNG de 16 bits, y la prueba los necesita. */
+async function encodePngRaw(
+  w: number,
+  h: number,
+  depth: 8 | 16,
+  colour: 2 | 6,
+  samples: ArrayLike<number>,
+): Promise<Bytes> {
+  const ch = colour === 6 ? 4 : 3;
+  const rowBytes = (w * ch * depth) / 8;
+  const raw = new Uint8Array((rowBytes + 1) * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w * ch; x++) {
+      const v = samples[y * w * ch + x];
+      if (depth === 16) {
+        raw[y * (rowBytes + 1) + 1 + x * 2] = v >> 8;
+        raw[y * (rowBytes + 1) + 2 + x * 2] = v & 255;
+      } else raw[y * (rowBytes + 1) + 1 + x] = v;
+    }
+  }
   const cs = new CompressionStream('deflate');
   const writer = cs.writable.getWriter();
   void writer.write(raw);
@@ -102,7 +141,7 @@ async function encodePng(img: ImageData): Promise<Bytes> {
   const dv = new DataView(ihdr.buffer);
   dv.setUint32(0, w);
   dv.setUint32(4, h);
-  ihdr.set([8, 6, 0, 0, 0], 8); // 8 bits, RGBA
+  ihdr.set([depth, colour, 0, 0, 0], 8);
   const parts = [
     new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk('IHDR', ihdr),
@@ -118,16 +157,16 @@ async function encodePng(img: ImageData): Promise<Bytes> {
   return png;
 }
 
-/** Prueba de CARGA de la exportación ProRes (o, con `quality=lossless`, la
- *  de PNG en MOV), aparte de la suite (no corre en CI: son minutos):
- *  `e2e.html?stress=prores&frames=180&w=2160&h=3840`
+/** Prueba de CARGA de la exportación sin pérdida, aparte de la suite (no
+ *  corre en CI: son minutos): `e2e.html?stress=export&frames=180&w=2160&h=3840`
+ *  (`kind=frames` para el ZIP de PNG en vez del MOV)
  *  hace fotogramas sintéticos distintos entre sí de ese tamaño y los
  *  exporta como haría la fase ④, por trozos y al disco privado. El
  *  proyecto Old Fires (180 fotogramas 4K, 1.6 GB estimados) es lo que
  *  antes se rechazaba. `audio=1` añade el sonido de la muestra. El MOV
  *  queda en `globalThis.e2eOutput` para sacarlo con puppeteer y pasarlo
  *  por ffprobe o AVFoundation. */
-async function stressProres(params: URLSearchParams): Promise<void> {
+async function stressExport(params: URLSearchParams): Promise<void> {
   const { storeProcessedFrame, clearProcessedCache } = await import('./opfs.ts');
   await clearProcessedCache();
   const n = parseInt(params.get('frames') ?? '180', 10);
@@ -136,7 +175,7 @@ async function stressProres(params: URLSearchParams): Promise<void> {
   const fps = parseFloat(params.get('fps') ?? '12');
   // `vary`: fotogramas de tamaños que difieren en 1–2 px, como los recortes
   // de escaneos de verdad. Fuerza el camino de recomposición (el passthrough
-  // no se toca) y con él encode_png_rgba
+  // no se toca) y con él conform_frame
   const vary = !!params.get('vary');
   const frames: Blob[] = [];
   let pngBytes = 0;
@@ -194,31 +233,35 @@ async function stressProres(params: URLSearchParams): Promise<void> {
     };
     log(`audio: ${name}, ${(audio.file.size / 1e6).toFixed(0)} MB, desde ${audio.start} s`);
   }
-  const { buildVideoLossless, buildVideoProres } = await import('./video.ts');
-  const lossless = params.get('quality') === 'lossless';
-  const kind = lossless ? 'PNG en MOV' : 'ProRes';
+  const { exportLossless } = await import('./export.ts');
+  const kind = params.get('kind') === 'frames' ? 'frames' : 'mov';
   const t0 = performance.now();
   let lastPct = -1;
-  const onPct = (p: number): void => {
-    const pct = Math.floor(p * 10) * 10;
-    if (pct !== lastPct) {
-      lastPct = pct;
-      log(`… ${kind} ${pct} % a los ${((performance.now() - t0) / 1000).toFixed(0)} s`);
-    }
-  };
-  const out = lossless
-    ? await buildVideoLossless(frames, fps, (i, m) => onPct(i / m), { audio })
-    : await buildVideoProres(frames, fps, onPct, { audio });
+  const out = await exportLossless(frames, fps, {
+    kind,
+    audio,
+    onProgress: (stage, d, t) => {
+      const pct = Math.floor((t ? d / t : 1) * 10) * 10;
+      if (pct !== lastPct || stage !== 'writing') {
+        lastPct = pct;
+        log(`… ${stage} ${pct} % a los ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+      }
+    },
+  });
   const secs = (performance.now() - t0) / 1000;
   const blob = new Blob([out.bytes], { type: out.mime });
   (globalThis as { e2eOutput?: Blob; e2eFrames?: Blob[] }).e2eOutput = blob;
   (globalThis as { e2eOutput?: Blob; e2eFrames?: Blob[] }).e2eFrames = frames;
   log(
-    `${kind}: ${(blob.size / 1e6).toFixed(0)} MB en ${secs.toFixed(0)} s (${(secs / n).toFixed(2)} s por fotograma), ${out.bytes instanceof Blob ? 'en disco' : 'en memoria'}${out.audio ? ', con audio' : ''}`,
+    `${kind} sin pérdida: ${(blob.size / 1e6).toFixed(0)} MB en ${secs.toFixed(0)} s (${(secs / n).toFixed(2)} s por fotograma), ${out.bytes instanceof Blob ? 'en disco' : 'en memoria'}${out.audio ? ', con audio' : ''}`,
   );
   const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
   if (mem) log(`heap JS usado: ${(mem.usedJSHeapSize / 1e6).toFixed(0)} MB`);
   if (audio && !out.audio) throw new Error('the export dropped the audio track');
+  log(
+    `plan: ${out.plan.w}×${out.plan.h}, ${out.plan.sixteen ? 16 : 8} bits, ${out.plan.passthrough} tal cual, ${out.plan.conform} conformados`,
+  );
+  if (kind === 'frames') return;
   const mb = await import('mediabunny');
   const input = new mb.Input({ source: new mb.BlobSource(blob), formats: mb.ALL_FORMATS });
   try {
@@ -248,18 +291,14 @@ async function stressProres(params: URLSearchParams): Promise<void> {
     // mediabunny no conoce el códec PNG (codec null) pero lee la tabla de
     // muestras igual: cuenta, tamaños y tiempos
     log(
-      `MOV: ${track.codec ?? 'png'} ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas (${(bytes / 1e6).toFixed(0)} MB de video), ${dur.toFixed(3)} s`,
+      `MOV: png ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas (${(bytes / 1e6).toFixed(0)} MB de video), ${dur.toFixed(3)} s`,
     );
     const pngBytesTotal = frames.reduce((a, f) => a + f.size, 0);
-    if (
-      track.codec !== (lossless ? null : 'prores') ||
-      count !== n ||
-      Math.abs(dur - n / fps) > 0.01
-    )
-      throw new Error(`joined MOV is wrong: ${count} frames, ${dur.toFixed(3)} s`);
+    if (count !== n || Math.abs(dur - n / fps) > 0.01)
+      throw new Error(`MOV is wrong: ${count} frames, ${dur.toFixed(3)} s`);
     // sin `vary` los PNG entran tal cual (passthrough): en muestras, el MOV
-    // pesa exactamente lo que ellos. Con `vary` se recomponen y pesan otra cosa
-    if (lossless && !vary && bytes !== pngBytesTotal)
+    // pesa exactamente lo que ellos. Con `vary` se conforman y pesan otra cosa
+    if (!vary && bytes !== pngBytesTotal)
       throw new Error(`PNG samples total ${bytes} bytes, source PNGs ${pngBytesTotal}`);
   } finally {
     input.dispose();
@@ -269,9 +308,9 @@ async function stressProres(params: URLSearchParams): Promise<void> {
 async function main(): Promise<void> {
   try {
     const params = new URLSearchParams(location.search);
-    if (params.get('stress') === 'prores') {
+    if (params.get('stress') === 'export') {
       try {
-        await stressProres(params);
+        await stressExport(params);
       } catch (e) {
         // dónde falló, no sólo qué: son minutos por intento
         if (e instanceof Error && e.stack) log(e.stack);
@@ -379,7 +418,7 @@ async function main(): Promise<void> {
     if (!(pdfBlob instanceof Blob)) throw new Error('PDF missing');
     const pdfBytes = new Uint8Array(await pdfBlob.arrayBuffer());
     const pdfText = new TextDecoder('latin1').decode(pdfBytes);
-    if (!pdfText.startsWith('%PDF-1.4') || !pdfText.endsWith('%%EOF\n'))
+    if (!pdfText.startsWith('%PDF-1.5') || !pdfText.endsWith('%%EOF\n'))
       throw new Error('PDF is not a whole file');
     const startxref = Number(/startxref\n(\d+)\n%%EOF\n$/.exec(pdfText)?.[1]);
     if (pdfText.slice(startxref, startxref + 5) !== 'xref\n')
@@ -429,6 +468,105 @@ async function main(): Promise<void> {
     for (const f of res.frames) await digest(`scan/frames/${f.label}.png`, f.png);
     if (!String(result.via ?? '').startsWith('marker'))
       throw new Error(`expected marker-ID identification, got via=${result.via}`);
+    // los recortes de un mismo layout salen TODOS del mismo tamaño aunque el
+    // escaneo esté girado y escalado: el video final los copia sin tocarlos
+    const cropSizes = new Set(res.frames.map((f) => pngHeader(f.png).join('×')));
+    if (cropSizes.size !== 1) throw new Error(`crops differ in size: ${[...cropSizes].join(', ')}`);
+    log(`recortes del mismo tamaño (${[...cropSizes][0]}) ✓`);
+
+    // ── 16 bits de punta a punta ─────────────────────────────────
+    // Cuatro fotogramas de 16 bits con un degradado fino (vecinos que en 8
+    // bits serían el mismo nivel) → hojas de 16 bits en PNG, TIFF y PDF →
+    // esa hoja como un escaneo de 16 bits → recortes de 16 bits, todos del
+    // mismo tamaño → el video sin pérdida, que los copia tal cual. En ningún
+    // punto del camino puede quedar en 8 bits.
+    {
+      const DW = 320;
+      const DH = 180;
+      const deepFrames: GenFrame[] = [0, 1, 2, 3].map((k) => {
+        const le = new Uint8Array(DW * DH * 8);
+        const dv = new DataView(le.buffer);
+        for (let y = 0; y < DH; y++)
+          for (let x = 0; x < DW; x++) {
+            const o = (y * DW + x) * 8;
+            dv.setUint16(o, 8000 + x * 97 + k * 3000, true);
+            dv.setUint16(o + 2, 12000 + y * 131, true);
+            dv.setUint16(o + 4, 30000 + (x + y) * 41, true);
+            dv.setUint16(o + 6, 65535, true);
+          }
+        return {
+          name: `deep${k}.png`,
+          w: DW,
+          h: DH,
+          hasAlpha: false,
+          sixteen: true,
+          blob: null,
+          getImageData: async () => ({ data: le.slice(), w: DW, h: DH, deep: true }),
+        };
+      });
+      const deepLabels = ['d_001', 'd_002', 'd_003', 'd_004'];
+      const deepOut = await generateSheets({
+        settings: { ...s, out_name: 'deep', fmt_png: true, fmt_pdf: true, fmt_tiff: true },
+        frames: deepFrames,
+        labels: deepLabels,
+        timeline: deepLabels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
+        videoMeta: { fps_extraccion: 4 },
+        includeFrames: false,
+      });
+      const deepSheet = deepOut.files.get('deep_p1.png');
+      const deepTif = deepOut.files.get('deep_p1.tif');
+      const deepPdf = deepOut.files.get('deep.pdf');
+      if (!(deepSheet instanceof Blob) || !(deepTif instanceof Blob) || !(deepPdf instanceof Blob))
+        throw new Error('the 16-bit sheets were not generated');
+      const sheet16 = new Uint8Array(await deepSheet.arrayBuffer());
+      if (sheet16[24] !== 16) throw new Error(`the sheet PNG has ${sheet16[24]} bits per channel`);
+      const tifBytes = new Uint8Array(await deepTif.arrayBuffer());
+      const tifInfo = await run('probe_image', { bytes: tifBytes.slice() });
+      if (!tifInfo.sixteen) throw new Error('the sheet TIFF is not 16-bit');
+      const pdf16 = new TextDecoder('latin1').decode(await deepPdf.arrayBuffer());
+      if (!pdf16.startsWith('%PDF-1.5') || !/\/BitsPerComponent 16/.test(pdf16))
+        throw new Error('the sheet PDF does not carry the 16-bit image');
+      // el degradado sigue siendo fino DENTRO de la hoja: más de 256 niveles
+      // distintos en el rojo de un fotograma (en 8 bits no puede haber más)
+      if (!deepOut.layoutJson) throw new Error('16-bit layout missing');
+      const deepLayout = JSON.parse(deepOut.layoutJson) as Layout;
+      const bbox = deepLayout.hojas?.[0]?.frames?.d_001?.bbox as number[] | undefined;
+      if (!bbox) throw new Error('16-bit layout without the frame box');
+      const dec = await run('decode_image16', { bytes: sheet16.slice() });
+      const px16 = new Uint16Array(dec.rgba16.buffer, dec.rgba16.byteOffset, dec.w * dec.h * 4);
+      const reds = new Set<number>();
+      for (let y = bbox[1] + 2; y < bbox[3] - 2; y++)
+        for (let x = bbox[0] + 2; x < bbox[2] - 2; x++) reds.add(px16[(y * dec.w + x) * 4]);
+      if (reds.size <= 256)
+        throw new Error(`only ${reds.size} red levels in a 16-bit frame on the sheet`);
+      await digest('deep/deep_p1.png', sheet16);
+      await digest('deep/deep_p1.tif', tifBytes);
+      // la hoja como escaneo de 16 bits (un escáner plano perfecto)
+      const deepScan = await run('scan_process', {
+        bytes: sheet16.slice(),
+        name: 'deep_scan.png',
+        layout: deepOut.layoutJson,
+        opts: '{}',
+      });
+      const deepResult = JSON.parse(deepScan.result) as ScanResult;
+      if (!deepResult.ok || deepScan.frames.length !== 4)
+        throw new Error(`16-bit scan failed: ${deepScan.result}`);
+      const heads = deepScan.frames.map((f) => pngHeader(f.png));
+      if (heads.some((h) => h[2] !== 16))
+        throw new Error('a crop of a 16-bit scan came out in 8 bits');
+      if (new Set(heads.map((h) => `${h[0]}×${h[1]}`)).size !== 1)
+        throw new Error('the 16-bit crops differ in size');
+      const { exportLossless } = await import('./export.ts');
+      const crops = deepScan.frames.map((f) => new Blob([f.png], { type: 'image/png' }));
+      const deepMov = await exportLossless(crops, 4);
+      if (!deepMov.plan.sixteen || deepMov.plan.passthrough !== 4 || deepMov.plan.conform !== 0)
+        throw new Error(
+          `16-bit crops were not copied as they are: ${JSON.stringify(deepMov.plan)}`,
+        );
+      log(
+        `16 bits de punta a punta: hoja PNG/TIFF/PDF de 16 bits (${reds.size} niveles de rojo en un fotograma), escaneo → 4 recortes de 16 bits ${heads[0][0]}×${heads[0][1]} → MOV que los copia tal cual ✓`,
+      );
+    }
 
     // fase ② por WebGPU (si el navegador tiene GPU): detect → warp GPU → finish
     try {
@@ -677,7 +815,7 @@ async function main(): Promise<void> {
         const vblob = new File([await vresp.arrayBuffer()], 'e2e_sample.mp4', {
           type: 'video/mp4',
         });
-        const { extractFrames, buildVideo } = await import('./video.ts');
+        const { extractFrames } = await import('./video.ts');
         const got: Blob[] = [];
         const meta = await extractFrames(vblob, {
           start: 0,
@@ -824,330 +962,238 @@ async function main(): Promise<void> {
         await clearFrameCache();
         log(`OPFS: ${back.length} bytes ida y vuelta`);
 
-        const getters = got.map((b) => () => createImageBitmap(b));
-        // cancelar la exportación tras el primer fotograma: CancelledError, y
-        // el codificador queda libre para la siguiente (Chrome limita las
-        // sesiones de codificación abiertas)
+        // ── el video final, siempre sin pérdida ───────────────────────
+        // Una secuencia que obliga a decidir: un PNG de 16 bits del tamaño
+        // de la mayoría (va tal cual), un PNG de 8 bits de 322×179 (se
+        // centra en 320×180 sin remuestrear y se ensancha a 16 bits) y un
+        // TIFF de 16 bits (el núcleo lo pasa a PNG sin perder bits), con
+        // dibujos repetidos, como los deja la deduplicación. Los píxeles no
+        // se comprueban aquí: el MOV y el ZIP salen al runner, que los
+        // decodifica con el ffmpeg de la máquina y compara cada muestra de
+        // 16 bits con las de las fuentes (e2e-run.mts, "lossless").
+        const { exportLossless } = await import('./export.ts');
+        const W = 320;
+        const H = 180;
+        // valores que en 8 bits colapsarían: difieren en el byte bajo
+        const deep = (seed: number, ch: number): Uint16Array => {
+          const a = new Uint16Array(W * H * ch);
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++)
+              for (let c = 0; c < ch; c++)
+                a[(y * W + x) * ch + c] = (x * 197 + y * 331 + c * 7919 + seed * 104729) % 65536;
+          return a;
+        };
+        const f16 = new Blob([await encodePngRaw(W, H, 16, 2, deep(1, 3))], { type: 'image/png' });
+        const shallow = new Uint8Array(322 * 179 * 3).map(
+          (_, i) => (i * 37 + Math.floor(i / 966) * 11) & 255,
+        );
+        const f8 = new Blob([await encodePngRaw(322, 179, 8, 2, shallow)], { type: 'image/png' });
+        const tif = await run('encode_tiff', { png: await encodePngRaw(W, H, 16, 2, deep(2, 3)) });
+        const fTif = new Blob([tif], { type: 'image/tiff' });
+        const seqFrames = [f16, f8, f16, fTif, f8];
+        e2eFiles['src_f16.png'] = f16;
+        e2eFiles['src_f8.png'] = f8;
+        e2eFiles['src_tif.tif'] = fTif;
+        lossless.sequence = [
+          'src_f16.png',
+          'src_f8.png',
+          'src_f16.png',
+          'src_tif.tif',
+          'src_f8.png',
+        ];
+
+        // cancelar tras escribir el primer fotograma: CancelledError, y nada
+        // a medias en el disco
         const vctl = new AbortController();
-        let encoded = 0;
+        let wrote = 0;
         try {
-          await buildVideo(
-            getters,
-            2,
-            (i) => {
-              encoded = i;
-              if (i === 1) vctl.abort();
+          await exportLossless(seqFrames, 2, {
+            signal: vctl.signal,
+            onProgress: (stage, d) => {
+              if (stage !== 'writing') return;
+              wrote = d;
+              if (d === 1) vctl.abort();
             },
-            { signal: vctl.signal },
-          );
-          throw new Error('buildVideo did not cancel');
+          });
+          throw new Error('the export did not cancel');
         } catch (e) {
-          if (!isCancelled(e)) throw new Error(`buildVideo cancel: ${errMsg(e)}`);
+          if (!isCancelled(e)) throw new Error(`export cancel: ${errMsg(e)}`);
         }
-        if (encoded !== 1) throw new Error(`buildVideo cancel: ${encoded} frames encoded`);
+        if (wrote !== 1) throw new Error(`export cancel: ${wrote} frames written`);
         log('cancelar la exportación tras el primer fotograma ✓');
-        /** Tamaño de una salida, esté en memoria (bytes) o en el disco (Blob). */
-        const sizeOf = (r: { bytes: Bytes | Blob }): number =>
-          r.bytes instanceof Blob ? r.bytes.size : r.bytes.length;
-        const out2 = await buildVideo(getters, 2);
-        log(`video reconstruido: ${out2.ext} de ${sizeOf(out2)} bytes`);
-        if (sizeOf(out2) < 5000) throw new Error('suspiciously small output video');
 
-        // reescalado de salida: ejercita resize_rgba (Lanczos3 del núcleo)
-        const out3 = await buildVideo(getters, 2, null, { targetH: 120 });
-        log(`video reescalado a 120p: ${out3.ext} de ${sizeOf(out3)} bytes`);
-        if (sizeOf(out3) < 2000) throw new Error('scaled video output too small');
-
-        // audio del original en el video final: el tramo [start, start + N/fps)
-        // del clip, recortado a la muestra y con el reloj de los fotogramas.
-        // La muestra lleva un tono de 440 Hz que pasa a 880 Hz en t = 1.5 s:
-        // con start = 0.5 s, el cambio tiene que caer en t = 1.0 s del video
-        const aresp = await fetch('/e2e_sample_audio.mp4');
-        const lossFrames = got.slice(0, 4);
         const mb = await import('mediabunny');
-        if (aresp.ok) {
-          const asrc = new File([await aresp.arrayBuffer()], 'e2e_sample_audio.mp4', {
-            type: 'video/mp4',
+        /** Canal 0 del audio de un archivo, como una sola señal a su ritmo. */
+        const audioOf = async (
+          bytes: Bytes | Blob,
+          type: string,
+        ): Promise<{
+          codec: string | null;
+          rate: number;
+          channels: number;
+          dur: number;
+          pcm: Float32Array;
+        } | null> => {
+          const input = new mb.Input({
+            source: new mb.BlobSource(new Blob([bytes], { type })),
+            formats: mb.ALL_FORMATS,
           });
-          /** Canal 0 del audio de un archivo, como una sola señal a su ritmo. */
-          const audioOf = async (
-            bytes: Bytes | Blob,
-            type: string,
-          ): Promise<{
-            codec: string | null;
-            rate: number;
-            channels: number;
-            dur: number;
-            pcm: Float32Array;
-          } | null> => {
-            const input = new mb.Input({
-              source: new mb.BlobSource(new Blob([bytes], { type })),
-              formats: mb.ALL_FORMATS,
-            });
-            try {
-              const track = await input.getPrimaryAudioTrack();
-              if (!track) return null;
-              const rate = track.sampleRate;
-              const dur = await track.computeDuration();
-              const pcm = new Float32Array(Math.ceil((dur + 0.1) * rate));
-              const sink = new mb.AudioSampleSink(track);
-              for await (const smp of sink.samples()) {
-                const ch = smp.toAudioBuffer().getChannelData(0);
-                const at = Math.round(smp.timestamp * rate);
-                if (at >= 0) pcm.set(ch.subarray(0, Math.min(ch.length, pcm.length - at)), at);
-                smp.close();
-              }
-              return { codec: track.codec, rate, channels: track.numberOfChannels, dur, pcm };
-            } finally {
-              input.dispose();
-            }
-          };
-          /** Frecuencia dominante en [t0, t1), por cruces por cero. */
-          const hz = (a: { rate: number; pcm: Float32Array }, t0: number, t1: number): number => {
-            let n = 0;
-            const i0 = Math.round(t0 * a.rate);
-            const i1 = Math.round(t1 * a.rate);
-            for (let i = i0 + 1; i < i1; i++) if (a.pcm[i - 1] < 0 !== a.pcm[i] < 0) n++;
-            return n / 2 / (t1 - t0);
-          };
-          const near = (v: number, want: number): boolean => Math.abs(v - want) < want * 0.1;
-          // 4 fotogramas a 2 fps: 2 s de video con el audio de [0.5, 2.5) s
-          const outA = await buildVideo(getters.slice(0, 4), 2, null, {
-            audio: { file: asrc, start: 0.5 },
-          });
-          if (!outA.audio) throw new Error('MP4 export reports no audio track');
-          const a = await audioOf(outA.bytes, outA.mime);
-          if (!a) throw new Error('MP4 export has no audio track');
-          const len = a.pcm.length / a.rate - 0.1;
-          const f1 = hz(a, 0.2, 0.8);
-          const f2 = hz(a, 1.2, 1.8);
-          log(
-            `audio en el ${outA.ext}: ${a.codec} ${a.rate} Hz, ${len.toFixed(2)} s; ${f1.toFixed(0)} Hz al principio, ${f2.toFixed(0)} Hz al final`,
-          );
-          if (Math.abs(len - 2) > 0.15)
-            throw new Error(`audio lasts ${len.toFixed(2)} s, expected 2`);
-          if (!near(f1, 440) || !near(f2, 880))
-            throw new Error(`audio is not in sync: ${f1.toFixed(0)} / ${f2.toFixed(0)} Hz`);
-          // el mismo tramo en el MOV sin pérdida, como PCM por ffmpeg.wasm
-          const { buildVideoLossless: lossless } = await import('./video.ts');
-          const outLA = await lossless(lossFrames, 2, undefined, {
-            audio: { file: asrc, start: 0.5 },
-          });
-          if (!outLA.audio) throw new Error('MOV export reports no audio track');
-          const la = await audioOf(outLA.bytes, outLA.mime);
-          if (!la) throw new Error('lossless MOV has no audio track');
-          const llen = la.pcm.length / la.rate - 0.1;
-          const lf1 = hz(la, 0.2, 0.8);
-          const lf2 = hz(la, 1.2, 1.8);
-          log(
-            `audio en el MOV: ${la.codec} ${la.rate} Hz, ${llen.toFixed(2)} s; ${lf1.toFixed(0)} / ${lf2.toFixed(0)} Hz`,
-          );
-          if (Math.abs(llen - 2) > 0.15 || !near(lf1, 440) || !near(lf2, 880))
-            throw new Error(
-              `MOV audio wrong: ${llen.toFixed(2)} s, ${lf1.toFixed(0)} / ${lf2.toFixed(0)} Hz`,
-            );
-          // y en el ProRes por trozos: el audio va aparte (un WAV de ffmpeg
-          // que mediabunny copia como PCM) y debe caer en su sitio igual
-          const { buildVideoProres: prores } = await import('./video.ts');
-          const outPA = await prores(lossFrames, 2, undefined, {
-            audio: { file: asrc, start: 0.5 },
-            chunkBytes: 1,
-          });
-          if (!outPA.audio) throw new Error('ProRes export reports no audio track');
-          const pa = await audioOf(outPA.bytes, outPA.mime);
-          if (!pa) throw new Error('ProRes MOV has no audio track');
-          const plen = pa.pcm.length / pa.rate - 0.1;
-          const pf1 = hz(pa, 0.2, 0.8);
-          const pf2 = hz(pa, 1.2, 1.8);
-          log(
-            `audio en el ProRes: ${pa.codec} ${pa.rate} Hz, ${plen.toFixed(2)} s; ${pf1.toFixed(0)} / ${pf2.toFixed(0)} Hz`,
-          );
-          if (Math.abs(plen - 2) > 0.15 || !near(pf1, 440) || !near(pf2, 880))
-            throw new Error(
-              `ProRes audio wrong: ${plen.toFixed(2)} s, ${pf1.toFixed(0)} / ${pf2.toFixed(0)} Hz`,
-            );
-          // un original SIN audio: el video sale mudo y lo dice
-          const outNo = await buildVideo(getters.slice(0, 2), 2, null, {
-            audio: { file: vblob, start: 0 },
-          });
-          if (outNo.audio) throw new Error('a silent source produced an audio track');
-
-          // ── el sonido en los dos MOV, combinación a combinación ──────
-          // Los mismos 4 fotogramas (2 s a 2 fps) con orígenes distintos:
-          // estéreo a 44.1 kHz, 5.1 (que se queda en dos canales porque un
-          // MOV de edición no lleva más), un tramo que el original ya no
-          // cubre (silencio hasta el final, pero la pista dura lo que el
-          // video), un tramo que ni empieza dentro y un original mudo.
-          const { buildVideoProres: proresQ } = await import('./video.ts');
-          /** Nivel eficaz del canal 0: distingue sonido de silencio. */
-          const rms = (a: { pcm: Float32Array }): number => {
-            let sum = 0;
-            for (const v of a.pcm) sum += v * v;
-            return Math.sqrt(sum / Math.max(1, a.pcm.length));
-          };
-          const cases: {
-            file: string;
-            start: number;
-            channels: number | null;
-            note: string;
-            /** El original sólo suena en el canal central: la mezcla a dos
-             *  canales tiene que traerlo, no tirarlo. */
-            loud?: boolean;
-          }[] = [
-            {
-              file: 'e2e_sample_audio_stereo.mp4',
-              start: 0.5,
-              channels: 2,
-              note: 'estéreo 44.1 kHz',
-            },
-            {
-              file: 'e2e_sample_audio_51.mp4',
-              start: 0.5,
-              channels: 2,
-              note: '5.1 → 2 canales',
-              loud: true,
-            },
-            {
-              file: 'e2e_sample_audio.mp4',
-              start: 2.5,
-              channels: 1,
-              note: 'el original se acaba antes',
-            },
-            { file: 'e2e_sample_audio.mp4', start: 5, channels: null, note: 'el tramo no existe' },
-            { file: 'e2e_sample.mp4', start: 0, channels: null, note: 'original mudo' },
-          ];
-          for (const c of cases) {
-            const r = await fetch(`/${c.file}`);
-            if (!r.ok) {
-              log(`· (sin ${c.file}: caso omitido)`);
-              continue;
-            }
-            const f = new File([await r.arrayBuffer()], c.file, { type: 'video/mp4' });
-            for (const quality of ['lossless', 'prores'] as const) {
-              const opts = { audio: { file: f, start: c.start }, chunkBytes: 1 };
-              const built =
-                quality === 'lossless'
-                  ? await lossless(lossFrames, 2, undefined, opts)
-                  : await proresQ(lossFrames, 2, undefined, opts);
-              const track = await audioOf(built.bytes, built.mime);
-              if (c.channels === null) {
-                if (built.audio || track)
-                  throw new Error(`${quality}, ${c.note}: an audio track appeared out of nowhere`);
-                continue;
-              }
-              // 5.1: si este navegador no decodifica esa disposición, el
-              // video sale mudo y avisa; lo que no puede es colgarse ni
-              // escribir una pista rota
-              if (!built.audio) {
-                log(`· ${quality}, ${c.note}: el navegador no lo decodifica, video mudo`);
-                if (track)
-                  throw new Error(`${quality}, ${c.note}: silent flag but a track is there`);
-                continue;
-              }
-              if (!track) throw new Error(`${quality}, ${c.note}: audio flag but no track`);
-              if (track.channels > 2)
-                throw new Error(`${quality}, ${c.note}: ${track.channels} channels in the MOV`);
-              if (Math.abs(track.dur - 2) > 0.05)
-                throw new Error(
-                  `${quality}, ${c.note}: audio lasts ${track.dur.toFixed(2)} s, video 2 s`,
-                );
-              const level = rms(track);
-              if (c.loud && level < 0.05)
-                throw new Error(
-                  `${quality}, ${c.note}: the centre channel did not reach the mix (rms ${level.toFixed(3)})`,
-                );
-              log(
-                `· ${quality}, ${c.note}: ${track.codec} ${track.channels} ch a ${track.rate} Hz, ${track.dur.toFixed(2)} s, rms ${level.toFixed(3)} ✓`,
-              );
-            }
-          }
-        } else {
-          log('· (sin muestra con audio: prueba de audio omitida)');
-        }
-
-        // exportación lossless: PNG en MOV por stream copy (ffmpeg.wasm)
-        const { buildVideoLossless } = await import('./video.ts');
-        const outL = await buildVideoLossless(lossFrames, 2);
-        const headL = new TextDecoder('latin1').decode(
-          await new Blob([outL.bytes]).slice(0, 16).arrayBuffer(),
-        );
-        log(`lossless MOV: ${sizeOf(outL)} bytes (${outL.ext})`);
-        if (outL.ext !== 'mov' || !headL.includes('ftyp'))
-          throw new Error('lossless output is not a MOV');
-        const totalPng = lossFrames.reduce((a, b) => a + b.size, 0);
-        if (sizeOf(outL) < totalPng)
-          throw new Error('lossless MOV smaller than its PNG frames (not stream-copied)');
-
-        // ProRes 4444 en el navegador (prores_ks de ffmpeg.wasm), por
-        // trozos: chunkBytes diminuto para que 4 fotogramas salgan en 4
-        // pasadas de ffmpeg que mediabunny une en el disco (OPFS)
-        const { buildVideoProres } = await import('./video.ts');
-        const outP = await buildVideoProres(lossFrames, 2, undefined, { chunkBytes: 1 });
-        const blobP = new Blob([outP.bytes], { type: outP.mime });
-        // el atom stsd con el fourcc va en el moov, al FINAL del archivo
-        const bodyP = new TextDecoder('latin1').decode(
-          await blobP.slice(Math.max(0, blobP.size - 65536)).arrayBuffer(),
-        );
-        log(
-          `ProRes MOV: ${blobP.size} bytes, ${outP.bytes instanceof Blob ? 'on disk' : 'in memory'}`,
-        );
-        if (outP.ext !== 'mov' || !bodyP.includes('ap4h'))
-          throw new Error('ProRes output lacks the ap4h codec atom');
-        // el MOV unido: una pista ProRes con los 4 fotogramas seguidos, 2 s
-        {
-          const input = new mb.Input({ source: new mb.BlobSource(blobP), formats: mb.ALL_FORMATS });
           try {
-            const track = await input.getPrimaryVideoTrack();
-            if (!track) throw new Error('joined ProRes MOV has no video track');
-            const sink = new mb.EncodedPacketSink(track);
-            let count = 0;
-            let last = -1;
-            for await (const p of sink.packets()) {
-              if (p.timestamp <= last) throw new Error('ProRes packets out of order');
-              last = p.timestamp;
-              count++;
-            }
+            const track = await input.getPrimaryAudioTrack();
+            if (!track) return null;
+            const rate = track.sampleRate;
             const dur = await track.computeDuration();
-            log(
-              `ProRes unido: ${track.codec} ${track.codedWidth}×${track.codedHeight}, ${count} fotogramas, ${dur.toFixed(2)} s`,
-            );
-            if (track.codec !== 'prores' || count !== lossFrames.length || Math.abs(dur - 2) > 0.01)
-              throw new Error(`joined ProRes MOV is wrong: ${count} frames, ${dur.toFixed(2)} s`);
+            const pcm = new Float32Array(Math.ceil((dur + 0.1) * rate));
+            const sink = new mb.AudioSampleSink(track);
+            for await (const smp of sink.samples()) {
+              const ch = smp.toAudioBuffer().getChannelData(0);
+              const at = Math.round(smp.timestamp * rate);
+              if (at >= 0) pcm.set(ch.subarray(0, Math.min(ch.length, pcm.length - at)), at);
+              smp.close();
+            }
+            return { codec: track.codec, rate, channels: track.numberOfChannels, dur, pcm };
           } finally {
             input.dispose();
           }
-        }
-        // sin pérdida respecto a la pasada única: los mismos fotogramas en
-        // UN trozo (lo que hacía la exportación antes) deben dar, paquete a
-        // paquete, los mismos bytes que en 4 trozos. prores_ks es intra: cada
-        // fotograma se codifica solo, y la unión copia los paquetes tal cual
-        {
-          const outOne = await buildVideoProres(lossFrames, 2, undefined, { chunkBytes: 1e15 });
-          const hashes = async (bytes: Bytes | Blob): Promise<string[]> => {
-            const input = new mb.Input({
-              source: new mb.BlobSource(new Blob([bytes])),
-              formats: mb.ALL_FORMATS,
-            });
-            try {
-              const track = await input.getPrimaryVideoTrack();
-              if (!track) throw new Error('ProRes MOV has no video track');
-              const out: string[] = [];
-              for await (const p of new mb.EncodedPacketSink(track).packets()) {
-                const d = await crypto.subtle.digest('SHA-256', new Uint8Array(p.data));
-                out.push(
-                  [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join(''),
-                );
-              }
-              return out;
-            } finally {
-              input.dispose();
-            }
-          };
-          const [h4, h1] = await Promise.all([hashes(outP.bytes), hashes(outOne.bytes)]);
-          if (h4.length !== h1.length || h4.some((h, i) => h !== h1[i]))
-            throw new Error('ProRes in 4 pieces differs from ProRes in one pass');
+        };
+        /** Frecuencia dominante en [t0, t1), por cruces por cero. */
+        const hz = (a: { rate: number; pcm: Float32Array }, t0: number, t1: number): number => {
+          let n = 0;
+          const i0 = Math.round(t0 * a.rate);
+          const i1 = Math.round(t1 * a.rate);
+          for (let i = i0 + 1; i < i1; i++) if (a.pcm[i - 1] < 0 !== a.pcm[i] < 0) n++;
+          return n / 2 / (t1 - t0);
+        };
+        const nearHz = (v: number, want: number): boolean => Math.abs(v - want) < want * 0.1;
+        /** Nivel eficaz del canal 0: distingue sonido de silencio. */
+        const rms = (a: { pcm: Float32Array }): number => {
+          let sum = 0;
+          for (const v of a.pcm) sum += v * v;
+          return Math.sqrt(sum / Math.max(1, a.pcm.length));
+        };
+        const sample = async (name: string): Promise<File | null> => {
+          const r = await fetch(`/${name}`);
+          return r.ok ? new File([await r.arrayBuffer()], name, { type: 'video/mp4' }) : null;
+        };
+
+        // el MOV de la secuencia con el sonido del original estéreo a
+        // 44.1 kHz: el tramo [0.5, 3.0) s, con el salto de 440 a 880 Hz del
+        // original (t = 1.5 s) cayendo en t = 1.0 s del video
+        const stereo = await sample('e2e_sample_audio_stereo.mp4');
+        const audio = stereo ? { file: stereo, start: 0.5 } : undefined;
+        const mov = await exportLossless(seqFrames, 2, { kind: 'mov', audio });
+        const p = mov.plan;
+        log(
+          `MOV sin pérdida: ${p.w}×${p.h}, ${p.sixteen ? 16 : 8} bits${p.alpha ? ' + alfa' : ''}, ${p.frames} fotogramas de ${p.unique} dibujos: ${p.passthrough} tal cual, ${p.conform} conformados, ${p.resized} reescalados`,
+        );
+        if (
+          mov.ext !== 'mov' ||
+          p.w !== W ||
+          p.h !== H ||
+          !p.sixteen ||
+          p.alpha ||
+          p.frames !== 5 ||
+          p.unique !== 3 ||
+          p.passthrough !== 1 ||
+          p.conform !== 2 ||
+          p.resized !== 0
+        )
+          throw new Error(`lossless plan is wrong: ${JSON.stringify(p)}`);
+        e2eFiles['lossless.mov'] = new Blob([mov.bytes]);
+        if (audio) {
+          const a = await audioOf(mov.bytes, mov.mime);
+          if (!mov.audio || !a) throw new Error('the lossless MOV lost the sound');
+          const f1 = hz(a, 0.2, 0.8);
+          const f2 = hz(a, 1.2, 1.8);
           log(
-            `ProRes en 4 trozos = ProRes en una pasada, paquete a paquete (${h4.length} SHA-256) ✓`,
+            `audio en el MOV: ${a.codec} ${a.channels} ch a ${a.rate} Hz, ${a.dur.toFixed(2)} s; ${f1.toFixed(0)} / ${f2.toFixed(0)} Hz`,
+          );
+          if (
+            a.channels !== 2 ||
+            a.rate !== 44100 ||
+            Math.abs(a.dur - 2.5) > 0.05 ||
+            !nearHz(f1, 440) ||
+            !nearHz(f2, 880)
+          )
+            throw new Error('the sound of the lossless MOV is wrong or out of sync');
+        }
+        // la misma secuencia como PNG numerados en un ZIP, con su WAV
+        const zipOut = await exportLossless(seqFrames, 2, {
+          kind: 'frames',
+          audio,
+          baseName: 'seq',
+        });
+        e2eFiles['lossless.zip'] = new Blob([zipOut.bytes]);
+        log(`ZIP de fotogramas: ${new Blob([zipOut.bytes]).size} bytes, audio=${zipOut.audio}`);
+        // con UN fotograma transparente la secuencia entera lleva alfa, y el
+        // relleno del centrado es transparente, no blanco
+        const alphaPx = new Uint8Array(W * H * 4).map((_, i) =>
+          i % 4 === 3 ? ((i >> 2) % W < 40 ? 0 : 255) : (i * 13) & 255,
+        );
+        const fA = new Blob([await encodePngRaw(W, H, 8, 6, alphaPx)], { type: 'image/png' });
+        e2eFiles['src_alpha.png'] = fA;
+        const movA = await exportLossless([f16, fA], 2, { kind: 'mov' });
+        if (!movA.plan.alpha || !movA.plan.sixteen || movA.plan.conform !== 2)
+          throw new Error(`alpha plan is wrong: ${JSON.stringify(movA.plan)}`);
+        e2eFiles['alpha.mov'] = new Blob([movA.bytes]);
+        log('MOV con alfa: RGBA de 16 bits ✓');
+
+        // ── el sonido, combinación a combinación ─────────────────────
+        // Los 4 primeros fotogramas de la extracción (2 s a 2 fps, PNG de 8
+        // bits del mismo tamaño: van tal cual) con orígenes distintos: 5.1
+        // (que se pliega a dos canales porque un MOV de edición no lleva
+        // más), un tramo que el original ya no cubre (silencio hasta el
+        // final, pero la pista dura lo que el video), uno que ni empieza
+        // dentro, y un original mudo.
+        const lossFrames = got.slice(0, 4);
+        const cases: {
+          file: string;
+          start: number;
+          channels: number | null;
+          note: string;
+          /** El original sólo suena en el canal central: la mezcla a dos
+           *  canales tiene que traerlo, no tirarlo. */
+          loud?: boolean;
+        }[] = [
+          { file: 'e2e_sample_audio_51.mp4', start: 0.5, channels: 2, note: '5.1 → 2', loud: true },
+          { file: 'e2e_sample_audio.mp4', start: 2.5, channels: 1, note: 'el original se acaba' },
+          { file: 'e2e_sample_audio.mp4', start: 5, channels: null, note: 'el tramo no existe' },
+          { file: 'e2e_sample.mp4', start: 0, channels: null, note: 'original mudo' },
+        ];
+        for (const c of cases) {
+          const f = await sample(c.file);
+          if (!f) {
+            log(`· (sin ${c.file}: caso omitido)`);
+            continue;
+          }
+          const built = await exportLossless(lossFrames, 2, { audio: { file: f, start: c.start } });
+          if (built.plan.passthrough !== 4 || built.plan.sixteen)
+            throw new Error(`${c.note}: same-size 8-bit PNGs were not copied as they are`);
+          const track = await audioOf(built.bytes, built.mime);
+          if (c.channels === null) {
+            if (built.audio || track) throw new Error(`${c.note}: an audio track appeared`);
+            if (!built.audioNote) throw new Error(`${c.note}: silent without saying why`);
+            log(`· ${c.note}: mudo, con aviso ✓`);
+            continue;
+          }
+          // 5.1: si este navegador no decodifica esa disposición, el video
+          // sale mudo y avisa; lo que no puede es colgarse ni escribir una
+          // pista rota
+          if (!built.audio) {
+            log(`· ${c.note}: el navegador no lo decodifica, video mudo`);
+            if (track) throw new Error(`${c.note}: silent flag but a track is there`);
+            continue;
+          }
+          if (!track) throw new Error(`${c.note}: audio flag but no track`);
+          if (track.channels !== c.channels)
+            throw new Error(`${c.note}: ${track.channels} channels in the MOV`);
+          if (Math.abs(track.dur - 2) > 0.05)
+            throw new Error(`${c.note}: audio lasts ${track.dur.toFixed(2)} s, video 2 s`);
+          const level = rms(track);
+          if (c.loud && level < 0.05)
+            throw new Error(`${c.note}: the centre channel did not reach the mix`);
+          log(
+            `· ${c.note}: ${track.codec} ${track.channels} ch a ${track.rate} Hz, ${track.dur.toFixed(2)} s, rms ${level.toFixed(3)} ✓`,
           );
         }
       } else {

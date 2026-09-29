@@ -4,6 +4,7 @@
 use mxm_core::cyanotype;
 use mxm_core::geometry::{apply_h, invert_h, Rng, H3};
 use mxm_core::img::{DynImg, Rgb};
+use mxm_core::photo::FramePixels;
 use mxm_core::scanproc::{process_scan, ScanOptions};
 use mxm_core::sheet::{self, build_layout, build_layout_json, render_page, FrameInput, Settings};
 use serde_json::json;
@@ -23,7 +24,7 @@ fn synth_frame(w: usize, h: usize, base: [u8; 3]) -> (FrameInput, [u8; 3]) {
         FrameInput {
             w,
             h,
-            rgba: Some(rgba),
+            rgba: Some(FramePixels::Rgba8(rgba)),
             has_alpha: false,
             orig_name: "f.png".into(),
             orig_file: None,
@@ -451,7 +452,7 @@ fn transparent_frames_take_the_chosen_alpha_colour() {
     let transparent = |w: usize, h: usize| FrameInput {
         w,
         h,
-        rgba: Some(vec![0u8; w * h * 4]),
+        rgba: Some(FramePixels::Rgba8(vec![0u8; w * h * 4])),
         has_alpha: true,
         orig_name: "f.tif".into(),
         orig_file: None,

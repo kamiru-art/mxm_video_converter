@@ -1,6 +1,8 @@
 // Browser end-to-end test runner: serves web/dist itself and drives the
 // e2e.html page (full pipeline: sheets → scan → calibration → cyanotype →
-// video) in headless Chrome. Used locally (`npm run test:e2e`) and in CI.
+// video → lossless export) in Chrome, Zen/Firefox or Safari, then checks the
+// lossless files with the machine's own ffmpeg (e2e-verify.mts). Used
+// locally (`npm run test:e2e [-- --browser=zen|safari]`) and in CI (Chrome).
 //
 // Node runs this file directly (type stripping, Node 22.18+ / 24): only
 // erasable TypeScript syntax is allowed here, which tsconfig.node.json
@@ -10,10 +12,9 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { extname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import puppeteer from 'puppeteer-core';
+import { browserFromArgs, HEADERS_FILE, launch, serveDist } from './e2e-browsers.mts';
 
 const DIST = fileURLToPath(new URL('./dist', import.meta.url));
 // El informe de la corrida: se reescribe en cada una y no va al repositorio
@@ -133,118 +134,66 @@ if (!existsSync(mov)) {
     { stdio: 'ignore' },
   );
 }
-const MIME: Record<string, string> = {
-  '.html': 'text/html',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.wasm': 'application/wasm',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.mp4': 'video/mp4',
-  '.json': 'application/json',
-  '.webmanifest': 'application/manifest+json',
-  '.ico': 'image/x-icon',
-  '.avi': 'video/x-msvideo',
-  '.mov': 'video/quicktime',
-};
-
-// La CSP se lee de web/public/_headers, el mismo archivo que Cloudflare
-// aplica al sitio publicado. Se sirve también aquí para que una política que
-// rompa la aplicación falle en este test y no en producción, que es donde una
-// CSP mal puesta se descubre tarde y sin señal: el navegador bloquea en
-// silencio y la página aparece simplemente vacía.
-const HEADERS_FILE = await readFile(new URL('./public/_headers', import.meta.url), 'utf8');
-const CSP = HEADERS_FILE.match(/^[ \t]+Content-Security-Policy:[ \t]*(.+)$/m)?.[1]?.trim();
-if (!CSP) throw new Error('No Content-Security-Policy in web/public/_headers');
-// Y el resto de cabeceras del bloque `/*` (COOP/COEP para el ffmpeg con
-// hilos): el test corre bajo las mismas que el sitio, así que una que
-// rompa la aplicación falla aquí y no en producción.
-const SITE_HEADERS: Record<string, string> = {};
-for (const line of HEADERS_FILE.split('\n')) {
-  const m = /^[ \t]+([A-Za-z-]+):[ \t]*(.+)$/.exec(line);
-  if (m && !/^Cache-Control$/i.test(m[1])) SITE_HEADERS[m[1]] = m[2];
+const which = browserFromArgs();
+const { port, close: closeServer } = await serveDist(DIST);
+const driver = await launch(which);
+console.log(`Browser: ${driver.version}`);
+await driver.open(`http://127.0.0.1:${port}/e2e.html`);
+let title = '';
+const deadline = Date.now() + 300000;
+while (Date.now() < deadline) {
+  title = await driver.title().catch(() => '');
+  if (title.startsWith('E2E-')) break;
+  await new Promise((r) => setTimeout(r, 500));
 }
-
-const server = createServer(async (req, res) => {
-  let path = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
-  if (path === '/') path = '/index.html';
-  const file = join(DIST, path);
-  try {
-    const data = await readFile(file);
-    res.writeHead(200, {
-      'Content-Type': MIME[extname(file)] ?? 'application/octet-stream',
-      ...SITE_HEADERS,
-    });
-    res.end(data);
-  } catch {
-    res.writeHead(404);
-    res.end('not found');
-  }
-});
-await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-const address = server.address();
-if (!address || typeof address === 'string')
-  throw new Error('The test server did not bind a TCP port.');
-const port = address.port;
-
-const chromeCandidates = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-].filter((p): p is string => !!p);
-const executablePath = chromeCandidates.find((p) => existsSync(p));
-if (!executablePath) {
-  console.error('No Chrome/Chromium binary found. Set CHROME_PATH.');
-  process.exit(2);
-}
-
-const browser = await puppeteer.launch({
-  executablePath,
-  // `true` es el modo headless "nuevo" (el antiguo `'new'` ya no existe en
-  // puppeteer 25; su valor por defecto es este mismo)
-  headless: true,
-  args: ['--no-sandbox', '--disable-dev-shm-usage'],
-});
-const page = await browser.newPage();
-// Una violación de CSP no lanza: el navegador bloquea el recurso, avisa por
-// consola y la página sigue a medias. Si no se recogen aquí, una política mal
-// puesta pasa el test y rompe el sitio publicado.
-const cspViolations: string[] = [];
-page.on('console', (m) => {
-  const t = m.text();
-  if (t.startsWith('[E2E]')) console.log(t);
-  if (/Content Security Policy|Refused to (load|execute|connect|create)/i.test(t)) {
-    cspViolations.push(t);
-  }
-});
-page.on('pageerror', (e) => console.log('PAGEERROR:', e instanceof Error ? e.message : String(e)));
-await page.goto(`http://127.0.0.1:${port}/e2e.html`);
-try {
-  // como texto: corre en el navegador, y este archivo se comprueba sin la
-  // biblioteca DOM
-  await page.waitForFunction("document.title.startsWith('E2E-')", { timeout: 180000 });
-} catch {
-  console.log('Timed out waiting for the E2E page to finish.');
-}
-const title = await page.title();
-const log = await page.$eval('#log', (el) => el.textContent).catch(() => '(no log)');
+if (!title.startsWith('E2E-')) console.log('Timed out waiting for the E2E page to finish.');
+const log = await driver
+  .run<string>("return document.getElementById('log')?.textContent ?? '(no log)';")
+  .catch(() => '(no log)');
 console.log('---\nRESULT:', title);
 console.log(log);
-if (cspViolations.length) {
-  console.log(`\nCSP: ${cspViolations.length} violation(s) against web/public/_headers:`);
-  for (const v of new Set(cspViolations)) console.log(`  ${v}`);
-}
-const report = (await page.evaluate('globalThis.e2eReport').catch(() => null)) as {
+const report = (await driver.run('return globalThis.e2eReport ?? null;').catch(() => null)) as {
   steps: string[];
   outputs: Record<string, string>;
+  lossless: { sequence: string[] };
+  csp: string[];
 } | null;
-const chrome = await browser.version();
-await browser.close();
-server.close();
-const passed = title === 'E2E-OK' && cspViolations.length === 0;
+// los archivos que la página deja para verificar por fuera, en base64
+const files = (await driver
+  .run<Record<string, string>>(
+    `const out = {};
+     for (const [name, blob] of Object.entries(globalThis.e2eFiles ?? {})) {
+       out[name] = await new Promise((res, rej) => {
+         const r = new FileReader();
+         r.onload = () => res(String(r.result).split(',')[1] ?? '');
+         r.onerror = () => rej(r.error);
+         r.readAsDataURL(blob);
+       });
+     }
+     return out;`,
+  )
+  .catch(() => ({}))) as Record<string, string>;
+await driver.close();
+closeServer();
+
+// Una violación de CSP no lanza: el navegador bloquea el recurso y la página
+// sigue a medias. La página las escucha ella misma (securitypolicyviolation,
+// en los tres navegadores) y Chrome además las dice por consola.
+const cspViolations = [...new Set([...(report?.csp ?? []), ...driver.cspConsole])];
+if (cspViolations.length) {
+  console.log(`\nCSP: ${cspViolations.length} violation(s) against web/public/_headers:`);
+  for (const v of cspViolations) console.log(`  ${v}`);
+}
+
+// ── lo que salió, verificado por fuera ─────────────────────────────────
+const RUN_DIR = join(ARTIFACT_DIR, which);
+await mkdir(RUN_DIR, { recursive: true });
+for (const [name, b64] of Object.entries(files))
+  await writeFile(join(RUN_DIR, name), Buffer.from(b64, 'base64'));
+const { verifyLossless } = await import('./e2e-verify.mts');
+const lossless = await verifyLossless(RUN_DIR, report?.lossless.sequence ?? []);
+for (const line of lossless.log) console.log(line);
+const passed = title === 'E2E-OK' && cspViolations.length === 0 && lossless.ok;
 
 // Informe verificable: entradas (muestras generadas, núcleo WASM, cabeceras
 // del sitio) y salidas por SHA-256, más cada paso comprobado. No lleva
@@ -261,27 +210,26 @@ for (const f of (await readdir(join(DIST, 'assets'))).filter((n) => n.endsWith('
 inputs['public/_headers'] = sha256(HEADERS_FILE);
 const ffmpeg =
   spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' }).stdout?.split('\n')[0] ?? null;
-const outputs = report?.outputs ?? {};
+const outputs = { ...(report?.outputs ?? {}), ...lossless.outputs };
 const artifact = {
   suite: 'browser-pipeline',
+  browser: which,
   result: title,
   passed,
   checks: {
     page_reached_E2E_OK: title === 'E2E-OK',
     no_csp_violations: cspViolations.length === 0,
+    ...lossless.checks,
   },
-  environment: { chrome, ffmpeg, node: process.version },
+  environment: { browser: driver.version, ffmpeg, node: process.version },
   inputs,
   outputs: Object.fromEntries(Object.entries(outputs).sort(([a], [b]) => (a < b ? -1 : 1))),
   steps: report?.steps ?? [],
-  csp_violations: [...new Set(cspViolations)],
+  csp_violations: cspViolations,
 };
-await mkdir(ARTIFACT_DIR, { recursive: true });
 const json = `${JSON.stringify(artifact, null, 2)}\n`;
-await writeFile(join(ARTIFACT_DIR, 'browser-pipeline.json'), json);
-await writeFile(
-  join(ARTIFACT_DIR, 'browser-pipeline.json.sha256'),
-  `${sha256(json)}  browser-pipeline.json\n`,
-);
-console.log(`\nArtifact: artifacts/e2e/browser-pipeline.json (sha256 ${sha256(json)})`);
+const name = `browser-pipeline.${which}.json`;
+await writeFile(join(ARTIFACT_DIR, name), json);
+await writeFile(join(ARTIFACT_DIR, `${name}.sha256`), `${sha256(json)}  ${name}\n`);
+console.log(`\nArtifact: artifacts/e2e/${name} (sha256 ${sha256(json)})`);
 process.exit(passed ? 0 : 1);

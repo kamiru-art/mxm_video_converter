@@ -72,9 +72,13 @@ export class ZipSink {
   /** Cierra el ZIP y devuelve el archivo entero como Blob. */
   async finish(): Promise<Blob> {
     if (this.ended) throw new Error('The ZIP is already finished.');
-    this.ended = true;
+    // `ended` sólo cuando el archivo está cerrado de verdad: si el
+    // directorio central o el cierre fallan (disco lleno al final de un ZIP
+    // de varios GB), abort() tiene que poder borrar lo escrito
     await this.zip.finish();
-    return this.out.close();
+    const blob = await this.out.close();
+    this.ended = true;
+    return blob;
   }
 
   /** Descarta el archivo a medias. */

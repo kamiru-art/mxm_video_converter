@@ -72,6 +72,9 @@ export interface Settings {
   fmt_png: boolean;
   fmt_pdf: boolean;
   fmt_tiff: boolean;
+  /** Hojas de 16 bits: lo decide la generación (algún fotograma de 16
+   *  bits), no el usuario. */
+  deep?: boolean;
   /** Hojas a generar ("3, 5-7"); vacío = todas. Solo en la generación. */
   sheets_include?: string;
   sheets_exclude?: string;
@@ -191,6 +194,16 @@ export interface DecodedImage {
   rgba: Bytes;
   had_alpha: boolean;
   sixteen?: boolean;
+}
+
+/** Salida de probe_image: la cabecera, sin los píxeles. */
+export interface ImageInfo {
+  w: number;
+  h: number;
+  /** Más de 8 bits por canal. */
+  sixteen: boolean;
+  alpha: boolean;
+  png: boolean;
 }
 
 /** Salida de render_sheet. `record` es el registro de la hoja en JSON. */

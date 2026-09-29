@@ -9,6 +9,7 @@ import {
   resolveCyanCurve,
   settingsForCore,
 } from './gen.ts';
+import { imageInfo } from './imageinfo.ts';
 import { clearFrameCache, clearOutputs, opfsSupported, storeFrame } from './opfs.ts';
 import { run } from './pool.ts';
 import {
@@ -391,24 +392,26 @@ export function mountPhase1(root: HTMLElement): void {
         images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         const rejected: string[] = [];
         for (const f of images) {
-          const needsWasmDecode = /\.(tif|tiff)$/i.test(f.name);
+          const isTiff = /\.(tif|tiff)$/i.test(f.name);
           let w = 0,
             h = 0,
-            hasAlpha = false;
+            hasAlpha = false,
+            sixteen = false;
           try {
-            if (!needsWasmDecode) {
+            // la cabecera, sin decodificar: tamaño, alfa de verdad y, sobre
+            // todo, si trae 16 bits (que el navegador bajaría a 8)
+            const info = await imageInfo(f).catch(() => null);
+            if (info) {
+              ({ w, h, sixteen } = info);
+              hasAlpha = info.alpha;
+            } else if (!isTiff) {
+              // un formato que sólo abre el navegador (AVIF, HEIC en Safari)
               const bmp = await createImageBitmap(f);
               w = bmp.width;
               h = bmp.height;
               bmp.close();
-              hasAlpha = /\.png$/i.test(f.name) || /\.webp$/i.test(f.name);
-            } else {
-              const bytes = new Uint8Array(await f.arrayBuffer());
-              const r = await run('decode_image', { bytes }, [bytes.buffer]);
-              w = r.w;
-              h = r.h;
-              hasAlpha = r.had_alpha;
-            }
+              hasAlpha = /\.(png|webp|avif)$/i.test(f.name);
+            } else throw new Error('unreadable TIFF');
           } catch {
             rejected.push(f.name);
             continue;
@@ -420,7 +423,10 @@ export function mountPhase1(root: HTMLElement): void {
             w,
             h,
             hasAlpha,
-            needsWasmDecode,
+            // TIFF y 16 bits los decodifica el núcleo: el navegador no abre
+            // TIFF (salvo Safari) y a un PNG de 16 bits le quita la mitad
+            needsWasmDecode: isTiff || sixteen,
+            sixteen,
           });
         }
         loadedVideo = null;
@@ -511,8 +517,13 @@ export function mountPhase1(root: HTMLElement): void {
 
   const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
   const dedupStatus = el('div', { class: 'hint' });
-  dedupCheck.input.addEventListener('change', async () => {
+  dedupCheck.input.addEventListener('change', () => {
     ph1.dedupOn = dedupCheck.input.checked;
+    void applyDedup();
+  });
+  /** Deja las miniaturas, la vista previa y el análisis de repetidos de
+   *  acuerdo con `ph1.dedupOn`. */
+  async function applyDedup(): Promise<void> {
     try {
       if (ph1.dedupOn) await computeDedup(dedupStatus);
       else dedupStatus.textContent = '';
@@ -523,7 +534,7 @@ export function mountPhase1(root: HTMLElement): void {
       dedupStatus.textContent = ''; // no dejar colgado el "analyzing…"
       toast(`Could not analyze the repeated drawings: ${errMsg(e)}`, 'err');
     }
-  });
+  }
 
   // ---------- ajustes de hoja (enlace genérico) ----------
   const binds: (() => void)[] = [];
@@ -786,8 +797,16 @@ export function mountPhase1(root: HTMLElement): void {
               Object.assign(s, normalizeSettings(p.settings));
               Object.assign(ph1, normalizePhase(p.fase ?? {}));
               for (const b of binds) b();
+              // lo que el preset guarda fuera de los ajustes también tiene
+              // que verse, y el análisis de repetidos rehacerse: si no, los
+              // controles enseñan lo de antes y el estado es otro
+              namingSel.value = ph1.naming;
+              numberingSel.value = ph1.numbering;
+              pageNumberingSel.value = ph1.pageNumbering;
+              dedupCheck.input.checked = ph1.dedupOn;
+              ph1.dedupGroups = null;
               persist();
-              void refreshPreview();
+              void applyDedup();
               toast(`Preset “${presetSel.value}” loaded.`, 'ok');
             }
           },
@@ -965,6 +984,7 @@ export function mountPhase1(root: HTMLElement): void {
           w: f.w,
           h: f.h,
           hasAlpha: f.hasAlpha,
+          sixteen: f.sixteen,
           blob: f.blob,
           video: f.video,
           encodePng: f.video ? pngOf[k] : undefined,
@@ -1152,7 +1172,12 @@ export function mountPhase1(root: HTMLElement): void {
     }
   }
 
+  // cada llamada lleva su número: una más nueva (otro cambio de etiquetas a
+  // mitad) vacía la rejilla, y la vieja deja de añadir en cuanto se entera,
+  // en vez de mezclar sus miniaturas con las de la nueva
+  let thumbsSeq = 0;
   async function renderThumbs(): Promise<void> {
+    const seq = ++thumbsSeq;
     thumbsGrid.replaceChildren();
     const plan = computePlan();
     const dupSet = new Set<number>();
@@ -1165,6 +1190,7 @@ export function mountPhase1(root: HTMLElement): void {
     for (let k = 0; k < max; k++) {
       const idx = plan.positions[k] - 1;
       const c = await ensureThumb(idx);
+      if (seq !== thumbsSeq) return;
       const img = el('canvas', { width: c.width, height: c.height });
       img.getContext('2d')?.drawImage(c, 0, 0);
       thumbsGrid.append(

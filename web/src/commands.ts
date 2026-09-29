@@ -3,7 +3,7 @@
 // manejadores en worker.ts se tipan con esta misma tabla, así que un comando
 // que cambie de forma se detecta en los dos lados al compilar.
 
-import type { Bytes, DecodedImage, RenderSheetOutput, ScanOutput } from './types.ts';
+import type { Bytes, DecodedImage, ImageInfo, RenderSheetOutput, ScanOutput } from './types.ts';
 
 /** Un fotograma de video tal como sale del decodificador: un ImageBitmap
  *  (WebCodecs) o RGBA de 8 bits sin comprimir (ffmpeg.wasm). Los dos son
@@ -72,6 +72,8 @@ export interface Commands {
     result: string;
   };
   decode_image: { args: { bytes: Bytes }; result: DecodedImage };
+  /** RGBA de 16 bits (little-endian), para las hojas: sin bajar a 8. */
+  decode_image16: { args: { bytes: Bytes }; result: { w: number; h: number; rgba16: Bytes } };
   scan_process: {
     args: { bytes: Bytes; name: string; layout: string; opts?: string; claims?: string };
     result: ScanOutput;
@@ -95,6 +97,14 @@ export interface Commands {
   };
   resize_rgba: {
     args: { rgba: Bytes; w: number; h: number; outW: number; outH: number };
+    result: Bytes;
+  };
+  /** Cabecera de una imagen (PNG, TIFF…) sin decodificar los píxeles. */
+  probe_image: { args: { bytes: Bytes }; result: ImageInfo };
+  /** Un fotograma del video final: PNG de w×h a 16 bits si `sixteen`, con
+   *  alfa si `alpha`, sin bajar nunca su profundidad (conform.rs). */
+  conform_frame: {
+    args: { bytes: Bytes; w: number; h: number; sixteen: boolean; alpha: boolean };
     result: Bytes;
   };
   /** PNG sin pérdida de un buffer RGBA de 8 bits: bytes, no un Blob. */

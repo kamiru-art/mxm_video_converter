@@ -37,7 +37,7 @@ ZIP64, store only) have no dependency: they are written in this repository.
 
 | Dependency | Version | Role in system |
 |------------|---------|----------------|
-| `mediabunny` | ^1.55.3 | Demuxes and muxes video with WebCodecs. It is the first decode path and the MP4/WebM encode path. |
+| `mediabunny` | ^1.55.3 | Demuxes video and decodes it with WebCodecs: the first decode path for frames and the decoder of the original sound. It no longer encodes anything; the final video is written by `web/src/pngmov.ts` (MOV) or `web/src/zipwriter.ts` (ZIP). |
 | `@ffmpeg/ffmpeg`, `@ffmpeg/core`, `@ffmpeg/util` | ^0.12 | The fallback decoder for files WebCodecs refuses, and the muxer for the two MOV exports. About 32 MB, loaded only when needed. |
 
 There is no UI framework. The interface is built with `document.createElement`
@@ -47,7 +47,7 @@ through the `el()` helper in `web/src/ui.ts`.
 
 | Tool | Purpose | Evidence |
 |------|---------|----------|
-| `cargo test` | The Rust test suite: 55 unit tests and 7 end-to-end integration tests. | `rust-core/src/*.rs`, `rust-core/tests/pipeline.rs` |
+| `cargo test` | The Rust test suite: 65 unit tests and 7 end-to-end integration tests. | `rust-core/src/*.rs`, `rust-core/tests/pipeline.rs` |
 | `rustfmt` | Formatter, default style. CI runs `cargo fmt --check`. | `rust-core/rustfmt.toml`, `.github/workflows/ci.yml` |
 | `cargo clippy` | Lint, warnings as errors, natively and for `wasm32-unknown-unknown` (the only target that compiles `api.rs`). Two lints allowed in `Cargo.toml` with the reason. | `rust-core/Cargo.toml` (`[lints]`), `.github/workflows/ci.yml` |
 | `rust-toolchain.toml` | Pins the Rust channel, `clippy`, `rustfmt` and the wasm target, for CI and developers alike. | `rust-toolchain.toml` |
@@ -55,7 +55,7 @@ through the `el()` helper in `web/src/ui.ts`.
 | TypeScript 7 (`tsc`) | Type checking only: `npm run typecheck` runs three projects (page, workers, Node scripts) and `npm run build` runs it first. Vite does the transpiling and never checks types. | `web/tsconfig.json`, `web/tsconfig.worker.json`, `web/tsconfig.node.json` |
 | Vite 8 | Development server and production bundle. | `web/package.json` |
 | Biome 2 | Linter and formatter of the web (`npm run lint`, `npm run lint:fix`, `npm run format`). Chosen over ESLint + Prettier because TypeScript 7's package no longer ships the JavaScript compiler API that typescript-eslint needs. | `web/biome.jsonc`, `web/package.json` |
-| `puppeteer-core` 25 | Drives headless Chrome for the browser test. | `web/e2e-run.mts` |
+| `puppeteer-core` 25 | Drives Chrome, and Zen/Firefox over WebDriver BiDi, for both browser tests; Safari goes through `safaridriver`, which ships with macOS. | `web/e2e-browsers.mts` |
 | `wrangler` 4 | Publishes to Cloudflare. It is not a declared dependency; CI pins the version in the action. | `.github/workflows/ci.yml`, `web/wrangler.jsonc` |
 
 See `CONVENTIONS.md` §2 for what each tool enforces and why.
@@ -77,7 +77,8 @@ npm install
 npm run typecheck    # tsc over the page, the workers and the Node scripts
 npm run lint         # biome: lint + formatting check (lint:fix applies fixes)
 npm run dev          # development server (does NOT produce web/public/ffmpeg/)
-npm run test:e2e     # browser end-to-end test; needs Chrome and ffmpeg
+npm run test:e2e     # pipeline end-to-end test; needs Chrome and ffmpeg (-- --browser=zen|safari)
+npm run test:ui      # interface end-to-end test, desktop and phone (-- --browser=zen|safari)
 npm run build        # production bundle into web/dist
 npx wrangler@4 deploy
 ```
