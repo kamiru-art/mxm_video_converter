@@ -212,6 +212,11 @@ input[type="text"], input[type="number"], select {
   border: 1.5px solid var(--papel-sombra); border-radius: 6px;
   background: #FDFBF4; color: var(--tinta);
 }
+/* Safari cuenta el texto de la opción elegida como desborde del campo
+   aunque el <select> mida lo que su columna: a 390 px, "MOV video
+   (Resolve, Premiere, After Effects, VLC)" abría 150 px de scroll lateral
+   en la fase de video. Recortado, cabe; lo que no entra acaba en "…". */
+select { overflow: hidden; text-overflow: ellipsis; }
 input[type="color"] { padding: 1px; height: 32px; width: 52px; border: 1.5px solid var(--papel-sombra); border-radius: 6px; background: #FDFBF4; }
 input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--prusia-500); outline-offset: 1px; }
 input:disabled, select:disabled { opacity: .45; background: #ECE8DC; cursor: not-allowed; }
