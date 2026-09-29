@@ -1,9 +1,12 @@
-// Fase ④ — Reconstruir el video final desde los fotogramas procesados,
-// siempre sin pérdida (export.ts): no hay calidades que elegir.
+// Fase ④ — Reconstruir el video final desde los fotogramas procesados: el
+// máster sin pérdida (export.ts, MOV o PNG en ZIP) o una copia MP4
+// comprimida para ver y compartir (lossy.ts), con pocas opciones.
 
 import { errMsg, isCancelled } from './errors.ts';
 import type { AudioFrom, ExportKind, ExportStage, SequencePlan } from './export.ts';
 import { exportLossless, planSequence } from './export.ts';
+import type { CompressedQuality, CompressedResult } from './lossy.ts';
+import { CODEC_NAMES, describeCompressed, exportCompressed, MAX_MBPS } from './lossy.ts';
 import { clearOutputs, holdFrames } from './opfs.ts';
 import { currentVideo } from './phase1.ts';
 import { ph2 } from './phase2.ts';
@@ -87,15 +90,43 @@ export function mountPhase4(root: HTMLElement): void {
   const stateInfo = el('div', { class: 'hint' });
   const missingBox = el('div');
   const fpsIn = numberInput(12, { min: 0.1, step: 0.1 });
-  // no es una calidad: los dos guardan los mismos píxeles, sin pérdida.
-  // Es dónde se van a abrir
+  // los dos primeros guardan los mismos píxeles, sin pérdida, y se elige
+  // dónde se van a abrir; el tercero es la copia ligera para ver
   const kindSel = select(
     [
-      ['mov', 'MOV video (Resolve, Premiere, After Effects, VLC)'],
-      ['frames', 'Numbered PNG frames in a ZIP (any editor, Final Cut)'],
+      ['mov', 'Lossless MOV (Resolve, Premiere, After Effects, VLC)'],
+      ['frames', 'Lossless PNG frames in a ZIP (any editor, Final Cut)'],
+      ['mp4', 'MP4, compressed (plays anywhere, much smaller)'],
     ],
     'mov',
   );
+  // sólo para el MP4: tres niveles con bitrate variable y uno fijo
+  const qualitySel = select(
+    [
+      ['best', 'Best (largest file)'],
+      ['high', 'High'],
+      ['compact', 'Compact (to send)'],
+      ['custom', 'Fixed bitrate'],
+    ],
+    'high',
+  );
+  const mbpsIn = numberInput(20, { min: 1, max: MAX_MBPS, step: 1 });
+  const qualityField = field('Quality', qualitySel);
+  const mbpsField = field(
+    'Bitrate (Mbps)',
+    mbpsIn,
+    `1 to ${MAX_MBPS}. Held constant where the browser can; otherwise kept as the average, and it says so.`,
+  );
+  const kindIs = (): ExportKind | 'mp4' => kindSel.value as ExportKind | 'mp4';
+  function showQuality(): void {
+    const mp4 = kindIs() === 'mp4';
+    qualityField.hidden = !mp4;
+    mbpsField.hidden = !mp4 || qualitySel.value !== 'custom';
+  }
+  function mbps(): number {
+    const v = parseFloat(mbpsIn.value);
+    return Number.isFinite(v) && v > 0 ? Math.min(MAX_MBPS, Math.max(1, v)) : 20;
+  }
   const planInfo = el(
     'div',
     { class: 'hint', 'aria-live': 'polite' },
@@ -203,8 +234,27 @@ export function mountPhase4(root: HTMLElement): void {
   }
 
   let planSeq = 0;
+  let lastPlan: SequencePlan | null = null;
+  function showPlan(): void {
+    if (!lastPlan) return;
+    planInfo.textContent =
+      kindIs() === 'mp4'
+        ? describeCompressed(
+            lastPlan,
+            parseFloat(fpsIn.value) || 12,
+            qualitySel.value as CompressedQuality,
+            mbps(),
+          )
+        : describePlan(lastPlan);
+  }
+  for (const c of [kindSel, qualitySel, mbpsIn, fpsIn])
+    c.addEventListener('change', () => {
+      showQuality();
+      showPlan();
+    });
   function refreshPlan(files: Blob[]): void {
     const seq = ++planSeq;
+    lastPlan = null;
     if (!files.length) {
       planInfo.textContent = 'Load frames to see what will be saved.';
       return;
@@ -212,7 +262,9 @@ export function mountPhase4(root: HTMLElement): void {
     planInfo.textContent = 'Reading the frames…';
     planSequence(files)
       .then(({ plan }) => {
-        if (seq === planSeq) planInfo.textContent = describePlan(plan);
+        if (seq !== planSeq) return;
+        lastPlan = plan;
+        showPlan();
       })
       .catch((e: unknown) => {
         if (seq === planSeq) planInfo.textContent = `Some frames cannot be read: ${errMsg(e)}`;
@@ -300,7 +352,7 @@ export function mountPhase4(root: HTMLElement): void {
       release = holdFrames();
       const audio = audioFrom();
       const fps = parseFloat(fpsIn.value) || 12;
-      const kind = kindSel.value as ExportKind;
+      const kind = kindIs();
       const base = sanitizeLabel(nameIn.value.trim() || l.proyecto || 'video');
       const frames = files.map((f) => f.data);
       // qué está pasando, no sólo cuánto va: una exportación larga que sólo
@@ -309,22 +361,33 @@ export function mountPhase4(root: HTMLElement): void {
         preparing: (d, t) => `bringing ${t} drawing(s) to one size and depth: ${d}/${t}`,
         sound: (d) => `reading the sound of the original… ${Math.round(d * 100)}%`,
         writing: (d, t) => `writing frame ${d}/${t}`,
+        encoding: (d, t) => `compressing frame ${d}/${t}`,
       };
-      const weight: Record<ExportStage, [number, number]> = {
-        preparing: [0, 0.6],
-        sound: [0.6, 0.7],
-        writing: [0.7, 1],
-      };
-      const out = await exportLossless(frames, fps, {
-        kind,
+      // el MP4 pasa casi todo su tiempo codificando; el sin pérdida,
+      // conformando
+      const weight: Record<ExportStage, [number, number]> =
+        kind === 'mp4'
+          ? { preparing: [0, 0.2], sound: [0.2, 0.25], writing: [0.25, 1], encoding: [0.25, 1] }
+          : { preparing: [0, 0.6], sound: [0.6, 0.7], writing: [0.7, 1], encoding: [0.7, 1] };
+      const common = {
         audio,
         baseName: base,
         signal: ctl.signal,
-        onProgress: (stage, d, t) => {
+        onProgress: (stage: ExportStage, d: number, t: number) => {
           const [a, b] = weight[stage];
           prog.set(a + (b - a) * (t ? d / t : 1), labels[stage](d, t));
         },
-      });
+      };
+      const mp4: CompressedResult | null =
+        kind === 'mp4'
+          ? await exportCompressed(frames, fps, {
+              ...common,
+              quality: qualitySel.value as CompressedQuality,
+              mbps: mbps(),
+            })
+          : null;
+      const out =
+        mp4 ?? (await exportLossless(frames, fps, { ...common, kind: kind as ExportKind }));
       // se pidió audio y no lo hay: que no pase en silencio, nunca mejor
       // dicho, y con el motivo de verdad, que no siempre es el mismo
       if (audio && !out.audio) {
@@ -336,12 +399,20 @@ export function mountPhase4(root: HTMLElement): void {
       download(out.bytes, `${base}.${out.ext}`, out.mime);
       const size = fmtBytes(out.bytes instanceof Blob ? out.bytes.size : out.bytes.byteLength);
       const sound = out.audio ? ', with the original sound' : '';
-      toast(
-        kind === 'mov'
-          ? `Lossless MOV saved: ${out.plan.w}×${out.plan.h}, ${fps} fps, ${size}${sound}. It opens in DaVinci Resolve, Premiere, After Effects, VLC and IINA; QuickTime and phones do not play PNG video, so watch it in the preview.`
-          : `Lossless frames saved: ${out.plan.frames} PNG files, ${size}${sound}. Import them as an image sequence at ${fps} fps.`,
-        'ok',
-      );
+      if (mp4) {
+        toast(
+          `MP4 saved: ${mp4.w}×${mp4.h}, ${CODEC_NAMES[mp4.codec] ?? mp4.codec}, ${fps} fps, ${size}${sound}.` +
+            (mp4.rateNote ? ` Note: ${mp4.rateNote}.` : ''),
+          'ok',
+        );
+      } else {
+        toast(
+          kind === 'mov'
+            ? `Lossless MOV saved: ${out.plan.w}×${out.plan.h}, ${fps} fps, ${size}${sound}. It opens in DaVinci Resolve, Premiere, After Effects, VLC and IINA; QuickTime and phones do not play PNG video, so watch it in the preview.`
+            : `Lossless frames saved: ${out.plan.frames} PNG files, ${size}${sound}. Import them as an image sequence at ${fps} fps.`,
+          'ok',
+        );
+      }
       player.load(frames, fps, audio);
     } catch (e) {
       if (isCancelled(e)) {
@@ -385,7 +456,7 @@ export function mountPhase4(root: HTMLElement): void {
     el(
       'div',
       { class: 'hint' },
-      'Rebuilds the video from the processed frames in their original order, reusing deduplicated drawings wherever they appear. Nothing is compressed away: every pixel, at full depth.',
+      'Rebuilds the video from the processed frames in their original order, reusing deduplicated drawings wherever they appear. The lossless files keep every pixel at full depth; the MP4 is a light copy to watch and share.',
     ),
     dropzone({
       label: 'Project layout.json (optional if you come from phase ②)',
@@ -421,6 +492,7 @@ export function mountPhase4(root: HTMLElement): void {
       field('Frames per second', fpsIn, 'From the project; editable.'),
       field('Save as', kindSel),
     ),
+    el('div', { class: 'row' }, qualityField, mbpsField),
     planInfo,
     el('h3', {}, 'Sound'),
     audioDz,
@@ -448,12 +520,13 @@ export function mountPhase4(root: HTMLElement): void {
     el(
       'div',
       { class: 'hint' },
-      'The saved file has no losses, and browsers and phones cannot play lossless video: watch it here instead, with its sound.',
+      'Browsers and phones cannot play the lossless files: watch the sequence here, with its sound.',
     ),
     el('div', { class: 'btn-row' }, previewBtn),
     player.root,
   );
 
+  showQuality();
   root.append(el('div', { class: 'workbench' }, paper, bench));
   root.addEventListener('mxm:activated', refresh);
   refresh();

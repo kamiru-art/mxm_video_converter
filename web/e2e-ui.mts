@@ -93,7 +93,7 @@ async function runFlow(
   driver: Driver,
   port: number,
   shots: string,
-): Promise<{ checks: Check[]; mov: Buffer | null }> {
+): Promise<{ checks: Check[]; mov: Buffer | null; mp4: Buffer | null }> {
   const checks: Check[] = [];
   const check = (name: string, ok: boolean, detail: string): void => {
     checks.push({ name, ok, detail });
@@ -189,6 +189,51 @@ async function runFlow(
     return d.name + ' ' + d.blob.size + ' bytes';`),
   );
   check('PNG frames ZIP saved', /\.zip \d+ bytes$/.test(frames), frames);
+  // el MP4 comprimido: la calidad sólo aparece con MP4, el bitrate sólo con
+  // "Fixed bitrate", y se guarda con el preset elegido
+  const mp4 = await driver.run<{
+    hiddenBefore: boolean;
+    mbpsHiddenOnPreset: boolean;
+    mbpsShownOnFixed: boolean;
+    plan: string;
+    b64: string;
+    toast: string;
+  }>(
+    step(`
+    const sels = [...document.querySelectorAll('#view-video select')];
+    const kind = sels.find((s) => [...s.options].some((o) => o.value === 'mp4'));
+    const quality = sels.find((s) => [...s.options].some((o) => o.value === 'compact'));
+    const mbps = [...document.querySelectorAll('#view-video label.field')].find((l) => /Bitrate \\(Mbps\\)/.test(l.textContent));
+    const hiddenBefore = quality.closest('label').hidden && mbps.hidden;
+    kind.value = 'mp4';
+    kind.dispatchEvent(new Event('change'));
+    const mbpsHiddenOnPreset = !quality.closest('label').hidden && mbps.hidden;
+    quality.value = 'custom';
+    quality.dispatchEvent(new Event('change'));
+    const mbpsShownOnFixed = !mbps.hidden;
+    quality.value = 'high';
+    quality.dispatchEvent(new Event('change'));
+    const plan = await ui.until(() => [...document.querySelectorAll('#view-video .hint')].map((h) => h.textContent).find((x) => /^Compressed MP4/.test(x)), 30000, 'the MP4 plan');
+    const before = ui.downloads.length;
+    ui.button(/Save the video/).click();
+    const d = await ui.until(() => ui.downloads.length > before && ui.downloads.find((x) => /\\.mp4$/.test(x.name)), 180000, 'the MP4');
+    const toast = await ui.until(() => ui.toasts.find((t) => /MP4 saved/.test(t)), 30000, 'the MP4 toast');
+    const b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(',')[1] ?? '');
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(d.blob);
+    });
+    return { hiddenBefore, mbpsHiddenOnPreset, mbpsShownOnFixed, plan, b64, toast };`),
+  );
+  check(
+    'MP4 options appear only when they apply',
+    mp4.hiddenBefore && mp4.mbpsHiddenOnPreset && mp4.mbpsShownOnFixed,
+    `quality hidden for lossless: ${mp4.hiddenBefore}; bitrate hidden on a preset: ${mp4.mbpsHiddenOnPreset}; bitrate shown on Fixed: ${mp4.mbpsShownOnFixed}`,
+  );
+  check('MP4 plan shown', /Compressed MP4/.test(mp4.plan), mp4.plan);
+  check('MP4 saved', /MP4 saved/.test(mp4.toast), mp4.toast);
+  await screen('video');
   const preview = await driver.run<string>(
     step(`
     const play = await ui.until(() => {
@@ -205,7 +250,7 @@ async function runFlow(
 
   await screen('calibration');
   await screen('help');
-  return { checks, mov: movBytes };
+  return { checks, mov: movBytes, mp4: Buffer.from(mp4.b64, 'base64') };
 }
 
 const { port, close } = await serveDist(DIST);
@@ -253,6 +298,40 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         detail: JSON.stringify(st ?? r.stderr),
       });
       console.log(`${ok ? '✓' : '✗'} MOV decodes with ffmpeg: ${JSON.stringify(st)}`);
+    }
+    if (out.mp4) {
+      // el MP4 que bajó la página: se reproduce en cualquier sitio (H.264 si
+      // el navegador lo codifica), con un fotograma por posición
+      const file = join(shots, 'demo.mp4');
+      await writeFile(file, out.mp4);
+      const r = spawnSync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-count_frames',
+          '-select_streams',
+          'v:0',
+          '-show_entries',
+          'stream=codec_name,width,height,nb_read_frames',
+          '-of',
+          'json',
+          file,
+        ],
+        { encoding: 'utf8' },
+      );
+      const st = (JSON.parse(r.stdout || '{}') as { streams?: Record<string, unknown>[] })
+        .streams?.[0];
+      const ok =
+        ['h264', 'hevc', 'vp9', 'av1'].includes(String(st?.codec_name)) &&
+        Number(st?.nb_read_frames) === 6 &&
+        Number(st?.width) % 4 === 0;
+      checks.push({
+        name: 'MP4 decodes with ffmpeg: 6 frames',
+        ok,
+        detail: JSON.stringify(st ?? r.stderr),
+      });
+      console.log(`${ok ? '✓' : '✗'} MP4 decodes with ffmpeg: ${JSON.stringify(st)}`);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

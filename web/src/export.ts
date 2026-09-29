@@ -1,10 +1,11 @@
-// El video final, SIEMPRE sin pérdida.
+// El video final sin pérdida.
 //
 // Cada fotograma va como PNG: dentro de un MOV (lo abren DaVinci Resolve,
 // Premiere, After Effects, VLC, IINA, ffmpeg) o como secuencia numerada en
 // un ZIP (la importa cualquier editor, también los que no leen PNG en MOV,
 // como Final Cut). No hay calidades que elegir porque no hay nada que
-// perder: los píxeles que salen son los que entraron.
+// perder: los píxeles que salen son los que entraron. La versión
+// comprimida, para ver y compartir, está en lossy.ts y parte del mismo plan.
 //
 // Lo que se decide solo, fotograma a fotograma:
 // - la profundidad de la secuencia: 16 bits por canal si CUALQUIERA de los
@@ -41,7 +42,7 @@ export interface AudioFrom {
 export type ExportKind = 'mov' | 'frames';
 
 /** Las fases de una exportación, en orden. */
-export type ExportStage = 'preparing' | 'sound' | 'writing';
+export type ExportStage = 'preparing' | 'sound' | 'writing' | 'encoding';
 
 export interface ExportOptions {
   kind?: ExportKind;
@@ -158,28 +159,39 @@ function conformConcurrency(plan: SequencePlan): number {
   return Math.max(1, Math.min(poolSize(), Math.floor(budget / Math.max(1, perJob))));
 }
 
+/** Qué fotogramas valen tal cual y a qué se conforman los demás. */
+export interface ConformSpec {
+  sixteen: boolean;
+  alpha: boolean;
+  /** El fotograma se usa como está. */
+  fits: (i: FrameInfo) => boolean;
+}
+
+/** Lo que pide el MOV sin pérdida: PNG de la profundidad y el tipo de color
+ *  de la secuencia, al tamaño del plan. */
+function losslessSpec(plan: SequencePlan): ConformSpec {
+  const want = plan.alpha ? 6 : 2;
+  return {
+    sixteen: plan.sixteen,
+    alpha: plan.alpha,
+    fits: (i) =>
+      i.png && i.w === plan.w && i.h === plan.h && i.sixteen === plan.sixteen && i.colour === want,
+  };
+}
+
 /** Los PNG de la secuencia, ya uniformes: los que valen tal cual, y los
  *  demás conformados por el núcleo y guardados en el disco privado. */
-async function uniformPngs(
+export async function uniformPngs(
   frames: Blob[],
   plan: SequencePlan,
   infos: Map<Blob, FrameInfo>,
   opts: ExportOptions,
+  spec: ConformSpec = losslessSpec(plan),
 ): Promise<Blob[]> {
   // los conformados de la exportación anterior ya no los mira nadie (el
   // archivo que salió de ellos es una copia aparte)
   await clearExportCache();
-  const want = plan.alpha ? 6 : 2;
-  const todo = [...infos.entries()].filter(
-    ([, i]) =>
-      !(
-        i.png &&
-        i.w === plan.w &&
-        i.h === plan.h &&
-        i.sixteen === plan.sixteen &&
-        i.colour === want
-      ),
-  );
+  const todo = [...infos.entries()].filter(([, i]) => !spec.fits(i));
   const done = new Map<Blob, Blob>();
   let finished = 0;
   const report = (): void => opts.onProgress?.('preparing', finished, todo.length);
@@ -192,7 +204,7 @@ async function uniformPngs(
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const png = await run(
         'conform_frame',
-        { bytes, w: plan.w, h: plan.h, sixteen: plan.sixteen, alpha: plan.alpha },
+        { bytes, w: plan.w, h: plan.h, sixteen: spec.sixteen, alpha: spec.alpha },
         [bytes.buffer],
       );
       done.set(blob, await storeExportFrame(png));
@@ -200,7 +212,7 @@ async function uniformPngs(
       report();
     }
   };
-  const n = Math.min(todo.length, conformConcurrency(plan));
+  const n = Math.min(todo.length, conformConcurrency({ ...plan, sixteen: spec.sixteen }));
   await Promise.all(Array.from({ length: n }, worker));
   if (todo.length) recycleIdle(); // un 4K de 16 bits infla la memoria WASM
   return frames.map((f) => done.get(f) ?? f);
@@ -343,7 +355,12 @@ async function audioReaches(track: InputAudioTrack, from: AudioFrom): Promise<bo
  *  `AudioDecoder` que acepta la configuración y luego no entrega nada
  *  dejaría la exportación esperando con la barra quieta, que es justo el
  *  fallo que este módulo tuvo con ffmpeg. */
-function bounded<T>(p: Promise<T>, ms: number, what: string, signal?: AbortSignal): Promise<T> {
+export function bounded<T>(
+  p: Promise<T>,
+  ms: number,
+  what: string,
+  signal?: AbortSignal,
+): Promise<T> {
   if (signal?.aborted) return Promise.reject(new CancelledError('Video export cancelled.'));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
@@ -500,7 +517,7 @@ function mixInto(dst: Int16Array, src: Int16Array, n: number, dstCh: number, src
 const PCM_COPY = { planeIndex: 0, format: 's16' } as const;
 
 /** Lo que se pudo sacar del original: el sonido, o por qué no hay. */
-interface ExportSound {
+export interface ExportSound {
   pcm: PcmAudio | null;
   /** Para la interfaz cuando se pidió sonido y no lo hay. */
   note?: string;
@@ -510,7 +527,7 @@ interface ExportSound {
  *  haya. Nunca lanza por culpa del audio: un fallo suyo deja el video mudo
  *  con su explicación, porque perder una exportación de minutos por una
  *  pista rota sería peor. Una PARADA sí sale: es lo que se pidió. */
-async function pcmForExport(opts: ExportOptions, duration: number): Promise<ExportSound> {
+export async function pcmForExport(opts: ExportOptions, duration: number): Promise<ExportSound> {
   if (!opts.audio) return { pcm: null };
   const name = opts.audio.file.name;
   const a = await bounded(

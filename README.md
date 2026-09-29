@@ -133,15 +133,18 @@ without your own files and without a printer.
 
 ### The new video
 
-The application makes the video in your browser, and it never throws
-information away: there is no quality to choose. It keeps the original
-sequence of the frames and the repeated frames, and you pick only where the
-video goes:
+The application makes the video in your browser. It keeps the original
+sequence of the frames and the repeated frames, and you pick where the video
+goes:
 
 - MOV, with one PNG image for each frame: for DaVinci Resolve, Premiere,
-  After Effects, VLC and IINA
+  After Effects, VLC and IINA. It loses nothing.
 - numbered PNG files in a ZIP, with the sound as a WAV: for any editor that
-  imports an image sequence, Final Cut included
+  imports an image sequence, Final Cut included. It loses nothing.
+- MP4, compressed: a light copy that plays anywhere, to watch and share.
+  Pick Best, High or Compact (the bitrate follows the picture) or a fixed
+  bitrate. It uses H.264 when the browser has it. It loses detail on
+  purpose, so keep one of the two above as the master.
 
 The application decides the rest by itself. If any frame has 16 bits for
 each color channel (a 16-bit scan, a 16-bit TIFF or PNG), the whole video is
@@ -151,8 +154,8 @@ common size and depth in parallel. The frames that the application cuts
 out of your scans all have the same size, so normally every frame is
 copied. A difference of a few pixels is centered, not resampled.
 
-Browsers and phones cannot play lossless video. The page shows a preview
-instead: the same frames at the same speed, with the sound.
+Browsers and phones cannot play the lossless files. The page shows a
+preview instead: the same frames at the same speed, with the sound.
 
 Neither export has a size limit: both are written to the disk of the browser
 as they are made, so a long 4K or 8K master of several gigabytes is possible.

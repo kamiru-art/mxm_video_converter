@@ -110,20 +110,28 @@ generates <strong>rescue sheets</strong> containing only the failed frames.</p>
 
 <h3>③ Video</h3>
 <p>With the processed frames, the app rebuilds the video in its original
-order, reusing the deduplicated drawings, and encodes it in your browser.
-Pick the <strong>format</strong> (MP4/H.264 or WebM), the
-<strong>quality</strong> (up to Maximum, or an exact bitrate up to
-500 Mbps), the <strong>resolution</strong> (up to 8K; the panel shows the
-exact output size) and the file name.</p>
-<p>The <strong>Lossless</strong> quality writes every frame as PNG inside a
-MOV file: pixel-identical to the processed frames, at any resolution. It
-opens in editors (DaVinci Resolve, Premiere) and in VLC or IINA; QuickTime
-Player and browsers no longer decode PNG video. For a master that QuickTime
-plays, pick <strong>ProRes 4444</strong>: visually lossless, 10-bit,
-edit-ready. Neither MOV has a size limit: both are written to disk as they
-are made, so a long 4K or 8K master of several gigabytes works. The other
-qualities use the browser encoder, which is always lossy. Every digital step in this app stores lossless PNG, so scan → frames
-→ Lossless MOV loses nothing.</p>
+order, reusing the deduplicated drawings, with the sound of the original clip
+in sync. Pick where it goes:</p>
+<ul>
+<li><strong>Lossless MOV</strong>: every frame as PNG inside a MOV,
+pixel-identical to the processed frames and at full depth (16 bits when a
+scan or a TIFF has them). It opens in DaVinci Resolve, Premiere, After Effects,
+VLC and IINA. QuickTime Player, phones and browsers do not play PNG video, so
+watch it in the preview on the right.</li>
+<li><strong>Lossless PNG frames</strong>: the same frames as a numbered
+sequence in a ZIP, with the sound as a WAV. Any editor imports it, Final Cut
+included.</li>
+<li><strong>MP4, compressed</strong>: a light copy that plays anywhere, to
+watch and share. <em>Best</em>, <em>High</em> and <em>Compact</em> let the
+bitrate follow the picture (still drawings take little, busy ones more);
+<em>Fixed bitrate</em> holds the Mbps you type, for when you need a known
+size (a browser that cannot hold it constant keeps it as the average, and
+says so). It uses H.264 when the browser has it, and it loses detail on purpose:
+keep a lossless file as the master.</li>
+</ul>
+<p>The size is the one most frames have; a frame of another size is fitted
+with Lanczos. Nothing has a size limit: the files are written to disk as they
+are made, so a long 4K or 8K video of several gigabytes works.</p>
 
 <h3>Calibration (when you need precision)</h3>
 <p><strong>Printer</strong>: print the test page, scan it, and the app

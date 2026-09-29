@@ -156,6 +156,7 @@ const report = (await driver.run('return globalThis.e2eReport ?? null;').catch((
   steps: string[];
   outputs: Record<string, string>;
   lossless: { sequence: string[] };
+  compressed?: import('./e2e-verify.mts').CompressedFacts;
   csp: string[];
 } | null;
 // los archivos que la página deja para verificar por fuera, en base64
@@ -190,10 +191,16 @@ const RUN_DIR = join(ARTIFACT_DIR, which);
 await mkdir(RUN_DIR, { recursive: true });
 for (const [name, b64] of Object.entries(files))
   await writeFile(join(RUN_DIR, name), Buffer.from(b64, 'base64'));
-const { verifyLossless } = await import('./e2e-verify.mts');
+const { verifyCompressed, verifyLossless } = await import('./e2e-verify.mts');
 const lossless = await verifyLossless(RUN_DIR, report?.lossless.sequence ?? []);
 for (const line of lossless.log) console.log(line);
-const passed = title === 'E2E-OK' && cspViolations.length === 0 && lossless.ok;
+const lossy = await verifyCompressed(
+  RUN_DIR,
+  report?.compressed ?? null,
+  report?.lossless.sequence ?? [],
+);
+for (const line of lossy.log) console.log(line);
+const passed = title === 'E2E-OK' && cspViolations.length === 0 && lossless.ok && lossy.ok;
 
 // Informe verificable: entradas (muestras generadas, núcleo WASM, cabeceras
 // del sitio) y salidas por SHA-256, más cada paso comprobado. No lleva
@@ -220,6 +227,7 @@ const artifact = {
     page_reached_E2E_OK: title === 'E2E-OK',
     no_csp_violations: cspViolations.length === 0,
     ...lossless.checks,
+    ...lossy.checks,
   },
   environment: { browser: driver.version, ffmpeg, node: process.version },
   inputs,

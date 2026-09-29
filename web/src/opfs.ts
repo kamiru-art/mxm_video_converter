@@ -222,14 +222,22 @@ export async function openOutput(
   }
 }
 
-/** Un archivo de salida para un muxer que escribe por POSICIÓN: el MOV
- *  vuelve al principio del `mdat` a cerrar su tamaño cuando termina. El
- *  stream de OPFS acepta `{type: 'write', position, data}`, que es justo lo
- *  que manda el StreamTarget de mediabunny, así que se le entrega tal cual.
- *  Quien escribe cierra el stream; `file()` devuelve el archivo entero,
- *  servido por el disco. null si no hay OPFS: el muxer se queda en memoria. */
+/** Un trozo que un muxer escribe en una posición del archivo (el formato
+ *  del StreamTarget de mediabunny y de los streams de OPFS). */
+export interface PositionedWrite {
+  type: 'write';
+  data: Uint8Array;
+  position: number;
+}
+
+/** Un archivo de salida para un muxer que escribe por POSICIÓN: el MP4
+ *  vuelve al principio del `mdat` a cerrar su tamaño cuando termina. Cada
+ *  trozo pasa por `exact` antes de llegar al stream de OPFS (Safari
+ *  escribiría el búfer entero de una vista). Quien escribe cierra el
+ *  stream; `file()` devuelve el archivo entero, servido por el disco. null
+ *  si no hay OPFS: el muxer se queda en memoria. */
 export interface SeekableOutput {
-  readonly writable: FileSystemWritableFileStream;
+  readonly stream: WritableStream<PositionedWrite>;
   file(): Promise<Blob>;
   /** Descarta lo escrito (un fallo o una parada a mitad). */
   abort(): Promise<void>;
@@ -244,8 +252,18 @@ export async function openSeekableOutput(
   try {
     const handle = await dir.getFileHandle(name, { create: true });
     const writable = await handle.createWritable();
+    const stream = new WritableStream<PositionedWrite>({
+      write: (chunk) =>
+        writable.write({
+          type: 'write',
+          position: chunk.position,
+          data: exact(chunk.data as Bytes),
+        }),
+      close: () => writable.close(),
+      abort: () => writable.abort(),
+    });
     return {
-      writable,
+      stream,
       async file() {
         const f = await handle.getFile();
         return new Blob([f], { type });

@@ -31,14 +31,34 @@ const outputs: Record<string, string> = {};
 const e2eFiles: Record<string, Blob> = {};
 /** Qué fuente es cada fotograma del video sin pérdida, en orden. */
 const lossless: { sequence: string[] } = { sequence: [] };
+/** Lo que el verificador de fuera tiene que encontrar en los MP4: el tamaño
+ *  impar de los recortes (el MP4 lo lleva a par con un píxel blanco) y el
+ *  bitrate fijo pedido. Vacío si el navegador no llegó a esa parte. */
+const compressed: {
+  oddW?: number;
+  oddH?: number;
+  edgeW?: number;
+  edgeH?: number;
+  fixedMbps?: number;
+  fixedSeconds?: number;
+} = {};
 (globalThis as { e2eFiles?: unknown }).e2eFiles = e2eFiles;
 // las violaciones de CSP, oídas por la propia página: Safari no deja leer
 // su consola desde fuera, y así los tres navegadores las cuentan igual
 const csp: string[] = [];
-(globalThis as { e2eReport?: unknown }).e2eReport = { steps: lines, outputs, lossless, csp };
+(globalThis as { e2eReport?: unknown }).e2eReport = {
+  steps: lines,
+  outputs,
+  lossless,
+  compressed,
+  csp,
+};
 document.addEventListener('securitypolicyviolation', (e) => {
   csp.push(`${e.violatedDirective} blocked ${e.blockedURI || '(inline)'}`);
 });
+/** Un resultado de exportación (bytes o Blob del disco) como Blob. */
+const asBlob = (b: Bytes | Blob): Blob => (b instanceof Blob ? b : new Blob([b]));
+
 async function digest(name: string, data: Uint8Array | Blob | string): Promise<void> {
   const bytes =
     typeof data === 'string'
@@ -566,6 +586,26 @@ async function main(): Promise<void> {
       log(
         `16 bits de punta a punta: hoja PNG/TIFF/PDF de 16 bits (${reds.size} niveles de rojo en un fotograma), escaneo → 4 recortes de 16 bits ${heads[0][0]}×${heads[0][1]} → MOV que los copia tal cual ✓`,
       );
+      // los mismos recortes (16 bits, y de ancho o alto impar si el escaneo
+      // los da así) a MP4: el navegador los decodifica tal cual, y el video
+      // sale con el ancho múltiplo de 4 y el alto par, lo que falta en
+      // blanco, sin remuestrear
+      const { exportCompressed } = await import('./lossy.ts');
+      const odd = await exportCompressed(crops, 4, { quality: 'best' });
+      const pw = deepMov.plan.w;
+      const ph = deepMov.plan.h;
+      if (odd.w % 4 || odd.h % 2 || odd.w - pw > 3 || odd.h - ph > 1 || odd.w < pw || odd.h < ph)
+        throw new Error(`MP4 of ${pw}×${ph} crops came out ${odd.w}×${odd.h}`);
+      if (odd.conformed !== 0 || odd.direct !== 4)
+        throw new Error(
+          `16-bit PNG crops went through the core for the MP4 (${odd.conformed} conformed, ${odd.direct} direct) instead of being decoded as they are`,
+        );
+      e2eFiles['odd.mp4'] = asBlob(odd.bytes);
+      compressed.oddW = pw;
+      compressed.oddH = ph;
+      log(
+        `MP4 de recortes de 16 bits ${pw}×${ph} → ${odd.w}×${odd.h}, decodificados por el navegador ✓`,
+      );
     }
 
     // fase ② por WebGPU (si el navegador tiene GPU): detect → warp GPU → finish
@@ -962,7 +1002,7 @@ async function main(): Promise<void> {
         await clearFrameCache();
         log(`OPFS: ${back.length} bytes ida y vuelta`);
 
-        // ── el video final, siempre sin pérdida ───────────────────────
+        // ── el video final: sin pérdida, y el MP4 comprimido ──────────
         // Una secuencia que obliga a decidir: un PNG de 16 bits del tamaño
         // de la mayoría (va tal cual), un PNG de 8 bits de 322×179 (se
         // centra en 320×180 sin remuestrear y se ensancha a 16 bits) y un
@@ -1137,6 +1177,148 @@ async function main(): Promise<void> {
           throw new Error(`alpha plan is wrong: ${JSON.stringify(movA.plan)}`);
         e2eFiles['alpha.mov'] = new Blob([movA.bytes]);
         log('MOV con alfa: RGBA de 16 bits ✓');
+
+        // ── el MP4 comprimido ────────────────────────────────────────
+        // La misma secuencia difícil (16 bits, 8 bits descuadrado, TIFF,
+        // repetidos) con el sonido estéreo: el MP4 tiene que salir al tamaño
+        // del plan, con el sonido en su sitio. Sus fotogramas los compara
+        // el verificador de fuera con los del MOV sin pérdida (PSNR).
+        const { exportCompressed } = await import('./lossy.ts');
+        const mp4 = await exportCompressed(seqFrames, 2, { quality: 'high', audio });
+        if (mp4.ext !== 'mp4' || mp4.w !== W || mp4.h !== H)
+          throw new Error(`MP4 is ${mp4.w}×${mp4.h} .${mp4.ext}, want ${W}×${H} .mp4`);
+        // el PNG de 16 bits lo abre el navegador; el TIFF y el de 322×179
+        // tienen que pasar por el núcleo
+        if (mp4.conformed !== 2 || mp4.direct !== 1)
+          throw new Error(
+            `MP4 prepared the drawings wrong: ${mp4.conformed} conformed, ${mp4.direct} direct (want 2 and 1)`,
+          );
+        e2eFiles['compressed.mp4'] = asBlob(mp4.bytes);
+        if (audio) {
+          const a = await audioOf(mp4.bytes, mp4.mime);
+          if (!mp4.audio || !a) throw new Error(`the MP4 lost the sound (${mp4.audioNote ?? '?'})`);
+          const f1 = hz(a, 0.2, 0.8);
+          const f2 = hz(a, 1.2, 1.8);
+          if (
+            a.channels !== 2 ||
+            Math.abs(a.dur - 2.5) > 0.1 ||
+            !nearHz(f1, 440) ||
+            !nearHz(f2, 880)
+          )
+            throw new Error(
+              `the sound of the MP4 is wrong or out of sync: ${a.codec} ${a.channels} ch, ${a.dur.toFixed(2)} s, ${f1.toFixed(0)} / ${f2.toFixed(0)} Hz`,
+            );
+        }
+        log(
+          `MP4 comprimido: ${mp4.codec} ${mp4.w}×${mp4.h}, 5 fotogramas${audio ? ', sonido 440 → 880 Hz en su sitio' : ''} ✓`,
+        );
+
+        // una secuencia con movimiento y grano, que es donde la calidad y el
+        // bitrate se notan: 36 fotogramas distintos de 640×360 a 12 fps
+        const busy: Blob[] = [];
+        {
+          const bw = 640;
+          const bh = 360;
+          const c = new OffscreenCanvas(bw, bh);
+          const cx = context2d(c, { willReadFrequently: true });
+          let seed = 12345;
+          const rnd = (): number => {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            return seed / 0x7fffffff;
+          };
+          for (let i = 0; i < 36; i++) {
+            cx.fillStyle = `hsl(${i * 10}, 55%, 82%)`;
+            cx.fillRect(0, 0, bw, bh);
+            for (let k = 0; k < 14; k++) {
+              cx.fillStyle = `hsl(${k * 26}, 70%, ${30 + (k % 3) * 10}%)`;
+              cx.beginPath();
+              cx.arc((k * 53 + i * 11) % bw, (k * 37 + i * 7) % bh, 18 + k * 3, 0, Math.PI * 2);
+              cx.fill();
+            }
+            const img = cx.getImageData(0, 0, bw, bh);
+            for (let p = 0; p < img.data.length; p += 4) {
+              const n = (rnd() - 0.5) * 36;
+              img.data[p] += n;
+              img.data[p + 1] += n;
+              img.data[p + 2] += n;
+            }
+            cx.putImageData(img, 0, 0);
+            busy.push(await c.convertToBlob({ type: 'image/png' }));
+          }
+        }
+        // parar a mitad suelta el codificador: las exportaciones de después
+        // (Chrome tiene tope de codificadores abiertos) tienen que funcionar
+        const stop = new AbortController();
+        try {
+          await exportCompressed(busy, 12, {
+            signal: stop.signal,
+            onProgress: (st, d) => {
+              if (st === 'encoding' && d >= 3) stop.abort();
+            },
+          });
+          throw new Error('cancelling did not stop the MP4');
+        } catch (e) {
+          if (!isCancelled(e)) throw new Error(`MP4 cancel: ${errMsg(e)}`);
+        }
+        const sizeOf = (b: Bytes | Blob): number => (b instanceof Blob ? b.size : b.byteLength);
+        // la referencia de esas fuentes, sin pérdida, para medir la calidad
+        // de cada preset por fuera
+        e2eFiles['busy.mov'] = asBlob((await exportLossless(busy, 12, { kind: 'mov' })).bytes);
+        const weights: Record<string, number> = {};
+        for (const q of ['best', 'high', 'compact'] as const) {
+          const t0 = performance.now();
+          const r = await exportCompressed(busy, 12, { quality: q });
+          weights[q] = sizeOf(r.bytes);
+          e2eFiles[`busy_${q}.mp4`] = asBlob(r.bytes);
+          console.info(
+            `[E2E] MP4 ${q}: ${r.codec} ${(weights[q] / 1e3).toFixed(0)} KB, ${(36 / ((performance.now() - t0) / 1000)).toFixed(0)} fps`,
+          );
+        }
+        if (!(weights.best > weights.high && weights.high > weights.compact))
+          throw new Error(`the presets do not step down in size: ${JSON.stringify(weights)}`);
+        // el bitrate fijo: 3 s de video tienen que pesar lo pedido (±40 %:
+        // el contenedor y el arranque del control de caudal cuentan)
+        for (const want of [1, 4]) {
+          const r = await exportCompressed(busy, 12, { quality: 'custom', mbps: want });
+          const got = (sizeOf(r.bytes) * 8) / 3 / 1e6;
+          console.info(
+            `[E2E] MP4 fixed ${want} Mbps: ${got.toFixed(2)} Mbps ${r.rateNote ? `(${r.rateNote})` : '(constant)'}`,
+          );
+          if (got < want * 0.6 || got > want * 1.4)
+            throw new Error(`fixed ${want} Mbps came out at ${got.toFixed(2)} Mbps`);
+          if (want === 4) {
+            e2eFiles['fixed.mp4'] = asBlob(r.bytes);
+            compressed.fixedMbps = want;
+            compressed.fixedSeconds = 3;
+          }
+        }
+        log(
+          'MP4: Best > High > Compact en peso, bitrate fijo de 1 y 4 Mbps cumplido, y parar a mitad suelta el codificador ✓',
+        );
+
+        // un tamaño que obliga a rellenar, elegido a propósito y no el que
+        // dé el escaneo: 642 de ancho es de la forma 4k + 2, el que Chrome
+        // corría un píxel, y 361 de alto es impar. Rayas verticales de 2 px:
+        // un corrimiento de un píxel las invierte y el verificador lo ve
+        {
+          const ew = 642;
+          const eh = 361;
+          const c = new OffscreenCanvas(ew, eh);
+          const cx = context2d(c);
+          cx.fillStyle = 'rgb(60, 60, 60)';
+          cx.fillRect(0, 0, ew, eh);
+          cx.fillStyle = 'rgb(190, 190, 190)';
+          for (let x = 0; x < ew; x += 4) cx.fillRect(x, 0, 2, eh);
+          const src = await c.convertToBlob({ type: 'image/png' });
+          e2eFiles['edge_src.png'] = src;
+          const edge = await exportCompressed([src, src, src], 12, { quality: 'best' });
+          if (edge.w !== 644 || edge.h !== 362)
+            throw new Error(`MP4 of ${ew}×${eh} came out ${edge.w}×${edge.h}, want 644×362`);
+          e2eFiles['edge.mp4'] = asBlob(edge.bytes);
+          compressed.edgeW = ew;
+          compressed.edgeH = eh;
+          log(`MP4 de ${ew}×${eh} → ${edge.w}×${edge.h}, relleno en blanco ✓`);
+        }
 
         // ── el sonido, combinación a combinación ─────────────────────
         // Los 4 primeros fotogramas de la extracción (2 s a 2 fps, PNG de 8

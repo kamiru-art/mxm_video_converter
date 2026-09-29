@@ -67,8 +67,8 @@ second (the sheets are rendered several at a time, so the stop is checked
 again as each one is collected); the lossless export aborted after writing
 its first frame must throw the same error.
 
-The final video is lossless only, and its test is the hardest scenario in
-the suite. A sequence of five positions and three drawings: a 16-bit PNG of
+The final video has a lossless master (MOV or PNG ZIP) and a compressed MP4;
+the lossless test is the hardest scenario in the suite. A sequence of five positions and three drawings: a 16-bit PNG of
 the majority size (it must be copied as it is), an 8-bit PNG of 322×179
 (centred on 320×180 without resampling and widened to 16 bits) and a 16-bit
 TIFF (turned into a 16-bit PNG by the core), with repeats, as deduplication
@@ -87,6 +87,25 @@ with the alpha intact. An 8-bit source is read at 8 bits and widened there
 two channels with the centre kept, a source that ends early, a range that
 does not exist, a silent source) run on four same-size 8-bit PNGs, which
 must all be copied as they are.
+
+The compressed MP4 (`web/src/lossy.ts`) is checked on the same sequence and
+on its own material, and `verifyCompressed` decodes the results with the
+local `ffmpeg`. Byte equality is not asked of a lossy browser encoder;
+instead: the MP4 of the hard sequence is H.264 (or the fallback) at 320×180
+with its sound (440 → 880 Hz at t = 1 s, checked in the page), each of its
+frames is closest in luma to its own source (the order, repeats included);
+the 16-bit PNG goes to the browser as it is and the TIFF and the off-size PNG
+through the core (counted by the export itself, not by the lossless plan).
+36 frames of moving shapes with grain are exported with the three presets
+and must step down in size, and in PSNR against a lossless MOV of the same
+sources (Best > High > Compact, High ≥ 30 dB); the mean colour shift must
+be within ±3 levels per channel (Safari once declared full range over
+limited-range data, a shift of −11); a fixed 1 and 4 Mbps must land within
+±40 % over 3 s; a stop after three frames must release the encoder, since
+the exports after it still run. A 642×361 frame with 2-pixel stripes must
+come out 644×362, the added edge white in luma and the drawing aligned with
+its source (at least 30 dB, and far above the same comparison one pixel
+over): Chrome shifted every frame of a 4k + 2 width by one pixel.
 
 The 16-bit sheet path is covered end to end in the same run: four 16-bit
 frames with a fine gradient become a 16-bit sheet in PNG, TIFF and PDF (the

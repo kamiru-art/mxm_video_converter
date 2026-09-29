@@ -35,19 +35,26 @@ WebGPU. Then a mirrored cyanotype with a QR is scanned, then again with the QR
 unreadable and the sheet assigned by hand. The video half extracts frames from
 MP4, ProRes MOV and MPEG-4 AVI (the last two only decode through
 `ffmpeg.wasm`), cancels half-way, builds sheets and a ZIP64 lazily from the
-video, and exports the final video, which is lossless only: a sequence mixing
-a 16-bit PNG, an 8-bit PNG two pixels off size and a 16-bit TIFF goes into a
-MOV and a PNG ZIP with the original sound (stereo 44.1 kHz, 5.1 down to two
-channels, a source that ends early, a silent one). The local `ffmpeg` then
-decodes those files (`web/e2e-verify.mts`) and every frame must equal its
-source sample by sample at 16 bits. A 16-bit chain runs too: 16-bit frames →
+video, and exports the final video, lossless and compressed: a sequence
+mixing a 16-bit PNG, an 8-bit PNG two pixels off size and a 16-bit TIFF goes
+into a MOV and a PNG ZIP with the original sound (stereo 44.1 kHz, 5.1 down
+to two channels, a source that ends early, a silent one), and into an MP4.
+The local `ffmpeg` then decodes those files (`web/e2e-verify.mts`): every
+lossless frame must equal its source sample by sample at 16 bits; the MP4
+must be H.264 (or the fallback codec) with its frames in the timeline order,
+its colours true (mean shift within ±3 levels) and its sound in sync. On a
+sequence with motion and grain, the three presets must step down in size and
+in PSNR against a lossless reference (High ≥ 30 dB), a fixed bitrate must
+land within ±40 %, and a 642×361 frame (a width Chrome used to shift by a
+pixel) must come out 644×362 with a white edge and the drawing in place. A 16-bit chain runs too: 16-bit frames →
 16-bit sheet (PNG, TIFF, PDF) → 16-bit scan → crops of one size → copied into
 the MOV. The page runs under the CSP and COOP/COEP headers of
 `web/public/_headers`; any violation fails the run.
 
 The interface suite (`web/e2e-ui.mts`) clicks through the example project on
-`index.html` at 1440×900 and 390×844: sheets, simulated scans, MOV and ZIP,
-the in-page preview playing, and no sideways scroll on any screen.
+`index.html` at 1440×900 and 390×844: sheets, simulated scans, MOV, ZIP and
+MP4 (the quality and bitrate fields appear only when they apply), the
+in-page preview playing, and no sideways scroll on any screen.
 
 Artifacts (git-ignored, rewritten every run): `artifacts/e2e/browser-pipeline.<browser>.json`
 with the result, the SHA-256 of every input (generated samples, WASM core,
