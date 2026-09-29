@@ -204,6 +204,10 @@ table.report .hint + .hint { margin-top: 3px; }
 /* No exige <label>: una fila de acciones necesita la misma geometría
    (rótulo encima del control) sin envolver un botón en un <label>, que le
    reenviaría el clic del rótulo. */
+/* `hidden` tiene que ganar siempre: el `display: grid` de las filas de
+   campos (abajo) lo pisaba, y los campos de calidad y bitrate del MP4 se
+   veían con cualquier formato */
+[hidden] { display: none !important; }
 .field { display: block; margin: 8px 0; font-size: 13.5px; font-weight: 500; }
 .field > span { display: block; margin-bottom: 3px; }
 input[type="text"], input[type="number"], select {

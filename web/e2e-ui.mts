@@ -204,13 +204,17 @@ async function runFlow(
     const kind = sels.find((s) => [...s.options].some((o) => o.value === 'mp4'));
     const quality = sels.find((s) => [...s.options].some((o) => o.value === 'compact'));
     const mbps = [...document.querySelectorAll('#view-video label.field')].find((l) => /Bitrate \\(Mbps\\)/.test(l.textContent));
-    const hiddenBefore = quality.closest('label').hidden && mbps.hidden;
+    // lo que se VE en la página, no la propiedad: una regla de CSS puede
+    // pisar el atributo hidden (lo hizo) y la propiedad seguiría diciendo true
+    const shown = (e) => e.getClientRects().length > 0 && getComputedStyle(e).display !== 'none';
+    const qf = quality.closest('label');
+    const hiddenBefore = !shown(qf) && !shown(mbps);
     kind.value = 'mp4';
     kind.dispatchEvent(new Event('change'));
-    const mbpsHiddenOnPreset = !quality.closest('label').hidden && mbps.hidden;
+    const mbpsHiddenOnPreset = shown(qf) && !shown(mbps);
     quality.value = 'custom';
     quality.dispatchEvent(new Event('change'));
-    const mbpsShownOnFixed = !mbps.hidden;
+    const mbpsShownOnFixed = shown(mbps);
     quality.value = 'high';
     quality.dispatchEvent(new Event('change'));
     const plan = await ui.until(() => [...document.querySelectorAll('#view-video .hint')].map((h) => h.textContent).find((x) => /^Compressed MP4/.test(x)), 30000, 'the MP4 plan');

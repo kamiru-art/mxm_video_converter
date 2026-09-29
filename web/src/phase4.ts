@@ -112,11 +112,7 @@ export function mountPhase4(root: HTMLElement): void {
   );
   const mbpsIn = numberInput(20, { min: 1, max: MAX_MBPS, step: 1 });
   const qualityField = field('Quality', qualitySel);
-  const mbpsField = field(
-    'Bitrate (Mbps)',
-    mbpsIn,
-    `1 to ${MAX_MBPS}. Held constant where the browser can; otherwise kept as the average, and it says so.`,
-  );
+  const mbpsField = field('Bitrate (Mbps)', mbpsIn, `From 1 to ${MAX_MBPS}.`);
   const kindIs = (): ExportKind | 'mp4' => kindSel.value as ExportKind | 'mp4';
   function showQuality(): void {
     const mp4 = kindIs() === 'mp4';
@@ -127,11 +123,12 @@ export function mountPhase4(root: HTMLElement): void {
     const v = parseFloat(mbpsIn.value);
     return Number.isFinite(v) && v > 0 ? Math.min(MAX_MBPS, Math.max(1, v)) : 20;
   }
-  const planInfo = el(
-    'div',
-    { class: 'hint', 'aria-live': 'polite' },
-    'Load frames to see what will be saved.',
-  );
+  // qué se va a guardar; nada mientras no haya fotogramas
+  const planInfo = el('div', { class: 'hint', 'aria-live': 'polite', hidden: '' });
+  function setPlan(text: string): void {
+    planInfo.textContent = text;
+    planInfo.hidden = !text;
+  }
   const nameIn = el('input', {
     type: 'text',
     placeholder: 'Project name…',
@@ -237,7 +234,7 @@ export function mountPhase4(root: HTMLElement): void {
   let lastPlan: SequencePlan | null = null;
   function showPlan(): void {
     if (!lastPlan) return;
-    planInfo.textContent =
+    setPlan(
       kindIs() === 'mp4'
         ? describeCompressed(
             lastPlan,
@@ -245,7 +242,8 @@ export function mountPhase4(root: HTMLElement): void {
             qualitySel.value as CompressedQuality,
             mbps(),
           )
-        : describePlan(lastPlan);
+        : describePlan(lastPlan),
+    );
   }
   for (const c of [kindSel, qualitySel, mbpsIn, fpsIn])
     c.addEventListener('change', () => {
@@ -256,10 +254,10 @@ export function mountPhase4(root: HTMLElement): void {
     const seq = ++planSeq;
     lastPlan = null;
     if (!files.length) {
-      planInfo.textContent = 'Load frames to see what will be saved.';
+      setPlan('');
       return;
     }
-    planInfo.textContent = 'Reading the frames…';
+    setPlan('Reading the frames…');
     planSequence(files)
       .then(({ plan }) => {
         if (seq !== planSeq) return;
@@ -267,7 +265,7 @@ export function mountPhase4(root: HTMLElement): void {
         showPlan();
       })
       .catch((e: unknown) => {
-        if (seq === planSeq) planInfo.textContent = `Some frames cannot be read: ${errMsg(e)}`;
+        if (seq === planSeq) setPlan(`Some frames cannot be read: ${errMsg(e)}`);
       });
   }
 
@@ -492,7 +490,14 @@ export function mountPhase4(root: HTMLElement): void {
       field('Frames per second', fpsIn, 'From the project; editable.'),
       field('Save as', kindSel),
     ),
-    el('div', { class: 'row' }, qualityField, mbpsField),
+    // dos columnas fijas: con un preset, Calidad se queda bajo la columna de
+    // arriba en vez de estirarse a todo el ancho
+    el(
+      'div',
+      { class: 'row', style: 'grid-template-columns: repeat(2, minmax(0, 1fr))' },
+      qualityField,
+      mbpsField,
+    ),
     planInfo,
     el('h3', {}, 'Sound'),
     audioDz,
