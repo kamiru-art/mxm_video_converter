@@ -4,10 +4,17 @@
 
 import { throwIfCancelled } from './errors.ts';
 import { openOutput } from './opfs.ts';
-import { recycleIdle, run, run0 } from './pool.ts';
+import { poolSize, recycleIdle, run, run0 } from './pool.ts';
 import type { RgbaImage, VideoRef } from './project.ts';
 import { isCyanotype } from './settings.ts';
-import type { Bytes, LayoutInfo, Settings, TimelineItem, VideoMeta } from './types.ts';
+import type {
+  Bytes,
+  LayoutInfo,
+  RenderSheetOutput,
+  Settings,
+  TimelineItem,
+  VideoMeta,
+} from './types.ts';
 import { context2d, sanitizeLabel, selectIndices } from './ui.ts';
 import type { ZipEntryData, ZipSink } from './zip.ts';
 
@@ -101,6 +108,8 @@ interface PackedMeta {
   w: number;
   h: number;
   has_alpha: boolean;
+  /** RGBA de 16 bits (8 bytes por píxel) en vez de 8. */
+  deep?: boolean;
   orig_name: string;
   orig_file?: string | null;
   /** Posición en `pixels`; -1 cuando el fotograma va sin píxeles (hoja no
@@ -139,6 +148,8 @@ export interface PackItem {
   w: number;
   h: number;
   hasAlpha: boolean;
+  /** `data` es RGBA de 16 bits little-endian. */
+  deep?: boolean;
   origName?: string;
   origFile?: string | null;
 }
@@ -152,6 +163,7 @@ export function packImageData(items: PackItem[]): PackedPixels {
       w: it.w,
       h: it.h,
       has_alpha: !!it.hasAlpha,
+      deep: !!it.deep,
       orig_name: it.origName ?? '',
       orig_file: it.origFile ?? null,
       offset: it.data ? total : -1,
@@ -176,6 +188,9 @@ export interface GenFrame {
   w: number;
   h: number;
   hasAlpha: boolean;
+  /** Más de 8 bits por canal: `getImageData(true)` lo da en 16 bits, y la
+   *  hoja sale en 16 bits para no perderlos. */
+  sixteen?: boolean;
   /** El archivo original, para la copia de `_frames/`; nulo si no hay. */
   blob: Blob | null;
   getImageData: (full: boolean) => Promise<RgbaImage>;
@@ -230,6 +245,20 @@ export interface GenerateResult {
   layoutInfo: LayoutInfo;
 }
 
+/** Cuántas hojas renderizar a la vez. Cada una lleva en vuelo sus
+ *  fotogramas a resolución completa (RGBA, una copia aquí y otra en el
+ *  worker) y el lienzo de la hoja con su PNG; con tantos workers como haya,
+ *  pero sin pasar de un tercio de la RAM que el navegador dice tener (sin
+ *  ese dato, Safari y Firefox, se suponen 4 GB). */
+function pagesInFlight(frames: GenFrame[], perPage: number, geometry: LayoutInfo): number {
+  const maxPx = frames.reduce((m, f) => Math.max(m, f.w * f.h), 1);
+  const pagePx = Number(geometry.page_w ?? 0) * Number(geometry.page_h ?? 0);
+  const bpp = frames.some((f) => f.sixteen) ? 8 : 4;
+  const perPageBytes = maxPx * bpp * 2 * perPage + pagePx * 3 * 3 * (bpp / 4);
+  const budget = (navigator.deviceMemory || 4) * 1e9 * 0.33;
+  return Math.max(1, Math.min(poolSize(), Math.floor(budget / Math.max(1, perPageBytes))));
+}
+
 // Las generaciones se serializan: el PDF vive como estado en el worker 0 y
 // dos generaciones a la vez (fase ① y hojas de rescate) entrelazarían páginas.
 let genLock: Promise<unknown> = Promise.resolve();
@@ -270,6 +299,9 @@ async function generateSheetsInner({
 }: GenerateArgs): Promise<GenerateResult> {
   const s: Settings = { ...settings };
   if (!s.fmt_png && !s.fmt_pdf && !s.fmt_tiff) s.fmt_png = true; // algo hay que exportar
+  // la hoja nunca tiene menos profundidad que lo que se imprime en ella: un
+  // solo fotograma de 16 bits y las hojas salen en 16 (PNG, TIFF y PDF)
+  s.deep = frames.some((f) => f.sixteen);
   const safeName = sanitizeLabel(s.out_name || 'hojas');
   const perPage = Math.max(1, s.cols * s.rows);
   const numPages = Math.max(1, Math.ceil(frames.length / perPage));
@@ -329,6 +361,50 @@ async function generateSheetsInner({
   // es la segunda mitad del trabajo, y antes la barra estaba al 100 % ahí
   const totalSel = Math.max(1, pagesSelected.size + (sink ? frameEntries.length : 0));
   const coreSettings = settingsForCore(s);
+  const geometry = JSON.parse(
+    await run('compute_layout', { settings: coreSettings, firstW, firstH }),
+  ) as LayoutInfo;
+  const window = pagesInFlight(frames, perPage, geometry);
+
+  /** Una hoja en camino: su render (y su TIFF) corren en un worker mientras
+   *  se prepara la siguiente; lo demás se escribe en orden al recogerla. */
+  interface Pending {
+    pnum: number;
+    pageBase: string;
+    selected: boolean;
+    work: Promise<{ res: RenderSheetOutput; tif: Bytes | null }>;
+  }
+  const inflight: Pending[] = [];
+
+  /** Recoge la hoja más antigua: registro, página del PDF, TIFF, PNG. El
+   *  PDF lleva estado en el worker 0, así que las páginas entran en orden. */
+  const collect = async (): Promise<void> => {
+    // una parada no espera a las hojas que ya estaban en vuelo: lo que
+    // quede en los workers termina solo y se descarta
+    throwIfCancelled(signal, 'Sheet generation cancelled.');
+    const pend = inflight.shift();
+    if (!pend) return;
+    const { res, tif } = await pend.work;
+    const record: unknown = JSON.parse(res.record);
+    if (record && typeof record === 'object') {
+      const rec = record as Record<string, unknown>;
+      rec.archivo_hoja = `${pend.pageBase}.png`;
+      rec.generada = pend.selected;
+      records.push(rec);
+    }
+    if (pend.selected && res.png) {
+      if (pdfOut) await pdfOut.write(await run0('pdf_add', { png: res.png }));
+      if (tif) await emit(`${pend.pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
+      // como Blob: el navegador puede sacarlo del heap de JS hasta el ZIP
+      const sheetBlob = new Blob([res.png], { type: 'image/png' });
+      if (s.fmt_png) await emit(`${pend.pageBase}.png`, sheetBlob);
+      // proyectos cortos: se retienen para poder simular escaneos en la
+      // fase ② sin imprimir (en uno largo serían cientos de megas)
+      if (numPages <= DEMO_SHEET_LIMIT) sheetImages.set(`${pend.pageBase}.png`, sheetBlob);
+      done++;
+      onProgress(done, totalSel, `sheet ${pend.pnum} ready`);
+    }
+  };
 
   try {
     for (let pageIdx = 0; pageIdx < numPages; pageIdx++) {
@@ -354,6 +430,7 @@ async function generateSheetsInner({
             data: d.data,
             w: d.w,
             h: d.h,
+            deep: d.deep,
             hasAlpha: f.hasAlpha,
             origName: f.name,
             origFile,
@@ -370,7 +447,7 @@ async function generateSheetsInner({
         }
       }
       const { meta, pixels } = packImageData(items);
-      const res = await run(
+      const work = run(
         'render_sheet',
         {
           settings: coreSettings,
@@ -384,31 +461,20 @@ async function generateSheetsInner({
           finish: 'final',
         },
         [pixels.buffer],
-      );
-
-      const record: unknown = JSON.parse(res.record);
-      if (record && typeof record === 'object') {
-        const rec = record as Record<string, unknown>;
-        rec.archivo_hoja = `${pageBase}.png`;
-        rec.generada = selected;
-        records.push(rec);
-      }
-      if (selected && res.png) {
-        if (pdfOut) await pdfOut.write(await run0('pdf_add', { png: res.png }));
-        if (s.fmt_tiff) {
-          const tif = await run('encode_tiff', { png: res.png });
-          await emit(`${pageBase}.tif`, new Blob([tif], { type: 'image/tiff' }));
-        }
-        // como Blob: el navegador puede sacarlo del heap de JS hasta el ZIP
-        const sheetBlob = new Blob([res.png], { type: 'image/png' });
-        if (s.fmt_png) await emit(`${pageBase}.png`, sheetBlob);
-        // proyectos cortos: se retienen para poder simular escaneos en la
-        // fase ② sin imprimir (en uno largo serían cientos de megas)
-        if (numPages <= DEMO_SHEET_LIMIT) sheetImages.set(`${pageBase}.png`, sheetBlob);
-        done++;
-        onProgress(done, totalSel, `sheet ${pnum} ready`);
-      }
+      ).then(async (res) => ({
+        res,
+        // el TIFF sale del PNG de la hoja en el mismo worker libre, sin
+        // esperar a que le toque escribirse
+        tif: selected && res.png && s.fmt_tiff ? await run('encode_tiff', { png: res.png }) : null,
+      }));
+      // si se abandona a mitad (cancelar, un fallo en otra hoja), que su
+      // rechazo no salga como "no manejado": el error de verdad es el otro
+      work.catch(() => {});
+      inflight.push({ pnum, pageBase, selected, work });
+      // contrapresión: no más hojas en vuelo que las que caben en memoria
+      while (inflight.length >= window) await collect();
     }
+    while (inflight.length) await collect();
 
     if (pdfOut) {
       await pdfOut.write(await run0('pdf_finish', {}));
@@ -450,9 +516,7 @@ async function generateSheetsInner({
   }
   const zip = sink ? await sink.finish() : undefined;
 
-  const layoutInfo = JSON.parse(
-    await run('compute_layout', { settings: coreSettings, firstW, firstH }),
-  ) as LayoutInfo;
+  const layoutInfo = geometry;
   recycleIdle(); // devolver al sistema la memoria WASM que infló la generación
   return {
     files,

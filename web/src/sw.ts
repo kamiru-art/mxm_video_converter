@@ -102,6 +102,25 @@ sw.addEventListener('fetch', (e) => {
     return;
   }
 
+  // El manifiesto de un núcleo de ffmpeg dice en qué directorio con hash
+  // están sus piezas: red primero, para no apuntar a un directorio que el
+  // último despliegue ya borró; la copia guardada sólo sin conexión.
+  if (sameOrigin && /^\/ffmpeg\/(st|mt)\/manifest\.json$/.test(url.pathname)) {
+    e.respondWith(
+      (async () => {
+        try {
+          const net = await fetch(req);
+          const ok = isUsable(ASSETS, net);
+          void put(ASSETS, req, ok ? net.clone() : null, ok);
+          return net;
+        } catch {
+          return (await caches.match(req)) ?? Response.error();
+        }
+      })(),
+    );
+    return;
+  }
+
   // Todo lo demás: caché primero, y red solo si hace falta.
   e.respondWith(
     (async () => {
@@ -113,7 +132,13 @@ sw.addEventListener('fetch', (e) => {
       // origen por cada worker que el pool creaba. El resto (manifest, iconos,
       // trozos de ffmpeg, tipografías) no lleva hash y sí se refresca en
       // segundo plano.
-      const hashed = sameOrigin && url.pathname.startsWith('/assets/');
+      // Los núcleos de ffmpeg van igual: en un directorio con el hash de su
+      // contenido (prepare-ffmpeg.mts), así que sus partes nunca mezclan
+      // versiones; el manifiesto que dice cuál toca va por red primero
+      const hashed =
+        sameOrigin &&
+        (url.pathname.startsWith('/assets/') ||
+          /^\/ffmpeg\/(st|mt)-[0-9a-f]{12}\//.test(url.pathname));
       if (hit && hashed) return hit;
       const network = fetch(req)
         .then((res) => {

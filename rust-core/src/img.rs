@@ -85,6 +85,51 @@ impl DynImg {
         }
     }
 
+    /// Recorte de tamaño FIJO `w`×`h` con esquina en (`x1`, `y1`), que puede
+    /// caer fuera de la imagen: lo que sobresale queda blanco (el papel). Los
+    /// píxeles se copian tal cual, sin remuestrear, en la profundidad nativa.
+    pub fn crop_fixed(&self, x1: i64, y1: i64, w: usize, h: usize) -> DynImg {
+        let (iw, ih) = self.size();
+        // intersección con la imagen, en coordenadas de la imagen
+        let sx1 = x1.clamp(0, iw as i64) as usize;
+        let sy1 = y1.clamp(0, ih as i64) as usize;
+        let sx2 = (x1 + w as i64).clamp(0, iw as i64) as usize;
+        let sy2 = (y1 + h as i64).clamp(0, ih as i64) as usize;
+        let (dx, dy) = ((sx1 as i64 - x1) as usize, (sy1 as i64 - y1) as usize);
+        fn copy<T: Copy>(
+            src: &[T],
+            iw: usize,
+            fill: T,
+            w: usize,
+            h: usize,
+            r: [usize; 6],
+        ) -> Vec<T> {
+            let [sx1, sy1, sx2, sy2, dx, dy] = r;
+            let mut out = vec![fill; w * h * 3];
+            if sx2 > sx1 {
+                for y in sy1..sy2 {
+                    let so = (y * iw + sx1) * 3;
+                    let d = ((y - sy1 + dy) * w + dx) * 3;
+                    out[d..d + (sx2 - sx1) * 3].copy_from_slice(&src[so..so + (sx2 - sx1) * 3]);
+                }
+            }
+            out
+        }
+        let r = [sx1, sy1, sx2, sy2, dx, dy];
+        match self {
+            DynImg::U8(i) => DynImg::U8(Rgb {
+                w,
+                h,
+                data: copy(&i.data, iw, 255u8, w, h, r),
+            }),
+            DynImg::U16(i) => DynImg::U16(Rgb16 {
+                w,
+                h,
+                data: copy(&i.data, iw, 65535u16, w, h, r),
+            }),
+        }
+    }
+
     /// Proxy RGB8 con lado máximo `max_side` por PROMEDIO DE ÁREA (binning:
     /// ahoga el grano químico). Devuelve (proxy, factor proxy→full).
     pub fn proxy_rgb8(&self, max_side: usize) -> (Rgb, f64) {
@@ -178,6 +223,45 @@ fn flip_h<T: Copy>(data: &mut [T], w: usize, h: usize, ch: usize) {
             for c in 0..ch {
                 row.swap(x * ch + c, (w - 1 - x) * ch + c);
             }
+        }
+    }
+}
+
+impl Rgb16 {
+    /// Ampliación exacta de 8 a 16 bits (v · 257: 255 → 65535).
+    pub fn from_rgb8(src: &Rgb) -> Rgb16 {
+        Rgb16 {
+            w: src.w,
+            h: src.h,
+            data: src.data.iter().map(|&v| v as u16 * 257).collect(),
+        }
+    }
+    /// Pega `src` con su esquina en (x, y), recortando lo que sobresale.
+    pub fn paste(&mut self, src: &Rgb16, x: i64, y: i64) {
+        for sy in 0..src.h {
+            let dy = y + sy as i64;
+            if dy < 0 || dy >= self.h as i64 {
+                continue;
+            }
+            let x0 = x.max(0);
+            let x1 = (x + src.w as i64).min(self.w as i64);
+            if x1 <= x0 {
+                continue;
+            }
+            let sx0 = (x0 - x) as usize;
+            let n = (x1 - x0) as usize;
+            let d = (dy as usize * self.w + x0 as usize) * 3;
+            let o = (sy * src.w + sx0) * 3;
+            self.data[d..d + n * 3].copy_from_slice(&src.data[o..o + n * 3]);
+        }
+    }
+    pub fn flip_horizontal(&self) -> Rgb16 {
+        let mut data = self.data.clone();
+        flip_h(&mut data, self.w, self.h, 3);
+        Rgb16 {
+            w: self.w,
+            h: self.h,
+            data,
         }
     }
 }

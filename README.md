@@ -56,7 +56,13 @@ Between phase 1 and phase 2, you do the manual work:
 - The application finds the drawings that are identical. It prints each
   repeated frame one time only, and it uses that frame again for the video.
 - You can write the sheets as PNG, as TIFF, or as a PDF that is ready to
-  print.
+  print. If a frame has 16 bits for each channel, the sheets are 16-bit too,
+  in all three formats: a TIFF is never less deep than what you loaded.
+- Each frame is placed on the sheet with one rounding only, at the end: the
+  resize and the cyanotype curve work in floating point, so the curve does
+  not make bands.
+- The application renders several sheets at a time, as many as the memory
+  of the device allows.
 - You can keep a group of settings as a named preset.
 
 ### Registration markers
@@ -127,19 +133,29 @@ without your own files and without a printer.
 
 ### The new video
 
-The application makes the video in your browser. It keeps the original
-sequence of the frames and the repeated frames. These output formats are
-available:
+The application makes the video in your browser, and it never throws
+information away: there is no quality to choose. It keeps the original
+sequence of the frames and the repeated frames, and you pick only where the
+video goes:
 
-- MP4, with the AVC codec
-- WebM, with the VP9, AV1 or VP8 codec
-- MOV, with one PNG image for each frame, for a result without losses
-- MOV, with the ProRes 4444 codec, for video editors
+- MOV, with one PNG image for each frame: for DaVinci Resolve, Premiere,
+  After Effects, VLC and IINA
+- numbered PNG files in a ZIP, with the sound as a WAV: for any editor that
+  imports an image sequence, Final Cut included
 
-Neither MOV export has a size limit. The PNG frames are copied into the
-file byte by byte, and the ProRes is encoded in pieces and joined; both are
-written to the disk of the browser as they are made, so a long 4K or 8K
-master of several gigabytes is possible.
+The application decides the rest by itself. If any frame has 16 bits for
+each color channel (a 16-bit scan, a 16-bit TIFF or PNG), the whole video is
+in 16 bits, and the 8-bit frames are widened exactly. A frame that already
+fits is copied into the file byte by byte; the others are brought to the
+common size and depth in parallel. The frames that the application cuts
+out of your scans all have the same size, so normally every frame is
+copied. A difference of a few pixels is centered, not resampled.
+
+Browsers and phones cannot play lossless video. The page shows a preview
+instead: the same frames at the same speed, with the sound.
+
+Neither export has a size limit: both are written to the disk of the browser
+as they are made, so a long 4K or 8K master of several gigabytes is possible.
 
 The final video can carry the sound of the original clip. The frames come
 from a stretch of that clip at the project's frame rate, so the sound of the

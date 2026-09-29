@@ -17,12 +17,15 @@ deploys to mxm.sebastianlopez.me from CI. Notes on the codebase live in
 
 ### In this repo
 
-The E2E suite drives the built site in headless Chrome. It needs Google Chrome
-(or `CHROME_PATH`), `ffmpeg`, and the core compiled to `web/src/wasm`:
+Two E2E suites drive the built site. They need `ffmpeg`, the core compiled to
+`web/src/wasm`, and a browser: Chrome (or `CHROME_PATH`) by default, Zen or
+Firefox with `--browser=zen` (`ZEN_PATH`), Safari with `--browser=safari`
+(once: Safari Settings → Developer → Allow Remote Automation):
 
 ```bash
 cd rust-core && wasm-pack build --release --target web --out-dir ../web/src/wasm
-cd web && npm ci && npm run test:e2e      # about 25 s
+cd web && npm ci && npm run test:e2e      # pipeline, about 30 s
+cd web && npm run test:ui                 # interface, desktop and phone size
 ```
 
 Scenario: four synthetic frames go onto a contact sheet (PNG, PDF, TIFF,
@@ -32,17 +35,28 @@ WebGPU. Then a mirrored cyanotype with a QR is scanned, then again with the QR
 unreadable and the sheet assigned by hand. The video half extracts frames from
 MP4, ProRes MOV and MPEG-4 AVI (the last two only decode through
 `ffmpeg.wasm`), cancels half-way, builds sheets and a ZIP64 lazily from the
-video, and exports MP4, lossless MOV and ProRes with the original sound cut to
-the frames (mono, stereo 44.1 kHz, 5.1 down to two channels, a source that ends
-early, a silent one). The page runs under the CSP and COOP/COEP headers of
+video, and exports the final video, which is lossless only: a sequence mixing
+a 16-bit PNG, an 8-bit PNG two pixels off size and a 16-bit TIFF goes into a
+MOV and a PNG ZIP with the original sound (stereo 44.1 kHz, 5.1 down to two
+channels, a source that ends early, a silent one). The local `ffmpeg` then
+decodes those files (`web/e2e-verify.mts`) and every frame must equal its
+source sample by sample at 16 bits. A 16-bit chain runs too: 16-bit frames →
+16-bit sheet (PNG, TIFF, PDF) → 16-bit scan → crops of one size → copied into
+the MOV. The page runs under the CSP and COOP/COEP headers of
 `web/public/_headers`; any violation fails the run.
 
-Artifact: `artifacts/e2e/browser-pipeline.json` (git-ignored, rewritten every
-run) with the result, the SHA-256 of every input (generated samples, WASM core,
+The interface suite (`web/e2e-ui.mts`) clicks through the example project on
+`index.html` at 1440×900 and 390×844: sheets, simulated scans, MOV and ZIP,
+the in-page preview playing, and no sideways scroll on any screen.
+
+Artifacts (git-ignored, rewritten every run): `artifacts/e2e/browser-pipeline.<browser>.json`
+with the result, the SHA-256 of every input (generated samples, WASM core,
 headers) and of every deterministic output (sheet, PDF, TIFF, layout, cut-out
-frames, calibration page), and each checked step. It has no clocks in it: two
+frames, calibration page, 16-bit sheet, decoded lossless frames), and each
+checked step; `artifacts/e2e/ui.<browser>.json` with screenshots in
+`artifacts/e2e/ui/`. It has no clocks in it: two
 runs on the same machine write the same bytes. To verify, check
-`shasum -a 256 -c artifacts/e2e/browser-pipeline.json.sha256` from
+`shasum -a 256 -c browser-pipeline.chrome.json.sha256` from
 `artifacts/e2e/`, and compare the `outputs` block across runs or commits; a
 change there means the core now produces different sheets or frames.
 

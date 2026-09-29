@@ -52,13 +52,13 @@ fn decode_peak_bytes(
 /// Decodifica y comprueba los topes, sin tocar todavía el alfa. Lo comparten
 /// los dos caminos: el de escaneos, que quiere RGB opaco, y el de fotogramas,
 /// que quiere conservar el alfa.
-struct Decoded {
-    img: DynamicImage,
+pub(crate) struct Decoded {
+    pub img: DynamicImage,
     sixteen: bool,
     has_alpha: bool,
 }
 
-fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
+pub(crate) fn decode_checked(bytes: &[u8]) -> Result<Decoded, String> {
     let fmt = image::guess_format(bytes).map_err(|e| format!("Unrecognized format: {e}"))?;
     // tope de píxeles contra bombas de descompresión
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
@@ -197,14 +197,25 @@ pub fn decode_rgba8(bytes: &[u8]) -> Result<(Vec<u8>, usize, usize, bool, bool),
     Ok((rgba.into_raw(), w, h, sixteen, has_alpha))
 }
 
+/// PNG sin pérdida, con zlib de nivel 1 y filtro adaptativo. Medido sobre un
+/// fotograma 4K de 16 bits de la Lumix: el modo `Fast` del crate (fdeflate)
+/// tarda 0,24 s y ocupa 40 MB; el nivel 1, 0,36 s y 30,7 MB; el nivel 6 por
+/// defecto de zlib, 2,4 s y 29,1 MB. Los mismos píxeles en los tres: el
+/// nivel 1 es casi todo el ahorro de espacio por una fracción del tiempo.
+pub fn encode_png(img: DynamicImage) -> Result<Vec<u8>, String> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    let mut out = Vec::new();
+    let enc =
+        PngEncoder::new_with_quality(&mut out, CompressionType::Level(1), FilterType::Adaptive);
+    img.write_with_encoder(enc)
+        .map_err(|e| format!("PNG encode failed: {e}"))?;
+    Ok(out)
+}
+
 /// Codifica una imagen RGB de 8 bits a PNG.
 pub fn encode_png_rgb(img: &Rgb) -> Vec<u8> {
     let buf = image::RgbImage::from_raw(img.w as u32, img.h as u32, img.data.clone()).unwrap();
-    let mut out = Vec::new();
-    DynamicImage::ImageRgb8(buf)
-        .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Png)
-        .expect("PNG en memoria");
-    out
+    encode_png(DynamicImage::ImageRgb8(buf)).expect("PNG en memoria")
 }
 
 /// Codifica conservando la profundidad (PNG de 16 bits si aplica).
@@ -218,11 +229,7 @@ pub fn encode_png_dyn(img: &DynImg) -> Vec<u8> {
                 i.data.clone(),
             )
             .unwrap();
-            let mut out = Vec::new();
-            DynamicImage::ImageRgb16(buf)
-                .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Png)
-                .expect("PNG16 en memoria");
-            out
+            encode_png(DynamicImage::ImageRgb16(buf)).expect("PNG16 en memoria")
         }
     }
 }

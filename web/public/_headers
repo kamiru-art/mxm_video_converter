@@ -32,7 +32,9 @@
 # given URL never changes: the browser can keep it for a year and skip the
 # revalidation. Without this rule Cloudflare serves the files with
 # `max-age=0, must-revalidate`, and every `new Worker()` in the pool was one
-# more conditional request to the origin. The document, sw.js and the
-# ffmpeg chunks are not hashed and keep the default.
+# more conditional request to the origin. The document and sw.js are not
+# hashed and keep the default. The ffmpeg cores live in content-addressed
+# directories (/ffmpeg/st-<hash>/, prepare-ffmpeg.mts) that the service
+# worker keeps for good; only their small manifest.json is fetched each time.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable

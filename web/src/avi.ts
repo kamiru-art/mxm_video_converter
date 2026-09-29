@@ -221,12 +221,12 @@ function coreMissing(res: Response, what: string): Error {
 // reutiliza (y de paso las sesiones posteriores arrancan sin volver a bajarlo).
 const wasmURLPromises = new Map<string, Promise<string>>();
 
-function coreWasmURL(base: string): Promise<string> {
+function coreWasmURL(base: string, manifest: CoreManifest): Promise<string> {
   // un fallo no se cachea: si el módulo aparece luego, el siguiente intento
   // vuelve a probar en vez de quedarse con la promesa rechazada
   let p = wasmURLPromises.get(base);
   if (!p) {
-    p = assembleCore(base).catch((e: unknown) => {
+    p = assembleCore(base, manifest).catch((e: unknown) => {
       wasmURLPromises.delete(base);
       throw e;
     });
@@ -238,13 +238,19 @@ function coreWasmURL(base: string): Promise<string> {
 interface CoreManifest {
   parts?: number;
   bytes?: number;
+  /** Directorio con hash donde están las piezas (`/ffmpeg/st-<hash>`). */
+  path?: string;
 }
 
-async function assembleCore(base: string): Promise<string> {
-  const res = await fetch(`${base}/manifest.json`);
+/** El manifiesto de un núcleo: cuántas partes y en qué directorio. */
+async function coreManifest(variant: 'mt' | 'st'): Promise<CoreManifest> {
+  const res = await fetch(`${location.origin}/ffmpeg/${variant}/manifest.json`);
   if (!res.ok || !/\bjson\b/i.test(res.headers.get('content-type') || ''))
-    throw coreMissing(res, 'manifest.json');
-  const manifest = (await res.json()) as CoreManifest;
+    throw coreMissing(res, `${variant}/manifest.json`);
+  return (await res.json()) as CoreManifest;
+}
+
+async function assembleCore(base: string, manifest: CoreManifest): Promise<string> {
   const nParts = manifest.parts ?? 0;
   if (!(nParts > 0))
     throw new Error(
@@ -265,8 +271,9 @@ async function assembleCore(base: string): Promise<string> {
 }
 
 async function loadVariant(variant: 'mt' | 'st'): Promise<FFmpeg> {
-  const base = `${location.origin}/ffmpeg/${variant}`;
-  const wasmURL = await coreWasmURL(base);
+  const manifest = await coreManifest(variant);
+  const base = `${location.origin}${manifest.path ?? `/ffmpeg/${variant}`}`;
+  const wasmURL = await coreWasmURL(base, manifest);
   const ff = new FFmpeg();
   await ff.load({
     coreURL: `${base}/ffmpeg-core.js`,

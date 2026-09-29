@@ -4,8 +4,9 @@
 
 use crate::aruco::{generate_marker, Dict};
 use crate::cyanotype as cyan;
-use crate::geometry::{warp_rgb_fill, H3};
-use crate::img::{resize_rgb, Filter, Gray, Rgb};
+use crate::geometry::{warp_rgb16_fill, warp_rgb_fill, H3};
+use crate::img::{Gray, Rgb, Rgb16};
+use crate::photo::{self, FramePixels};
 use crate::qr;
 use crate::text;
 use serde::{Deserialize, Serialize};
@@ -266,6 +267,11 @@ pub struct Settings {
     pub fmt_pdf: bool,
     #[serde(default)]
     pub fmt_tiff: bool,
+    /// Hoja de 16 bits por canal (PNG, TIFF y PDF). Lo decide la web: sí
+    /// cuando algún fotograma impreso trae más de 8 bits, para no entregar
+    /// nunca menos profundidad de la que entró.
+    #[serde(default)]
+    pub deep: bool,
 }
 
 impl Default for Settings {
@@ -990,28 +996,18 @@ fn meta_row_geometry(
 // Render de una hoja
 // ────────────────────────────────────────────────────────────────
 
-/// Fotograma de entrada (RGBA de 8 bits decodificado por el navegador).
+/// Fotograma de entrada: RGBA de 8 bits (lo que decodifica el navegador) o
+/// de 16 (un TIFF o un PNG de 16 bits, decodificados por el núcleo).
 pub struct FrameInput {
     pub w: usize,
     pub h: usize,
-    /// RGBA; None = solo geometría (no se renderiza).
-    pub rgba: Option<Vec<u8>>,
+    /// None = solo geometría (no se renderiza).
+    pub rgba: Option<FramePixels>,
     pub has_alpha: bool,
     /// Nombre del archivo original (para el layout.json).
     pub orig_name: String,
     /// Ruta relativa de la copia original, si se guardó (originales_dir/...).
     pub orig_file: Option<String>,
-}
-
-fn flatten_rgba(rgba: &[u8], w: usize, h: usize, base: [u8; 3]) -> Rgb {
-    let mut data = Vec::with_capacity(w * h * 3);
-    for p in rgba.as_chunks::<4>().0 {
-        let a = p[3] as u32;
-        for c in 0..3 {
-            data.push((((p[c] as u32) * a + (base[c] as u32) * (255 - a)) / 255) as u8);
-        }
-    }
-    Rgb { w, h, data }
 }
 
 fn unique_key(usadas: &mut HashSet<String>, base: &str) -> String {
@@ -1032,6 +1028,10 @@ fn unique_key(usadas: &mut HashSet<String>, base: &str) -> String {
 
 pub struct PageResult {
     pub image: Option<Rgb>,
+    /// La misma hoja en 16 bits, cuando `Settings::deep`: el lienzo de 8
+    /// ampliado (marcadores, textos y fondos son colores planos) con los
+    /// fotogramas puestos encima en su profundidad.
+    pub image16: Option<Rgb16>,
     pub record: Option<Value>,
     /// Motivo por el que la hoja no se pudo componer (mensaje para el usuario).
     /// Cuando está puesto, `image` y `record` vienen vacíos: media hoja con un
@@ -1067,6 +1067,8 @@ pub fn render_page(
     let label_color = label_text_color(s);
     let stops = s.ink_stops();
     let mut claves: HashSet<String> = HashSet::new();
+    // los fotogramas en 16 bits, para ponerlos sobre la hoja ampliada al final
+    let mut patches16: Vec<(i64, i64, Rgb16)> = Vec::new();
 
     for (cell_idx, frame) in frames.iter().enumerate() {
         let row = cell_idx as u32 / l.cols;
@@ -1086,19 +1088,27 @@ pub fn render_page(
         let px = (cell_x + (l.cell_w - new_w as f64) / 2.0).round() as i64;
         let py = block_top.round() as i64;
 
-        if let (Some(canvas), Some(rgba)) = (canvas.as_mut(), frame.rgba.as_ref()) {
-            let flat = flatten_rgba(rgba, frame.w, frame.h, alpha_base_color(s));
-            let mut resized = resize_rgb(&flat, new_w as usize, new_h as usize, Filter::Lanczos3);
-            if s.is_cyanotype() {
-                resized = cyan::make_negative(
-                    &resized,
-                    s.cyan_curve.as_deref(),
-                    &s.cyan_ink,
-                    stops.as_deref(),
-                    s.cyan_clarity,
-                );
+        if let (Some(canvas), Some(pixels)) = (canvas.as_mut(), frame.rgba.as_ref()) {
+            // del archivo a la celda en f32, y una sola cuantización (photo.rs)
+            let (cw, ch) = (new_w as usize, new_h as usize);
+            let rgb = photo::fit_frame(pixels, frame.w, frame.h, alpha_base_color(s), cw, ch);
+            let (patch, patch16) = if s.is_cyanotype() {
+                let d = photo::densities(&rgb, cw, ch, s.cyan_curve.as_deref(), s.cyan_clarity);
+                (
+                    photo::ink8(&d, cw, ch, &s.cyan_ink, stops.as_deref()),
+                    s.deep
+                        .then(|| photo::ink16(&d, cw, ch, &s.cyan_ink, stops.as_deref())),
+                )
+            } else {
+                (
+                    photo::to_rgb8(&rgb, cw, ch),
+                    s.deep.then(|| photo::to_rgb16(&rgb, cw, ch)),
+                )
+            };
+            canvas.paste(&patch, px, py);
+            if let Some(p) = patch16 {
+                patches16.push((px, py, p));
             }
-            canvas.paste(&resized, px, py);
 
             if s.is_cyanotype() && s.cyan_frame_border_mm > 0.0 {
                 let bw = mm_to_px(s.cyan_frame_border_mm, l.dpi).max(1);
@@ -1150,6 +1160,7 @@ pub fn render_page(
             if let Err(e) = qr::check_payload_fits(&payload) {
                 return PageResult {
                     image: None,
+                    image16: None,
                     record: None,
                     error: Some(e),
                 };
@@ -1174,6 +1185,7 @@ pub fn render_page(
                     Err(e) => {
                         return PageResult {
                             image: None,
+                            image16: None,
                             record: None,
                             error: Some(e),
                         }
@@ -1292,8 +1304,20 @@ pub fn render_page(
         }
     }
 
+    let image16 = if s.deep {
+        canvas.as_ref().map(|c| {
+            let mut c16 = Rgb16::from_rgb8(c);
+            for (x, y, p) in &patches16 {
+                c16.paste(p, *x, *y);
+            }
+            c16
+        })
+    } else {
+        None
+    };
     PageResult {
         image: canvas,
+        image16,
         record,
         error: None,
     }
@@ -1329,6 +1353,35 @@ pub fn finish_page(s: &Settings, img: Rgb) -> Rgb {
         ];
         let (ow, oh) = (out.w, out.h);
         out = warp_rgb_fill(&out, &m, ow, oh, page_bg_color(s));
+    }
+    if s.is_cyanotype() && s.cyan_mirror {
+        out = out.flip_horizontal();
+    }
+    out
+}
+
+/// `finish_page` para la hoja de 16 bits: la misma compensación de escala
+/// (el relleno, el fondo de la hoja ampliado) y el mismo espejo.
+pub fn finish_page16(s: &Settings, img: Rgb16) -> Rgb16 {
+    let mut out = img;
+    if needs_print_scale(s) {
+        let (w, h) = (out.w as f64, out.h as f64);
+        let (cx, cy) = (w / 2.0, h / 2.0);
+        let (fx, fy) = (1.0 / s.print_scale_x, 1.0 / s.print_scale_y);
+        let m: H3 = [
+            fx,
+            0.0,
+            cx * (1.0 - fx),
+            0.0,
+            fy,
+            cy * (1.0 - fy),
+            0.0,
+            0.0,
+            1.0,
+        ];
+        let bg = page_bg_color(s).map(|v| v as u16 * 257);
+        let (ow, oh) = (out.w, out.h);
+        out = warp_rgb16_fill(&out, &m, ow, oh, bg);
     }
     if s.is_cyanotype() && s.cyan_mirror {
         out = out.flip_horizontal();
@@ -1509,7 +1562,7 @@ mod tests {
         FrameInput {
             w,
             h,
-            rgba: Some(rgba),
+            rgba: Some(FramePixels::Rgba8(rgba)),
             has_alpha: false,
             orig_name: "f.png".into(),
             orig_file: None,

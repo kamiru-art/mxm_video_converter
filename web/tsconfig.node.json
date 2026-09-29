@@ -19,5 +19,5 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["e2e-run.mts", "prepare-ffmpeg.mts", "vite.config.ts"]
+  "include": ["e2e-browsers.mts", "e2e-run.mts", "e2e-ui.mts", "e2e-verify.mts", "prepare-ffmpeg.mts", "vite.config.ts"]
 }

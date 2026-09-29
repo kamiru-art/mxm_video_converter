@@ -20,19 +20,25 @@ use std::io::Write;
 pub struct PdfBuilder {
     dpi: f64,
     /// Bytes emitidos hasta ahora (todos los bloques devueltos, en orden).
-    written: usize,
+    /// En u64 y no usize: en wasm32 usize es de 32 bits, y un PDF de más de
+    /// 4 GiB (unas 500 hojas A4 a 300 ppp) daba la vuelta en silencio y
+    /// dejaba todo el xref apuntando a bytes equivocados.
+    written: u64,
     /// Desplazamiento de cada objeto, indexado por número de objeto − 1.
     /// Los objetos 1 (catálogo) y 2 (árbol de páginas) se escriben al final.
-    offsets: Vec<Option<usize>>,
+    offsets: Vec<Option<u64>>,
     /// Números de objeto de las páginas, en orden.
     page_objs: Vec<usize>,
 }
 
 /// Lo que hace falta de un PNG para incrustarlo sin recomprimir: RGB de
-/// 8 bits, sin entrelazado, y su flujo zlib (los IDAT concatenados).
+/// 8 o 16 bits, sin entrelazado, y su flujo zlib (los IDAT concatenados).
+/// El predictor PNG del PDF entiende los dos: 16 bits por componente es
+/// PDF 1.5, que es la versión que declara el archivo.
 struct PngRgb8 {
     w: usize,
     h: usize,
+    depth: u8,
     idat: Vec<u8>,
 }
 
@@ -40,7 +46,7 @@ fn be32(b: &[u8]) -> usize {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize
 }
 
-/// None si el PNG no es RGB de 8 bits sin entrelazar (o está mal formado):
+/// None si el PNG no es RGB de 8 o 16 bits sin entrelazar (o está mal formado):
 /// entonces se decodifica y se comprime como antes.
 fn parse_png_rgb8(png: &[u8]) -> Option<PngRgb8> {
     const SIG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
@@ -50,6 +56,7 @@ fn parse_png_rgb8(png: &[u8]) -> Option<PngRgb8> {
     let mut pos = 8;
     let mut w = 0;
     let mut h = 0;
+    let mut bits = 8;
     let mut idat = Vec::new();
     let mut seen_ihdr = false;
     while pos + 8 <= png.len() {
@@ -69,9 +76,10 @@ fn parse_png_rgb8(png: &[u8]) -> Option<PngRgb8> {
                 w = be32(&data[0..4]);
                 h = be32(&data[4..8]);
                 let (depth, color, interlace) = (data[8], data[9], data[12]);
-                if depth != 8 || color != 2 || interlace != 0 {
+                if !(depth == 8 || depth == 16) || color != 2 || interlace != 0 {
                     return None;
                 }
+                bits = depth;
                 seen_ihdr = true;
             }
             b"IDAT" => idat.extend_from_slice(data),
@@ -83,7 +91,12 @@ fn parse_png_rgb8(png: &[u8]) -> Option<PngRgb8> {
     if !seen_ihdr || w == 0 || h == 0 || idat.is_empty() {
         return None;
     }
-    Some(PngRgb8 { w, h, idat })
+    Some(PngRgb8 {
+        w,
+        h,
+        depth: bits,
+        idat,
+    })
 }
 
 impl PdfBuilder {
@@ -99,7 +112,7 @@ impl PdfBuilder {
     /// Cabecera del archivo: la emite el primer bloque.
     fn header(&mut self, out: &mut Vec<u8>) {
         if self.written == 0 && out.is_empty() {
-            out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+            out.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         }
     }
 
@@ -108,7 +121,7 @@ impl PdfBuilder {
         while self.offsets.len() < num {
             self.offsets.push(None);
         }
-        self.offsets[num - 1] = Some(self.written + out.len());
+        self.offsets[num - 1] = Some(self.written + out.len() as u64);
         out.extend_from_slice(format!("{num} 0 obj\n").as_bytes());
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
@@ -116,7 +129,7 @@ impl PdfBuilder {
 
     /// Una página: imagen, contenido y objeto de página. `params` es el
     /// diccionario extra del flujo de imagen (los DecodeParms del PNG).
-    fn page(&mut self, w: usize, h: usize, stream: &[u8], params: &str) -> Vec<u8> {
+    fn page(&mut self, w: usize, h: usize, bits: u8, stream: &[u8], params: &str) -> Vec<u8> {
         let mut out = Vec::with_capacity(stream.len() + 512);
         self.header(&mut out);
         let i = self.page_objs.len();
@@ -128,7 +141,7 @@ impl PdfBuilder {
 
         let mut iobj = format!(
             "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} \
-             /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode{params} \
+             /ColorSpace /DeviceRGB /BitsPerComponent {bits} /Filter /FlateDecode{params} \
              /Length {} >>\nstream\n",
             stream.len()
         )
@@ -150,7 +163,7 @@ impl PdfBuilder {
         );
         self.object(&mut out, page_obj, pobj.as_bytes());
         self.page_objs.push(page_obj);
-        self.written += out.len();
+        self.written += out.len() as u64;
         out
     }
 
@@ -160,7 +173,7 @@ impl PdfBuilder {
         let mut enc = ZlibEncoder::new(Vec::new(), Compression::new(6));
         enc.write_all(&img.data).unwrap();
         let compressed = enc.finish().unwrap();
-        self.page(img.w, img.h, &compressed, "")
+        self.page(img.w, img.h, 8, &compressed, "")
     }
 
     /// Añade una página desde un PNG RGB de 8 bits sin volver a comprimir:
@@ -169,18 +182,20 @@ impl PdfBuilder {
     pub fn add_page_png(&mut self, png: &[u8]) -> Option<Vec<u8>> {
         let p = parse_png_rgb8(png)?;
         let params = format!(
-            " /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns {} >>",
-            p.w
+            " /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent {} /Columns {} >>",
+            p.depth, p.w
         );
-        Some(self.page(p.w, p.h, &p.idat, &params))
+        Some(self.page(p.w, p.h, p.depth, &p.idat, &params))
     }
 
     pub fn page_count(&self) -> usize {
         self.page_objs.len()
     }
 
-    /// Cierra el archivo: árbol de páginas, catálogo, xref y trailer.
-    pub fn finish(mut self) -> Vec<u8> {
+    /// Cierra el archivo: árbol de páginas, catálogo, xref y trailer. Falla
+    /// si el archivo pasa de lo que un xref clásico puede apuntar (diez
+    /// cifras: 9,3 GiB), en vez de escribir uno que ningún lector abriría.
+    pub fn finish(mut self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
         self.header(&mut out);
         let kids: Vec<String> = self.page_objs.iter().map(|n| format!("{n} 0 R")).collect();
@@ -191,7 +206,13 @@ impl PdfBuilder {
         );
         self.object(&mut out, 2, pages.as_bytes());
         self.object(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
-        let xref_pos = self.written + out.len();
+        let xref_pos = self.written + out.len() as u64;
+        if xref_pos > 9_999_999_999 {
+            return Err(format!(
+                "The PDF would be {:.1} GB, and a PDF cannot point past 9.3 GB: generate the sheets in several parts (Sheets to include), or leave the PDF out and print the PNG or TIFF sheets.",
+                xref_pos as f64 / 1e9
+            ));
+        }
         let n = self.offsets.len();
         out.extend_from_slice(format!("xref\n0 {}\n", n + 1).as_bytes());
         out.extend_from_slice(b"0000000000 65535 f \n");
@@ -206,7 +227,7 @@ impl PdfBuilder {
             )
             .as_bytes(),
         );
-        out
+        Ok(out)
     }
 }
 
@@ -258,8 +279,8 @@ mod tests {
         let mut b = PdfBuilder::new(150);
         let mut pdf = b.add_page(&Rgb::new(100, 140, [255, 0, 0]));
         pdf.extend(b.add_page(&Rgb::new(100, 140, [0, 255, 0])));
-        pdf.extend(b.finish());
-        assert!(pdf.starts_with(b"%PDF-1.4"));
+        pdf.extend(b.finish().unwrap());
+        assert!(pdf.starts_with(b"%PDF-1.5"));
         assert!(pdf.windows(8).any(|w| w == b"/Count 2"[..].as_ref()));
         assert!(pdf.ends_with(b"%%EOF\n"));
         assert_eq!(check_xref(&pdf), 2 + 2 * 3);
@@ -275,7 +296,7 @@ mod tests {
         let mut b = PdfBuilder::new(300);
         let first = b.add_page_png(&png).expect("PNG RGB de 8 bits");
         let second = b.add_page_png(&png).expect("PNG RGB de 8 bits");
-        let tail = b.finish();
+        let tail = b.finish().unwrap();
         let text = String::from_utf8_lossy(&first);
         assert!(text.contains("/Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 64"));
         assert!(text.contains("/Width 64 /Height 48"));
@@ -288,7 +309,7 @@ mod tests {
         pdf.extend(second);
         pdf.extend(tail);
         assert_eq!(check_xref(&pdf), 2 + 2 * 3);
-        assert_eq!(b"%PDF-1.4"[..], pdf[..8]);
+        assert_eq!(b"%PDF-1.5"[..], pdf[..8]);
     }
 
     #[test]
@@ -305,8 +326,8 @@ mod tests {
 
     #[test]
     fn empty_pdf_still_has_header_and_xref() {
-        let pdf = PdfBuilder::new(72).finish();
-        assert!(pdf.starts_with(b"%PDF-1.4"));
+        let pdf = PdfBuilder::new(72).finish().unwrap();
+        assert!(pdf.starts_with(b"%PDF-1.5"));
         assert_eq!(check_xref(&pdf), 2);
     }
 }

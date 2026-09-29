@@ -32,16 +32,20 @@ export interface ProjectFrame {
   hasAlpha: boolean;
   /** TIFF y PNG de 16 bits: los decodifica el núcleo Rust, no el navegador. */
   needsWasmDecode?: boolean;
+  /** Más de 8 bits por canal: la hoja los recibe así, en 16 bits. */
+  sixteen?: boolean;
   /** Extraído de un video: nombre del video y posición, para etiquetarlo. */
   videoStem?: string;
   seq?: number;
 }
 
-/** RGBA de 8 bits ya decodificado. */
+/** RGBA ya decodificado: de 8 bits, o de 16 (little-endian, 8 bytes por
+ *  píxel) cuando `deep`. */
 export interface RgbaImage {
   data: Bytes;
   w: number;
   h: number;
+  deep?: boolean;
 }
 
 export interface Project {
@@ -74,7 +78,13 @@ let cacheBytes = 0;
  *  pasada empieza vaciándolo: lo que dejó una página fallida no vuelve. */
 const prefetched = new Map<VideoRef, RgbaImage>();
 
-function cachePreview(key: string, out: RgbaImage): void {
+/** Sube con cada `clearFrames()`: un decodificado que empezó en el proyecto
+ *  anterior y termina después no puede guardarse bajo la clave `idx:0`, que
+ *  ya es de un fotograma del proyecto nuevo. */
+let projectGen = 0;
+
+function cachePreview(key: string, out: RgbaImage, gen: number): void {
+  if (gen !== projectGen) return;
   rgbaCache.set(key, out);
   cacheBytes += out.data.byteLength;
   while (cacheBytes > 300e6 && rgbaCache.size > 8) {
@@ -134,6 +144,7 @@ export async function prefetchVideoFrames(refs: VideoRef[]): Promise<void> {
  *  viven en un video y aún no están en la caché de vistas previas se
  *  decodifican en una pasada, en vez de abrir el video y buscar uno a uno. */
 export async function prefetchPreviews(idxs: number[]): Promise<void> {
+  const gen = projectGen;
   const refs: VideoRef[] = [];
   const keyOf = new Map<VideoRef, string>();
   for (const idx of idxs) {
@@ -145,7 +156,7 @@ export async function prefetchPreviews(idxs: number[]): Promise<void> {
   }
   await decodeGrouped(refs, 640, (ref, img) => {
     const key = keyOf.get(ref);
-    if (key) cachePreview(key, img);
+    if (key) cachePreview(key, img, gen);
   });
 }
 
@@ -307,6 +318,7 @@ export function clearFrames(): void {
   project.processedFrames.clear();
   rgbaCache.clear();
   cacheBytes = 0;
+  projectGen++;
   prefetched.clear();
 }
 
@@ -315,6 +327,7 @@ export async function frameImageData(idx: number, full: boolean): Promise<RgbaIm
   const key = `${idx}:${full ? 1 : 0}`;
   const hit = rgbaCache.get(key);
   if (hit) return hit;
+  const gen = projectGen;
   const f = project.frames[idx];
   let out: RgbaImage;
   if (f.video) {
@@ -329,6 +342,11 @@ export async function frameImageData(idx: number, full: boolean): Promise<RgbaIm
     }
   } else if (!f.blob) {
     throw new Error(`Frame ${f.name} has no image.`);
+  } else if (full && f.sixteen) {
+    // a la hoja en su profundidad: el núcleo lo decodifica a RGBA de 16 bits
+    const bytes = new Uint8Array(await f.blob.arrayBuffer());
+    const r = await run('decode_image16', { bytes }, [bytes.buffer]);
+    out = { data: r.rgba16, w: r.w, h: r.h, deep: true };
   } else if (f.needsWasmDecode) {
     // TIFF/PNG16: decodifica el núcleo Rust
     const bytes = new Uint8Array(await f.blob.arrayBuffer());
@@ -338,7 +356,7 @@ export async function frameImageData(idx: number, full: boolean): Promise<RgbaIm
     out = bitmapToRgba(await createImageBitmap(f.blob), full ? null : 640);
   }
   // caché acotada (solo tamaños de vista previa)
-  if (!full) cachePreview(key, out);
+  if (!full) cachePreview(key, out, gen);
   return out;
 }
 
