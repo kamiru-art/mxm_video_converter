@@ -355,7 +355,10 @@ export async function verifyCompressed(
 
     // la CALIDAD, sobre una secuencia realista (formas en movimiento con
     // grano): cada preset contra la referencia sin pérdida de las mismas
-    // fuentes. Tienen que escalonarse, y High verse bien
+    // fuentes. Tienen que escalonarse, y High no bajar de 28 dB. Medido con
+    // este grano, que es el peor caso: 30.5 a 31.2 dB con los codificadores
+    // por hardware de macOS (Chrome, Zen, Safari), 29.2 con el openh264 del
+    // Chrome de Linux en CI. Un rango mal declarado lo dejaba en 24
     const busyRef = join(dir, 'busy.mov');
     const db: Record<string, number> = {};
     for (const q of ['best', 'high', 'compact']) {
@@ -381,8 +384,8 @@ export async function verifyCompressed(
     }
     check(
       'mp4_presets_quality',
-      db.best > db.high && db.high > db.compact && db.high >= 30,
-      `MP4 presets vs lossless: Best ${db.best.toFixed(1)} dB > High ${db.high.toFixed(1)} dB > Compact ${db.compact.toFixed(1)} dB (want that order, High ≥ 30 dB)`,
+      db.best > db.high && db.high > db.compact && db.high >= 28,
+      `MP4 presets vs lossless: Best ${db.best.toFixed(1)} dB > High ${db.high.toFixed(1)} dB > Compact ${db.compact.toFixed(1)} dB (want that order, High ≥ 28 dB)`,
     );
 
     // los recortes de 16 bits del escaneo, al tamaño que admite el codificador

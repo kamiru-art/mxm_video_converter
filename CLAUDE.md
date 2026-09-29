@@ -44,7 +44,7 @@ lossless frame must equal its source sample by sample at 16 bits; the MP4
 must be H.264 (or the fallback codec) with its frames in the timeline order,
 its colours true (mean shift within ±3 levels) and its sound in sync. On a
 sequence with motion and grain, the three presets must step down in size and
-in PSNR against a lossless reference (High ≥ 30 dB), a fixed bitrate must
+in PSNR against a lossless reference (High ≥ 28 dB), a fixed bitrate must
 land within ±40 %, and a 642×361 frame (a width Chrome used to shift by a
 pixel) must come out 644×362 with a white edge and the drawing in place. A 16-bit chain runs too: 16-bit frames →
 16-bit sheet (PNG, TIFF, PDF) → 16-bit scan → crops of one size → copied into
