@@ -75,6 +75,19 @@ const initial = resolveRoute(location.hash.replace('#', ''));
 show(mounters[initial] ? initial : 'sheets');
 if (migrationProblem) toast(migrationProblem, 'err', true);
 
+// Los módulos que se cargan tarde (guardar el MOV, abrir un AVI), traídos ya
+// en segundo plano: una vez importados viven en la pestaña, y un despliegue
+// posterior que retire sus archivos no la deja a mitad de un proyecto con
+// "Failed to fetch dynamically imported module" (carry-assets.mts guarda
+// además las versiones recientes en el servidor). Ninguno hace nada al
+// cargarse.
+const preload = () => {
+  void import('./pngmov.ts').catch(() => {});
+  void import('./avi.ts').catch(() => {});
+};
+if ('requestIdleCallback' in window) requestIdleCallback(preload, { timeout: 10_000 });
+else setTimeout(preload, 3000);
+
 // warm up the WASM core
 run('version', {}).then(
   (v) => console.log(`mxm-core ${v} ready`),
