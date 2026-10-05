@@ -117,17 +117,26 @@ function firstExisting(paths: (string | undefined)[]): string | undefined {
   return paths.filter((p): p is string => !!p).find((p) => existsSync(p));
 }
 
+/** Chrome o Chromium: CHROME_PATH, o el primero instalado en un sitio
+ *  conocido. Lo usan todos los scripts que lanzan Chrome. */
+export function chromePath(): string | undefined {
+  return firstExisting([
+    process.env.CHROME_PATH,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+  ]);
+}
+
+/** Lo que Chrome necesita para arrancar en un contenedor o como root (CI). */
+export const CHROME_ARGS = ['--no-sandbox', '--disable-dev-shm-usage'];
+
 async function puppeteerDriver(kind: 'chrome' | 'zen', viewport?: Viewport): Promise<Driver> {
   const executablePath =
     kind === 'chrome'
-      ? firstExisting([
-          process.env.CHROME_PATH,
-          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-          '/usr/bin/google-chrome',
-          '/usr/bin/google-chrome-stable',
-          '/usr/bin/chromium-browser',
-          '/usr/bin/chromium',
-        ])
+      ? chromePath()
       : firstExisting([
           process.env.ZEN_PATH,
           process.env.FIREFOX_PATH,
@@ -149,7 +158,7 @@ async function puppeteerDriver(kind: 'chrome' | 'zen', viewport?: Viewport): Pro
     // `true` es el modo headless "nuevo" (el antiguo `'new'` ya no existe en
     // puppeteer 25; su valor por defecto es este mismo)
     headless: true,
-    args: kind === 'chrome' ? ['--no-sandbox', '--disable-dev-shm-usage'] : [],
+    args: kind === 'chrome' ? CHROME_ARGS : [],
   });
   const page = await browser.newPage();
   if (viewport)

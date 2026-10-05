@@ -170,6 +170,12 @@ jobs:
       - name: Lint and formatting (biome)
         run: npm run lint
         working-directory: web
+      # Every icon is generated from the SVG favicon (web/make-icons.mts), and
+      # its URLs carry the favicon's hash: a changed favicon without new
+      # icons fails here instead of reaching link previews and installed apps.
+      - name: Icons match the favicon
+        run: node make-icons.mts --check
+        working-directory: web
       - name: Install ffmpeg (generates the WebCodecs E2E sample video)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Browser end-to-end test (headless Chrome)
