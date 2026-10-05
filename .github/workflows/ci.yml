@@ -222,6 +222,14 @@ jobs:
             echo "have=false" >> "$GITHUB_OUTPUT"
             echo "::warning::$missing not set — skipping deploy. Add it in Settings → Secrets to enable automatic deploys."
           fi
+      # Tabs opened before this deploy still ask for the hashed files of
+      # their version (a lazy chunk, a worker); Cloudflare replaces the whole
+      # file set, so they are copied into dist from the live site first, and
+      # kept for 14 days (web/carry-assets.mts explains it).
+      - name: Carry over the files of recent versions
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.creds.outputs.have == 'true'
+        run: node carry-assets.mts https://mxmstudio.work dist
+        working-directory: web
       - name: Deploy (wrangler)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.creds.outputs.have == 'true'
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0

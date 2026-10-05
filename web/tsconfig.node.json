@@ -20,6 +20,7 @@
     "skipLibCheck": true
   },
   "include": [
+    "carry-assets.mts",
     "e2e-browsers.mts",
     "e2e-migration.mts",
     "e2e-run.mts",
