@@ -10,7 +10,7 @@
 #              (tsc, strict, three projects), lints and checks formatting
 #              (biome), builds the site, runs the
 #              browser end-to-end test (real Chrome, workers + WASM) and
-#              deploys that exact build to Cloudflare (mxm.sebastianlopez.me),
+#              deploys that exact build to Cloudflare (mxmstudio.work),
 #              Pages-style. The deploy step is the only one gated to main.
 # The web job waits for the rust job, so nothing is published that has not
 # passed both. The deploy deliberately lives inside the web job rather than
@@ -24,8 +24,12 @@
 # or to redo a deploy that was skipped — is to invent a commit.
 #
 # Deploy requires two repository secrets:
-#   CLOUDFLARE_API_TOKEN  — API token with "Workers Scripts: Edit"
-#   CLOUDFLARE_ACCOUNT_ID — the Cloudflare account id
+#   CLOUDFLARE_API_TOKEN  — API token for the MXM Studio account with
+#                           "Workers Scripts: Edit", plus "Workers Routes:
+#                           Edit" and "Zone: Read" on mxmstudio.work (the
+#                           custom domain is re-asserted on every deploy)
+#   CLOUDFLARE_ACCOUNT_ID — the MXM Studio account id (not Sebastián's own:
+#                           that one only keeps the old address, deploy/old-domain)
 # Until the token secret exists, the deploy step reports itself as skipped
 # and the workflow stays green. That means a green run is NOT by itself proof
 # that the site was published: check the deploy step, or the Worker's

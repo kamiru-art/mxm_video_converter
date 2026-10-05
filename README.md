@@ -4,7 +4,7 @@ MXM Studio is a free tool for mixed-media animation and for cyanotype prints.
 The tool runs fully in your web browser. Your videos and your scans stay on
 your computer, because the application does not send them to a server.
 
-Use the application here: <https://mxm.sebastianlopez.me>
+Use the application here: <https://mxmstudio.work>
 
 You do not need an account, and you do not need to install software.
 

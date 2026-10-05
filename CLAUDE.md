@@ -2,7 +2,9 @@
 
 MXM Studio: a Rust core (`rust-core/`, compiled to WebAssembly) and a Vite
 site (`web/`) that runs the whole pipeline in the browser. The `main` branch
-deploys to mxm.sebastianlopez.me from CI. Notes on the codebase live in
+deploys to mxmstudio.work (the MXM Studio Cloudflare account) from CI; the
+old address, mxm.sebastianlopez.me, hands users and their saved data over
+(`deploy/old-domain/`, `web/src/migrate.ts`). Notes on the codebase live in
 `docs/codebase/` (tests: `docs/codebase/TESTING.md`).
 
 ## Testing

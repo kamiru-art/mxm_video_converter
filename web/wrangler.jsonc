@@ -7,9 +7,15 @@
   // CI supplies it as the CLOUDFLARE_ACCOUNT_ID secret; for a local
   // deploy, export CLOUDFLARE_ACCOUNT_ID before running wrangler.
   "compatibility_date": "2026-08-01",
+  // The site lives on the MXM Studio account (kami.visualwork), whose zone is
+  // mxmstudio.work; www.mxmstudio.work redirects here from its own Worker
+  // (deploy/www-redirect). No workers.dev or preview address: one origin,
+  // because localStorage and the installed app belong to it.
+  "workers_dev": false,
+  "preview_urls": false,
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
   },
-  "routes": [{ "pattern": "mxm.sebastianlopez.me", "custom_domain": true }]
+  "routes": [{ "pattern": "mxmstudio.work", "custom_domain": true }]
 }

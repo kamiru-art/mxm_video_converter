@@ -3,6 +3,7 @@
 import './style.css';
 import { errMsg } from './errors.ts';
 import { mountHelp } from './help.ts';
+import { migrationProblem } from './migrate.ts';
 import { clearOutputs } from './opfs.ts';
 import { mountPhase1 } from './phase1.ts';
 import { mountPhase2 } from './phase2.ts';
@@ -68,6 +69,7 @@ window.addEventListener('hashchange', () => {
 
 const initial = resolveRoute(location.hash.replace('#', ''));
 show(mounters[initial] ? initial : 'sheets');
+if (migrationProblem) toast(migrationProblem, 'err');
 
 // warm up the WASM core
 run('version', {}).then(

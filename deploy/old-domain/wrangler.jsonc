@@ -1,0 +1,15 @@
+{
+  // The old address, mxm.sebastianlopez.me, on Sebastián's own Cloudflare
+  // account (the site now lives on the MXM Studio account). Same Worker name
+  // as before, so the custom domain stays attached. CI does NOT deploy this:
+  // it is published once by hand with build.sh, which explains why.
+  "name": "mxm-studio",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [{ "pattern": "mxm.sebastianlopez.me", "custom_domain": true }]
+}
