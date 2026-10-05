@@ -23,6 +23,7 @@
     "carry-assets.mts",
     "e2e-browsers.mts",
     "e2e-migration.mts",
+    "make-icons.mts",
     "e2e-run.mts",
     "e2e-ui.mts",
     "e2e-verify.mts",

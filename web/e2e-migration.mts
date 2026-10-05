@@ -44,12 +44,12 @@
 // Node lo ejecuta tal cual (type stripping): sólo sintaxis borrable.
 
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Browser, BrowserContext, CDPSession, Page } from 'puppeteer-core';
 import puppeteer from 'puppeteer-core';
+import { CHROME_ARGS, chromePath } from './e2e-browsers.mts';
 
 const OLD = 'https://mxm.sebastianlopez.me';
 const NEW = 'https://mxmstudio.work';
@@ -68,12 +68,7 @@ function check(step: string, ok: boolean, detail: string): void {
   console.log(`${ok ? '✓' : '✗'} ${step}: ${detail}`);
 }
 
-const chrome = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-].find((p): p is string => !!p && existsSync(p));
+const chrome = chromePath();
 if (!chrome) throw new Error('Chrome not found: set CHROME_PATH');
 
 async function newPage(ctx: BrowserContext): Promise<Page> {
@@ -169,7 +164,11 @@ try {
     served[name] = sha(body);
   }
 
-  browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: chromeArgs });
+  browser = await puppeteer.launch({
+    executablePath: chrome,
+    headless: true,
+    args: [...CHROME_ARGS, ...chromeArgs],
+  });
 
   // /sw.js del origen viejo: el de la app mientras se "instala", el real después
   let serveAppSw = false;
