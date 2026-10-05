@@ -2,7 +2,9 @@
 
 MXM Studio: a Rust core (`rust-core/`, compiled to WebAssembly) and a Vite
 site (`web/`) that runs the whole pipeline in the browser. The `main` branch
-deploys to mxm.sebastianlopez.me from CI. Notes on the codebase live in
+deploys to mxmstudio.work (the MXM Studio Cloudflare account) from CI; the
+old address, mxm.sebastianlopez.me, hands users and their saved data over
+(`deploy/old-domain/`, `web/src/migrate.ts`). Notes on the codebase live in
 `docs/codebase/` (tests: `docs/codebase/TESTING.md`).
 
 ## Testing
@@ -66,6 +68,17 @@ runs on the same machine write the same bytes. To verify, check
 `shasum -a 256 -c browser-pipeline.chrome.json.sha256` from
 `artifacts/e2e/`, and compare the `outputs` block across runs or commits; a
 change there means the core now produces different sheets or frames.
+
+A third suite, `web/e2e-migration.mts` (`npm run build && npm run
+test:migration`), runs against the two published sites, since the move from
+mxm.sebastianlopez.me to mxmstudio.work is about two real origins: a user
+with the old app installed and data on both sides follows an old link, and
+must land on the same route with the stores merged, the old service worker
+gone, deleted presets not coming back, plus `?export`, oversized stores, a
+corrupt payload and `www`. It writes `artifacts/e2e/migration.chrome.json`
+(SHA-256 of the served hand-over files, every check; no clocks).
+`CHROME_ARGS` passes extra Chrome flags, e.g. `--host-resolver-rules` while a
+resolver still caches an empty answer.
 
 The Rust tests (`cd rust-core && cargo test --release`) are the isolated
 layer: `tests/pipeline.rs` does sheet-to-scan round trips with real noise and

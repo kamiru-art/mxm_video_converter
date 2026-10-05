@@ -1,0 +1,17 @@
+{
+  // The old address, mxm.sebastianlopez.me, on Sebastián's own Cloudflare
+  // account (the site now lives on the MXM Studio account). Its name differs
+  // from the site's on purpose: a deploy of either one against the wrong
+  // account then creates a stray Worker whose domain fails to attach, instead
+  // of overwriting the other site. CI does NOT deploy this: it is published
+  // by hand after build.sh, which explains why.
+  "name": "mxm-studio-old-domain",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [{ "pattern": "mxm.sebastianlopez.me", "custom_domain": true }]
+}

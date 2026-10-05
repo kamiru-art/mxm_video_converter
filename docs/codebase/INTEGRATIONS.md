@@ -9,7 +9,8 @@ loads.
 
 | System | Type | Purpose | Auth model | Criticality | Evidence |
 |--------|------|---------|------------|-------------|----------|
-| Cloudflare Workers | Static hosting | Serves the built site at `mxm.sebastianlopez.me`, with the single-page-application fallback. | API token, held as a GitHub secret. | High: it is how the application reaches users. | `web/wrangler.jsonc`, `.github/workflows/ci.yml` |
+| Cloudflare Workers | Static hosting | Serves the built site at `mxmstudio.work` (MXM Studio account), with the single-page-application fallback. `www.mxmstudio.work` is a zone Redirect Rule (301 to the apex, path and query kept) on a proxied placeholder record, set in the dashboard, not a Worker. | API token, held as a GitHub secret. | High: it is how the application reaches users. | `web/wrangler.jsonc`, `.github/workflows/ci.yml` |
+| Cloudflare Workers, old address | Hand-over | `mxm.sebastianlopez.me` (Sebastián's own account) serves the last build published there with a "moved" page in place of `index.html`: it carries `localStorage` to the new address and retires the old service worker. Published by hand, never by CI. | Local `wrangler` login | Medium: links and installed apps from before the move go through it. | `deploy/old-domain/`, `web/src/migrate.ts` |
 | GitHub Actions | CI/CD | Runs the Rust tests, builds the WebAssembly and the site, runs the browser test, deploys. | The workflow's own `GITHUB_TOKEN`, with `contents: read`. | High | `.github/workflows/ci.yml` |
 | Google Fonts | Static asset over the network | Web fonts for the interface. | None | Low: the page still works without them. | `web/src/sw.ts` (`FONT_HOSTS`) |
 | `ffmpeg.wasm` | Bundled asset, about 32 MB | Decodes what WebCodecs refuses (AVI, camera MOV in HEVC 10-bit or ProRes). The export no longer uses it. | None | Medium: without it, AVI files and some camera MOV files do not open. The lossless export does not depend on it. | `web/src/avi.ts`, `web/prepare-ffmpeg.mts` |
@@ -25,12 +26,39 @@ third-party API.
 | Store | What it holds | Where it lives | Evidence |
 |-------|---------------|----------------|----------|
 | `localStorage`, one key `mxm-studio-v1` | The presets, the calibration profiles, and the last phase 1 settings. | The user's browser. | `web/src/store.ts` |
+| `localStorage`, `mxm_ram_gb` and `mxm-migrated-ids` | The memory the user typed in phase 2; the ids of the old-address browsers whose data was already imported here. | The user's browser. | `web/src/phase2.ts`, `web/src/migrate.ts` |
 | In-memory `project` object | The frames, the layout, the sheet images, the processed frames, the report. Lost on reload. | The tab. | `web/src/project.ts` |
 | Cache Storage, three caches | The application shell, the hashed assets, the fonts. | The user's browser. | `web/src/sw.ts` |
 
 Everything the user makes stays on the user's machine. The export and import
 of profiles is a manual JSON file download and upload
 (`web/src/phase3.ts`), not a synchronisation service.
+
+`localStorage` belongs to one origin, so the move from `mxm.sebastianlopez.me`
+to `mxmstudio.work` would have left every saved preset behind. The old
+address now answers every page with `deploy/old-domain/index.html`, whose
+script reads the store and the RAM setting, gives that browser an id
+(`mxm-migration-id`, kept there) and navigates to
+`https://mxmstudio.work/#mxm-migrate=<base64url JSON>`. The fragment is never
+sent to a server, though it does reach the browser history for an instant;
+it carries print and calibration settings, no personal data. `main.ts` calls
+`runMigration()` (`web/src/migrate.ts`) before anything reads the route or
+the store: it adds what arrives to what is already there
+(`store.mergeFromOldAddress`; on a name clash the new address wins, and the
+`flags` probe cache is not carried), restores the route of the old link
+(`#scans`…), and records the id in `mxm-migrated-ids`, so a later visit
+through an old bookmark does not bring back a preset deleted since, while a
+migration link copied from somebody else does not block the user's own. If
+the import fails, a toast that stays until clicked points to
+`mxm.sebastianlopez.me/?export`, which offers the old store as a file for
+*Import profiles* in Calibration; the same page offers the file when the
+store is too large for a URL (over 900 kB: Firefox stops at 1 MiB).
+
+The old app's service worker is not removed from the page: the browser
+fetches the new `/sw.js` (`deploy/old-domain/sw.js`), which waits, like the
+app's own, until the last tab of the old app closes, then deletes the old
+caches and unregisters itself. An old tab open in the middle of a project
+keeps its cached scripts until then.
 
 ## 3) Authentication and Authorization
 
@@ -42,8 +70,8 @@ system are the two CI secrets used to deploy.
 
 | Name | Used by | Where it is stored | Evidence |
 |------|---------|--------------------|----------|
-| `CLOUDFLARE_API_TOKEN` | The deploy step | GitHub repository secret | `.github/workflows/ci.yml` |
-| `CLOUDFLARE_ACCOUNT_ID` | The deploy step | GitHub repository secret | `.github/workflows/ci.yml` |
+| `CLOUDFLARE_API_TOKEN` | The deploy step; scoped to the MXM Studio account | GitHub repository secret | `.github/workflows/ci.yml` |
+| `CLOUDFLARE_ACCOUNT_ID` | The deploy step; the MXM Studio account | GitHub repository secret | `.github/workflows/ci.yml` |
 
 The account id is deliberately absent from `web/wrangler.jsonc`: CI passes it
 as a secret, and a local deploy exports `CLOUDFLARE_ACCOUNT_ID`. It is not a

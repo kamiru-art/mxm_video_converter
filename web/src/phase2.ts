@@ -9,6 +9,7 @@ import { poolSize, recycleIdle, run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
 import { project } from './project.ts';
 import { defaultSettings } from './settings.ts';
+import { RAM_KEY } from './store.ts';
 import type { Bytes, DetectOutput, Layout, ScanOutput, ScanResult, Settings } from './types.ts';
 import type { GalleryItem } from './ui.ts';
 import {
@@ -166,16 +167,16 @@ export function mountPhase2(root: HTMLElement): void {
   );
   // los navegadores informan la RAM a medias (Chrome la limita a 8 GB;
   // Safari/Firefox no la informan): el usuario puede declararla
-  const ramIn = numberInput(localStorage.getItem('mxm_ram_gb') ?? '', { min: 1, max: 2048 });
+  const ramIn = numberInput(localStorage.getItem(RAM_KEY) ?? '', { min: 1, max: 2048 });
   ramIn.placeholder = navigator.deviceMemory
     ? `detected: ${navigator.deviceMemory}+`
     : 'not detected';
   ramIn.addEventListener('change', () => {
     const v = parseFloat(ramIn.value);
-    if (Number.isFinite(v) && v > 0) localStorage.setItem('mxm_ram_gb', String(v));
+    if (Number.isFinite(v) && v > 0) localStorage.setItem(RAM_KEY, String(v));
     else {
       ramIn.value = '';
-      localStorage.removeItem('mxm_ram_gb');
+      localStorage.removeItem(RAM_KEY);
     }
   });
   function machineRam(): { gb: number; manual: boolean } {

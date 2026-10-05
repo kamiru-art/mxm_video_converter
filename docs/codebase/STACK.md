@@ -94,7 +94,9 @@ npx wrangler@4 deploy
   the token is absent, the deploy step reports itself as skipped and the
   workflow stays green (`.github/workflows/ci.yml`).
 - `web/wrangler.jsonc` deliberately does not hold the account id: CI passes
-  it as a secret, and a local deploy exports `CLOUDFLARE_ACCOUNT_ID`.
+  it as a secret, and a local deploy exports `CLOUDFLARE_ACCOUNT_ID`. The
+  site is on the MXM Studio account (zone `mxmstudio.work`); Sebastián's own
+  account only keeps the old address (`deploy/old-domain/`).
 - Runtime constraints: WebAssembly is necessary. WebCodecs gives the fast video
   path, and WebGPU gives the fast scan path; the application falls back when
   they are absent (`web/src/main.ts`, `web/src/webgpu.ts`).

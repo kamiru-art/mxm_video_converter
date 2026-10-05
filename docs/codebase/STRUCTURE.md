@@ -14,6 +14,7 @@
 | `web/public/` | Static files served as they are: the manifest, the icons, the response headers, the ffmpeg core. | `web/public/_headers` |
 | `assets/` | The application icons. | `assets/icon.png` |
 | `.github/workflows/` | One workflow: test, then build, then deploy. | `.github/workflows/ci.yml` |
+| `deploy/` | What the old address serves, published by hand: `old-domain/` hands users and their `localStorage` over to `mxmstudio.work`. | `deploy/old-domain/build.sh` |
 | `docs/codebase/` | These documents. | this file |
 
 ## 2) Entry Points

@@ -10,6 +10,8 @@ import type {
 } from './types.ts';
 
 const KEY = 'mxm-studio-v1';
+/** La RAM que el usuario declara en la fase ②: una clave aparte. */
+export const RAM_KEY = 'mxm_ram_gb';
 
 /** Qué guarda cada clase de perfil. */
 export interface ProfileMap {
@@ -120,6 +122,26 @@ export function importAll(json: string): void {
     if (!entries || typeof entries !== 'object') continue;
     const current = all[kind];
     all[kind] = { ...(current && typeof current === 'object' ? current : {}), ...entries };
+  }
+  saveAll(all as StoreData);
+}
+
+/** Suma el almacén que trae la mudanza desde el dominio viejo (migrate.ts).
+ *  Al revés que importAll, aquí gana lo que ya hay: quien ya usó el dominio
+ *  nuevo no pierde nada. `flags` no viaja: son resultados de pruebas del
+ *  navegador, una caché que se rehace sola, y un enlace fabricado no debe
+ *  poder plantar uno que la interfaz no deja ver ni borrar. LANZA como
+ *  saveAll si el navegador no guarda. */
+export function mergeFromOldAddress(json: string): void {
+  const incoming: unknown = JSON.parse(json);
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
+  const all = loadAll() as Record<string, unknown>;
+  for (const [kind, entries] of Object.entries(incoming as Record<string, unknown>)) {
+    if (kind === 'flags' || !entries || typeof entries !== 'object' || Array.isArray(entries)) {
+      continue;
+    }
+    const current = all[kind];
+    all[kind] = { ...entries, ...(current && typeof current === 'object' ? current : {}) };
   }
   saveAll(all as StoreData);
 }
