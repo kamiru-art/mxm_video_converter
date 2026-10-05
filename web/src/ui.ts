@@ -53,10 +53,18 @@ export function context2d(
 
 export type ToastKind = '' | 'ok' | 'err';
 
-export function toast(msg: string, kind: ToastKind = ''): void {
+/** Un aviso abajo a la derecha. `sticky`: no se va solo, sino al hacerle
+ *  clic; para lo que el usuario tiene que poder leer con calma. */
+export function toast(msg: string, kind: ToastKind = '', sticky = false): void {
   const t = el('div', { class: `toast ${kind}` }, msg);
   document.getElementById('toasts')?.append(t);
-  setTimeout(() => t.remove(), kind === 'err' ? 9000 : 5000);
+  if (sticky) {
+    t.title = 'Click to dismiss';
+    t.style.cursor = 'pointer';
+    t.addEventListener('click', () => t.remove());
+  } else {
+    setTimeout(() => t.remove(), kind === 'err' ? 9000 : 5000);
+  }
 }
 
 export function download(

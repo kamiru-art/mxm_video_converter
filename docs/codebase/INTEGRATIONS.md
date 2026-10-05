@@ -26,7 +26,7 @@ third-party API.
 | Store | What it holds | Where it lives | Evidence |
 |-------|---------------|----------------|----------|
 | `localStorage`, one key `mxm-studio-v1` | The presets, the calibration profiles, and the last phase 1 settings. | The user's browser. | `web/src/store.ts` |
-| `localStorage`, `mxm_ram_gb` and `mxm-migrated-from` | The memory the user typed in phase 2; the mark that this browser already imported the data of the old address. | The user's browser. | `web/src/phase2.ts`, `web/src/migrate.ts` |
+| `localStorage`, `mxm_ram_gb` and `mxm-migrated-ids` | The memory the user typed in phase 2; the ids of the old-address browsers whose data was already imported here. | The user's browser. | `web/src/phase2.ts`, `web/src/migrate.ts` |
 | In-memory `project` object | The frames, the layout, the sheet images, the processed frames, the report. Lost on reload. | The tab. | `web/src/project.ts` |
 | Cache Storage, three caches | The application shell, the hashed assets, the fonts. | The user's browser. | `web/src/sw.ts` |
 
@@ -37,15 +37,28 @@ of profiles is a manual JSON file download and upload
 `localStorage` belongs to one origin, so the move from `mxm.sebastianlopez.me`
 to `mxmstudio.work` would have left every saved preset behind. The old
 address now answers every page with `deploy/old-domain/index.html`, whose
-script reads both keys and navigates to
-`https://mxmstudio.work/#mxm-migrate=<base64url JSON>`; the fragment is
-never sent to a server. `web/src/migrate.ts`, the first module `main.ts`
-imports, adds what arrives to what is already there (on a name clash the
-new address wins), restores the route the old link had (`#scans`…), and
-writes `mxm-migrated-from` so a later visit through an old bookmark does not
-bring back a preset deleted since. If the import fails, a toast says so and
-points to `mxm.sebastianlopez.me/?export`, which offers the old store as a
-file for *Import profiles* in Calibration.
+script reads the store and the RAM setting, gives that browser an id
+(`mxm-migration-id`, kept there) and navigates to
+`https://mxmstudio.work/#mxm-migrate=<base64url JSON>`. The fragment is never
+sent to a server, though it does reach the browser history for an instant;
+it carries print and calibration settings, no personal data. `main.ts` calls
+`runMigration()` (`web/src/migrate.ts`) before anything reads the route or
+the store: it adds what arrives to what is already there
+(`store.mergeFromOldAddress`; on a name clash the new address wins, and the
+`flags` probe cache is not carried), restores the route of the old link
+(`#scans`…), and records the id in `mxm-migrated-ids`, so a later visit
+through an old bookmark does not bring back a preset deleted since, while a
+migration link copied from somebody else does not block the user's own. If
+the import fails, a toast that stays until clicked points to
+`mxm.sebastianlopez.me/?export`, which offers the old store as a file for
+*Import profiles* in Calibration; the same page offers the file when the
+store is too large for a URL (over 900 kB: Firefox stops at 1 MiB).
+
+The old app's service worker is not removed from the page: the browser
+fetches the new `/sw.js` (`deploy/old-domain/sw.js`), which waits, like the
+app's own, until the last tab of the old app closes, then deletes the old
+caches and unregisters itself. An old tab open in the middle of a project
+keeps its cached scripts until then.
 
 ## 3) Authentication and Authorization
 

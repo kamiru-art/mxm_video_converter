@@ -3,7 +3,7 @@
 import './style.css';
 import { errMsg } from './errors.ts';
 import { mountHelp } from './help.ts';
-import { migrationProblem } from './migrate.ts';
+import { runMigration } from './migrate.ts';
 import { clearOutputs } from './opfs.ts';
 import { mountPhase1 } from './phase1.ts';
 import { mountPhase2 } from './phase2.ts';
@@ -12,6 +12,10 @@ import { mountPhase4 } from './phase4.ts';
 import { run } from './pool.ts';
 import { toast } from './ui.ts';
 import { getGpuDevice } from './webgpu.ts';
+
+// Antes de leer la ruta o el almacén: un enlace del dominio viejo trae aquí
+// los datos guardados allí (migrate.ts)
+const migrationProblem = runMigration();
 
 const mounted = new Set<string>();
 const mounters: Record<string, (root: HTMLElement) => void> = {
@@ -69,7 +73,7 @@ window.addEventListener('hashchange', () => {
 
 const initial = resolveRoute(location.hash.replace('#', ''));
 show(mounters[initial] ? initial : 'sheets');
-if (migrationProblem) toast(migrationProblem, 'err');
+if (migrationProblem) toast(migrationProblem, 'err', true);
 
 // warm up the WASM core
 run('version', {}).then(

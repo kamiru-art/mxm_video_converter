@@ -3,29 +3,32 @@
 // localStorage es de cada origen: los presets, los perfiles de calibración y
 // los ajustes guardados en el dominio viejo no se ven desde este. Allí queda
 // una página (deploy/old-domain/) que los lee y viene aquí con ellos en el
-// fragmento de la URL, que nunca sale del navegador:
+// fragmento de la URL, que no se manda a ningún servidor:
 //
-//   https://mxmstudio.work/#mxm-migrate=<base64url de {v, route, store, ram}>
+//   https://mxmstudio.work/#mxm-migrate=<base64url de {v, id, route, store, ram}>
 //
-// Este módulo es el primer import de main.ts, así que corre antes de que
-// nada lea localStorage o la ruta. Lo que trae se SUMA a lo que ya haya aquí,
-// y si un nombre está en los dos lados gana el de aquí: alguien que ya usó el
-// dominio nuevo no pierde nada. Se importa UNA vez por navegador (marca
-// MIGRATED_KEY): el dominio viejo sigue mandando sus datos cada vez que se
-// entra por un enlace antiguo, y sin la marca un preset borrado aquí
-// volvería a aparecer.
+// El fragmento sí queda un instante en el historial del navegador (y en el
+// sincronizado) antes de que replaceState lo quite: lo que viaja son ajustes
+// de impresión y calibración, sin datos personales, y se aceptó así.
 //
-// Cualquiera puede escribir un enlace con #mxm-migrate=. Lo peor que logra
-// es añadir presets con nombres que no existían o, a quien entra por primera
-// vez, unos ajustes iniciales: todo se ve y se borra desde la propia
-// interfaz, y store.ts lee cada campo con cuidado.
+// main.ts llama a runMigration() antes de mostrar nada. Lo que llega se SUMA
+// a lo que ya hay y, si un nombre está en los dos lados, gana el de aquí
+// (store.mergeFromOldAddress). Cada navegador viejo manda un `id` propio y
+// cada id se importa UNA vez (IMPORTED_KEY): el dominio viejo sigue mandando
+// sus datos cada vez que se entra por un enlace antiguo, y sin esto un preset
+// borrado aquí volvería a aparecer. Que sea por id, y no una marca única,
+// importa: si alguien abre un enlace de mudanza ajeno (copiado de otro, o
+// fabricado), eso no le impide importar después los suyos.
+//
+// Lo peor que logra un enlace fabricado es añadir presets o perfiles con
+// nombres nuevos, o unos ajustes iniciales a quien entra por primera vez:
+// todo se ve y se borra desde la interfaz. Los `flags` no viajan.
+
+import { mergeFromOldAddress, RAM_KEY } from './store.ts';
 
 const PREFIX = '#mxm-migrate=';
-/** Las claves del dominio viejo: store.ts (KEY) y phase2.ts. */
-const STORE_KEY = 'mxm-studio-v1';
-const RAM_KEY = 'mxm_ram_gb';
-const MIGRATED_KEY = 'mxm-migrated-from';
-const OLD_ORIGIN = 'https://mxm.sebastianlopez.me';
+const IMPORTED_KEY = 'mxm-migrated-ids';
+const OLD_HOST = 'mxm.sebastianlopez.me';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -37,57 +40,42 @@ function decode(b64url: string): unknown {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-function parseStore(raw: string | null): Obj {
+function importedIds(): string[] {
   try {
-    const v: unknown = JSON.parse(raw ?? 'null');
-    return isObj(v) ? v : {};
+    const v: unknown = JSON.parse(localStorage.getItem(IMPORTED_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   } catch {
-    return {};
+    return [];
   }
 }
 
-/** Suma el almacén viejo al de aquí. Cada clase de perfil (presets,
- *  impresora…) y `flags` se mezclan por nombre, ganando lo de aquí;
- *  `ajustes` es un bloque entero y solo entra si aquí no hay. */
-function mergeStore(incoming: Obj): void {
-  const current = parseStore(localStorage.getItem(STORE_KEY));
-  for (const [kind, entries] of Object.entries(incoming)) {
-    if (!isObj(entries)) continue;
-    if (kind === 'ajustes') {
-      if (!isObj(current.ajustes)) current.ajustes = entries;
-      continue;
-    }
-    const mine = current[kind];
-    current[kind] = { ...entries, ...(isObj(mine) ? mine : {}) };
-  }
-  localStorage.setItem(STORE_KEY, JSON.stringify(current));
-}
-
-/** Qué decirle al usuario si la mudanza no pudo guardar sus datos; main.ts
- *  lo muestra cuando la página ya está montada. null si no hubo problema. */
-export let migrationProblem: string | null = null;
-
-if (location.hash.startsWith(PREFIX)) {
+/** Si la URL trae una mudanza, la importa y deja la URL limpia con la ruta
+ *  que traía el enlace viejo. Devuelve qué decirle al usuario si no se pudo
+ *  guardar, o null. */
+export function runMigration(): string | null {
+  if (!location.hash.startsWith(PREFIX)) return null;
   let route = '';
+  let problem: string | null = null;
   try {
     const p = decode(location.hash.slice(PREFIX.length));
-    if (!isObj(p) || p.v !== 1) throw new Error('unknown migration payload');
+    if (!isObj(p) || p.v !== 1 || typeof p.id !== 'string' || !p.id) {
+      throw new Error('unknown migration payload');
+    }
     if (typeof p.route === 'string' && /^#[a-z]+$/.test(p.route)) route = p.route;
-    if (localStorage.getItem(MIGRATED_KEY) === null) {
-      if (typeof p.store === 'string') {
-        const old = parseStore(p.store);
-        if (Object.keys(old).length > 0) mergeStore(old);
-      }
+    const ids = importedIds();
+    if (!ids.includes(p.id)) {
+      if (typeof p.store === 'string') mergeFromOldAddress(p.store);
       if (typeof p.ram === 'string' && localStorage.getItem(RAM_KEY) === null) {
         localStorage.setItem(RAM_KEY, p.ram);
       }
-      localStorage.setItem(MIGRATED_KEY, OLD_ORIGIN);
+      localStorage.setItem(IMPORTED_KEY, JSON.stringify([...ids, p.id]));
     }
   } catch (e) {
     console.warn('[migrate] could not import the data from the old address:', e);
-    migrationProblem = `MXM Studio moved here from ${OLD_ORIGIN.replace('https://', '')}, but your saved presets and profiles could not be copied over (${e instanceof Error ? e.message : String(e)}). They are still there: open ${OLD_ORIGIN.replace('https://', '')}/?export to download them, then load the file with Import profiles in Calibration.`;
+    problem = `MXM Studio moved here from ${OLD_HOST}, but your saved presets and profiles could not be copied over (${e instanceof Error ? e.message : String(e)}). They are still there: open ${OLD_HOST}/?export to download them, then load the file with Import profiles in Calibration.`;
   }
   // El fragmento largo fuera de la barra de direcciones y del historial, con
   // la ruta que traía el enlace viejo en su lugar
   history.replaceState(null, '', location.pathname + location.search + route);
+  return problem;
 }
