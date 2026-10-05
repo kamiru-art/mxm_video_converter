@@ -33,6 +33,11 @@
 //
 //   npm run build && npm run test:migration
 //
+// CHROME_ARGS añade argumentos a Chrome, p. ej. para saltarse un resolver
+// DNS que aún guarda la respuesta vacía de antes de crear el dominio:
+//   CHROME_ARGS='--host-resolver-rules=MAP mxmstudio.work 104.21.58.209'
+// Quedan escritos en el artefacto.
+//
 // Artefacto: artifacts/e2e/migration.chrome.json con cada comprobación y el
 // SHA-256 de los archivos de la mudanza tal como se sirven. Sin relojes.
 //
@@ -54,6 +59,8 @@ const STORE_KEY = 'mxm-studio-v1';
 const ARTIFACT_DIR = fileURLToPath(new URL('../artifacts/e2e/', import.meta.url));
 const APP_SW = await readFile(new URL('./dist/sw.js', import.meta.url), 'utf8').catch(() => '');
 if (!APP_SW.includes('mxm-v2')) throw new Error('dist/sw.js missing: run `npm run build` first');
+
+const chromeArgs = process.env.CHROME_ARGS ? [process.env.CHROME_ARGS] : [];
 
 const checks: { step: string; ok: boolean; detail: string }[] = [];
 function check(step: string, ok: boolean, detail: string): void {
@@ -152,10 +159,17 @@ try {
   })) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-    served[name] = sha(Buffer.from(await res.arrayBuffer()));
+    // Cloudflare (JS detections de la zona) inyecta en el HTML un script con un
+    // token distinto en cada respuesta; la CSP lo bloquea. Fuera del hash, o
+    // dos corridas no darían los mismos bytes.
+    const body = (await res.text()).replace(
+      /<script>\(function\(\)\{function c\(\)[\s\S]*?<\/script>/g,
+      '',
+    );
+    served[name] = sha(body);
   }
 
-  browser = await puppeteer.launch({ executablePath: chrome, headless: true });
+  browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: chromeArgs });
 
   // /sw.js del origen viejo: el de la app mientras se "instala", el real después
   let serveAppSw = false;
@@ -378,6 +392,7 @@ const json = `${JSON.stringify(
     ok,
     error: failed ? String(failed) : null,
     sites: { old: OLD, new: NEW, www: WWW },
+    chromeArgs,
     served,
     checks,
   },

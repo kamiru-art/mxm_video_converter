@@ -69,6 +69,17 @@ runs on the same machine write the same bytes. To verify, check
 `artifacts/e2e/`, and compare the `outputs` block across runs or commits; a
 change there means the core now produces different sheets or frames.
 
+A third suite, `web/e2e-migration.mts` (`npm run build && npm run
+test:migration`), runs against the two published sites, since the move from
+mxm.sebastianlopez.me to mxmstudio.work is about two real origins: a user
+with the old app installed and data on both sides follows an old link, and
+must land on the same route with the stores merged, the old service worker
+gone, deleted presets not coming back, plus `?export`, oversized stores, a
+corrupt payload and `www`. It writes `artifacts/e2e/migration.chrome.json`
+(SHA-256 of the served hand-over files, every check; no clocks).
+`CHROME_ARGS` passes extra Chrome flags, e.g. `--host-resolver-rules` while a
+resolver still caches an empty answer.
+
 The Rust tests (`cd rust-core && cargo test --release`) are the isolated
 layer: `tests/pipeline.rs` does sheet-to-scan round trips with real noise and
 homographies, and the unit tests guard edge cases the browser run does not
