@@ -42,6 +42,9 @@ const compressed: {
   fixedMbps?: number;
   fixedSeconds?: number;
 } = {};
+/** Fotogramas de video de más de 8 bits que el verificador compara con la
+ *  decodificación del ffmpeg de la máquina (e2e-verify.mts, verifyDeep). */
+const deepVideo: { file: string; source: string; w: number; h: number; neutral: boolean }[] = [];
 (globalThis as { e2eFiles?: unknown }).e2eFiles = e2eFiles;
 // las violaciones de CSP, oídas por la propia página: Safari no deja leer
 // su consola desde fuera, y así los tres navegadores las cuentan igual
@@ -51,6 +54,7 @@ const csp: string[] = [];
   outputs,
   lossless,
   compressed,
+  deepVideo,
   csp,
 };
 document.addEventListener('securitypolicyviolation', (e) => {
@@ -912,6 +916,8 @@ async function main(): Promise<void> {
         const wanted = [refs[3].t, refs[0].t, refs[4].t];
         const decoded: { index: number; w: number; h: number }[] = [];
         await decodeVideoFrames(vblob, wanted, (index, bmp) => {
+          if (!(bmp instanceof ImageBitmap))
+            throw new Error('an 8-bit clip decoded as deep planes');
           decoded.push({ index, w: bmp.width, h: bmp.height });
           bmp.close();
         });
@@ -1385,6 +1391,192 @@ async function main(): Promise<void> {
       throw new Error(`flujo de video: ${errMsg(e)}`);
     }
 
+    // ── video de más de 8 bits ───────────────────────────────────
+    // Tres clips de 10 bits con una rampa de luma de ~800 niveles (e2e-run.mts):
+    // VP9 en WebM, el mismo en MP4 con BT.601 y girado 90°, y HEVC Main 10.
+    // Cada uno se extrae en perezoso y tiene que dar fotogramas de 16 bits,
+    // por la ruta que le toque en este navegador (los planos de WebCodecs, o
+    // ffmpeg.wasm si el navegador solo lo da a 8 bits). Del primer fotograma:
+    // PNG de 16 bits, más de 256 niveles de rojo en la mitad de croma neutra
+    // (8 bits no los tienen), el mismo color que el camino de 8 bits del
+    // navegador (±3 niveles: matriz, rango y giro bien elegidos), el mismo
+    // PNG en perezoso que en la extracción con PNG, y hojas de 16 bits. Por
+    // fuera, el ffmpeg de la máquina decodifica la fuente y lo compara.
+    try {
+      const { probeVideo, extractFrames, decodeVideoFrames } = await import('./video.ts');
+      const { clearFrames, frameImageData, framePng, framePngs, prefetchVideoFrames, project } =
+        await import('./project.ts');
+      /** El fotograma en el instante `t` por el lienzo de 8 bits del navegador. */
+      const rgba8At = async (file: File, t: number): Promise<Uint8ClampedArray | null> => {
+        let out: Uint8ClampedArray | null = null;
+        try {
+          await decodeVideoFrames(file, [t], (_i, img) => {
+            if (!(img instanceof ImageBitmap)) throw new Error('expected the 8-bit path');
+            const c = new OffscreenCanvas(img.width, img.height);
+            const ctx = c.getContext('2d');
+            if (!ctx) throw new Error('no 2D context');
+            ctx.drawImage(img, 0, 0);
+            img.close();
+            out = ctx.getImageData(0, 0, c.width, c.height).data;
+          });
+        } catch {
+          return null; // este navegador no lo decodifica por WebCodecs
+        }
+        return out;
+      };
+      const deepCase = async (
+        name: string,
+        type: string,
+        want: { w: number; h: number; neutral: boolean },
+      ): Promise<void> => {
+        const resp = await fetch(`/${name}`);
+        if (!resp.ok) {
+          log(`· (sin ${name}: prueba de 10 bits omitida)`);
+          return;
+        }
+        const stem = name.replace(/^e2e_sample_|\.\w+$/g, '');
+        const file = new File([await resp.arrayBuffer()], name, { type });
+        const probe = await probeVideo(file);
+        if (probe.depth !== 10) throw new Error(`${name}: the probe says ${probe.depth} bits`);
+        const got: { blob: Blob | null; t: number; w: number; h: number; deep: boolean }[] = [];
+        const meta = await extractFrames(file, {
+          start: 0,
+          end: 1,
+          fps: 3,
+          lazy: true,
+          onFrame: async (blob, _thumb, t, _i, w, h, deep) => {
+            got.push({ blob, t, w, h, deep });
+          },
+        });
+        if (meta.count !== 3 || got.some((g) => !g.deep))
+          throw new Error(`${name}: ${meta.count} frames, deep ${got.map((g) => g.deep)}`);
+        if (got.some((g) => g.w !== want.w || g.h !== want.h))
+          throw new Error(`${name}: frames of ${got[0].w}×${got[0].h}, want ${want.w}×${want.h}`);
+        const route = got[0].blob ? 'ffmpeg.wasm' : 'WebCodecs';
+        clearFrames();
+        for (const [i, g] of got.entries())
+          project.frames.push({
+            name: `${stem}_${i + 1}.png`,
+            blob: g.blob,
+            video: g.blob ? undefined : { file, t: g.t, deep: true },
+            thumb: null,
+            w: g.w,
+            h: g.h,
+            hasAlpha: false,
+            sixteen: true,
+            needsWasmDecode: !!g.blob,
+          });
+        const png = new Uint8Array(await (await framePng(0)).arrayBuffer());
+        if (png[24] !== 16) throw new Error(`${name}: the frame PNG has ${png[24]} bits`);
+        const dec = await run('decode_image16', { bytes: png.slice() });
+        if (dec.w !== want.w || dec.h !== want.h)
+          throw new Error(`${name}: the frame PNG is ${dec.w}×${dec.h}`);
+        const px = new Uint16Array(dec.rgba16.buffer, dec.rgba16.byteOffset, dec.w * dec.h * 4);
+        let levels = '';
+        if (want.neutral) {
+          const reds = new Set<number>();
+          for (let y = 0; y < dec.h / 2 - 2; y++)
+            for (let x = 0; x < dec.w; x++) reds.add(px[(y * dec.w + x) * 4]);
+          if (reds.size <= 256)
+            throw new Error(`${name}: only ${reds.size} red levels in the 10-bit ramp`);
+          levels = `, ${reds.size} niveles de rojo`;
+        }
+        // el mismo color que el lienzo de 8 bits del navegador
+        const ref8 = await rgba8At(file, got[0].t);
+        let shift = 'sin camino de 8 bits aquí';
+        if (ref8) {
+          if (ref8.length !== px.length)
+            throw new Error(`${name}: the 8-bit frame differs in size`);
+          const sum = [0, 0, 0];
+          for (let i = 0; i < px.length; i += 4)
+            for (let c = 0; c < 3; c++) sum[c] += px[i + c] / 257 - ref8[i + c];
+          const mean = sum.map((v) => v / (px.length / 4));
+          if (mean.some((m) => Math.abs(m) > 3))
+            throw new Error(
+              `${name}: colours differ from the 8-bit path by ${mean.map((m) => m.toFixed(1))}`,
+            );
+          shift = `desvío frente a 8 bits ${mean.map((m) => m.toFixed(2)).join('/')}`;
+        }
+        // el PNG perezoso es el mismo que el de una extracción con PNG
+        if (route === 'WebCodecs') {
+          const eager: Blob[] = [];
+          await extractFrames(file, {
+            start: 0,
+            end: 1,
+            fps: 3,
+            onFrame: async (b) => {
+              if (b) eager.push(b);
+            },
+          });
+          const e0 = new Uint8Array(await eager[0].arrayBuffer());
+          if (e0.length !== png.length || e0.some((v, i) => v !== png[i]))
+            throw new Error(`${name}: the lazy PNG differs from the eager one`);
+        }
+        // hojas: de 16 bits, con los fotogramas de 16 en _frames/
+        const pngs = framePngs(project.frames.map((_f, i) => i));
+        const genFrames: GenFrame[] = project.frames.map((f, i) => ({
+          name: f.name,
+          w: f.w,
+          h: f.h,
+          hasAlpha: false,
+          sixteen: true,
+          blob: f.blob,
+          video: f.video,
+          encodePng: f.video ? pngs.get[i] : undefined,
+          getImageData: (full: boolean) => frameImageData(i, full),
+        }));
+        const labels = genFrames.map((_f, i) => `${stem}_${i + 1}`);
+        const out = await generateSheets({
+          settings: { ...s, cols: 3, rows: 1, out_name: stem, fmt_pdf: false, fmt_tiff: false },
+          frames: genFrames,
+          labels,
+          timeline: labels.map((et, i) => ({ pos: i + 1, etiqueta: et, rep: et })),
+          videoMeta: { fps_extraccion: 3 },
+          includeFrames: true,
+          prefetch: (chunk) =>
+            prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
+        });
+        const sheet = out.files.get(`${stem}_p1.png`);
+        if (!(sheet instanceof Blob)) throw new Error(`${name}: no sheet`);
+        const sheetBytes = new Uint8Array(await sheet.arrayBuffer());
+        if (sheetBytes[24] !== 16) throw new Error(`${name}: the sheet has ${sheetBytes[24]} bits`);
+        const entry = out.files.get(`${stem}_frames/${labels[0]}.png`);
+        const entryBlob = typeof entry === 'function' ? new Blob([await entry()]) : entry;
+        if (!(entryBlob instanceof Blob)) throw new Error(`${name}: no frame file in the ZIP`);
+        const entryBytes = new Uint8Array(await entryBlob.arrayBuffer());
+        if (entryBytes.length !== png.length || entryBytes.some((v, i) => v !== png[i]))
+          throw new Error(`${name}: the ZIP frame file differs from the frame PNG`);
+        pngs.cancel();
+        clearFrames();
+        // la salida rápida: 8 bits, por el decodificador del navegador
+        let fastDeep = 0;
+        const fast = await extractFrames(file, {
+          start: 0,
+          end: 1,
+          fps: 3,
+          lazy: true,
+          fast8: true,
+          onFrame: async (_b, _t, _ts, _i, _w, _h, deep) => {
+            if (deep) fastDeep++;
+          },
+        });
+        if (ref8 && (fast.count !== 3 || fastDeep))
+          throw new Error(`${name}: fast 8-bit decode gave ${fastDeep} deep frames`);
+        e2eFiles[`deep_${stem}.png`] = new Blob([png], { type: 'image/png' });
+        deepVideo.push({ file: `deep_${stem}.png`, source: name, ...want });
+        await digest(`deep_video/${stem}_1.png`, png);
+        await digest(`deep_video/${stem}_p1.png`, sheetBytes);
+        log(
+          `10 bits ${name}: ${meta.count} fotogramas de 16 bits vía ${route} (${dec.w}×${dec.h}${levels}; ${shift}); hoja de 16 bits ✓`,
+        );
+      };
+      await deepCase('e2e_sample_deep.webm', 'video/webm', { w: 320, h: 180, neutral: true });
+      await deepCase('e2e_sample_deep_rot.mp4', 'video/mp4', { w: 180, h: 320, neutral: false });
+      await deepCase('e2e_sample_hevc10.mp4', 'video/mp4', { w: 320, h: 180, neutral: true });
+    } catch (e) {
+      throw new Error(`video de 10 bits: ${errMsg(e)}`);
+    }
+
     // MOV ProRes: mediabunny abre el contenedor pero WebCodecs no decodifica
     // el códec (como los MOV HEVC 10 bits de cámara) → desvío por canDecode()
     try {
@@ -1401,15 +1593,27 @@ async function main(): Promise<void> {
           start: 0,
           end: 1,
           fps: 4,
-          onFrame: async (b) => {
+          onFrame: async (b, _t, _ts, _i, _w, _h, deep) => {
             if (!b) throw new Error('expected a PNG frame');
+            // ProRes 422 es de 10 bits: el PNG sale de 16
+            if (!deep) throw new Error('the 10-bit ProRes frame came out 8-bit');
             got.push(b);
           },
         });
         log(
-          `MOV ProRes: ${meta.count} frames extraídos vía ffmpeg.wasm (${pprobe.width}×${pprobe.height})`,
+          `MOV ProRes: ${meta.count} frames de 16 bits extraídos vía ffmpeg.wasm (${pprobe.width}×${pprobe.height})`,
         );
         if (got.length < 3) throw new Error(`incomplete ProRes extraction (${got.length})`);
+        const p0 = new Uint8Array(await got[0].arrayBuffer());
+        if (p0[24] !== 16) throw new Error(`the ProRes frame PNG has ${p0[24]} bits`);
+        e2eFiles['deep_prores.png'] = got[0];
+        deepVideo.push({
+          file: 'deep_prores.png',
+          source: 'e2e_sample_prores.mov',
+          w: 320,
+          h: 180,
+          neutral: true,
+        });
       } else {
         log('· (sin muestra ProRes: prueba del códec no decodificable omitida)');
       }

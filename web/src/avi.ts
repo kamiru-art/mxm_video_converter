@@ -6,6 +6,7 @@
 
 import type { LogEvent } from '@ffmpeg/ffmpeg';
 import { FFFSType, FFmpeg } from '@ffmpeg/ffmpeg';
+import type { DeepFrame, DeepSpec } from './commands.ts';
 import { BadRangeError } from './errors.ts';
 import { FrameQueue } from './frames.ts';
 import { loadFlag, saveFlag } from './store.ts';
@@ -513,7 +514,57 @@ async function unmountInput(ff: FFmpeg): Promise<void> {
 
 /** Lo que se saca del log de ffmpeg: ProbeResult sin la marca `fallback`,
  *  que la pone probeFallback al devolverlo. */
-type ProbeInfo = Omit<ProbeResult, 'fallback'>;
+type ProbeInfo = Omit<ProbeResult, 'fallback' | 'deepNeedsFallback'> & {
+  pix: PixInfo | null;
+  rotation: number;
+};
+
+/** El `pix_fmt` de la pista de video según el log de ffmpeg, con su
+ *  profundidad (`yuv420p10le` → 10, el `yuv422p10le` del ProRes → 10,
+ *  `rgb48le` → 16, `yuv420p` → 8), su rango y su matriz, que van entre
+ *  paréntesis: `yuv420p10le(tv, bt709)`, `yuv420p10le(pc, bt709/bt709/arib-std-b67)`. */
+interface PixInfo {
+  fmt: string;
+  depth: number;
+  full: boolean;
+  /** El log dice el rango (pc o tv). */
+  rangeKnown: boolean;
+  matrix: 'bt601' | 'bt709' | 'bt2020' | null;
+}
+
+function pixInfo(log: string): PixInfo | null {
+  const line = /Stream #[^\n]*?Video: ([^\n]*)/.exec(log)?.[1];
+  if (!line) return null;
+  const re = /(?:^|, )([a-z][a-z0-9_]*)(?:\(([^)]*)\))?(?=,|$)/g;
+  for (const m of line.matchAll(re)) {
+    const fmt = m[1];
+    if (!/^(yuva?|yuvj|gbra?p|gray|ya|rgba?|bgra?|nv\d|p0|p2|xyz)/.test(fmt)) continue;
+    const bits = /(\d{2})(?:le|be)$/.exec(fmt);
+    const depth = bits ? Math.min(16, +bits[1]) : 8; // rgb48, rgba64: 16 por canal
+    const tags = (m[2] ?? '').split(/,\s*/);
+    const csp = tags.find((t) => /^(bt|smpte|fcc)/.test(t))?.split('/')[0] ?? '';
+    const matrix =
+      csp === 'bt709'
+        ? 'bt709'
+        : csp === 'bt470bg' || csp === 'smpte170m'
+          ? 'bt601'
+          : csp.startsWith('bt2020')
+            ? 'bt2020'
+            : null;
+    const full = tags.includes('pc') || fmt.startsWith('yuvj');
+    return { fmt, depth, full, rangeKnown: full || tags.includes('tv'), matrix };
+  }
+  return null;
+}
+
+/** El formato de WebCodecs de los planos YUV de 10 o 12 bits que ffmpeg puede
+ *  sacar tal cual, para que los convierta el núcleo como los de WebCodecs. */
+function planarFormat(fmt: string): { format: string; sx: number; sy: number } | null {
+  const m = /^yuva?(420|422|444)p(10|12)le$/.exec(fmt);
+  if (!m) return null;
+  const [sx, sy] = m[1] === '420' ? [2, 2] : m[1] === '422' ? [2, 1] : [1, 1];
+  return { format: `I${m[1]}P${m[2]}`, sx, sy };
+}
 
 function parseProbeLog(log: string): ProbeInfo {
   const d = /Duration:\s*(\d+):(\d+):(\d+\.?\d*)/.exec(log);
@@ -525,7 +576,19 @@ function parseProbeLog(log: string): ProbeInfo {
     width: dims ? +dims[1] : 0,
     height: dims ? +dims[2] : 0,
     fps: f ? parseFloat(f[1]) : 0,
+    depth: pixInfo(log)?.depth ?? null,
+    pix: pixInfo(log),
+    rotation: displayRotation(log),
   };
+}
+
+/** Giro de los metadatos, en grados en el sentido de las agujas del reloj.
+ *  ffmpeg da el ángulo en sentido contrario ("Display Matrix: rotation of
+ *  90.00 degrees" es un móvil girado 90° a la izquierda). */
+function displayRotation(log: string): number {
+  const m = /display ?matrix: rotation of (-?[\d.]+) degrees/i.exec(log);
+  if (!m) return 0;
+  return (((Math.round(-Number(m[1]) / 90) * 90) % 360) + 360) % 360;
 }
 
 async function probeLoaded(ff: FFmpeg, path: string): Promise<ProbeInfo> {
@@ -557,11 +620,50 @@ export function probeFallback(file: File): Promise<ProbeResult> {
   return withFF(async (ff) => {
     const path = await mountInput(ff, file);
     try {
-      return { ...(await probeLoaded(ff, path)), fallback: true };
+      const { pix: _pix, rotation: _rot, ...info } = await probeLoaded(ff, path);
+      return { ...info, fallback: true };
     } finally {
       await unmountInput(ff);
     }
   });
+}
+
+/** Un fotograma crudo de ffmpeg como DeepFrame: sus planos YUV, o rgb48le. */
+function deepFrame(
+  data: Bytes,
+  w: number,
+  h: number,
+  planar: ReturnType<typeof planarFormat>,
+  pix: PixInfo | null,
+  rotation: number,
+): DeepFrame {
+  if (!planar)
+    return {
+      data,
+      spec: {
+        ...{ format: 'RGB48LE', w, h, planes: [{ offset: 0, stride: w * 6 }] },
+        ...{ matrix: 'bt709', fullRange: true, rotation: 0 }, // ya convertido
+      },
+    };
+  const cw = Math.ceil(w / planar.sx);
+  const ch = Math.ceil(h / planar.sy);
+  return {
+    data,
+    spec: {
+      format: planar.format,
+      w,
+      h,
+      planes: [
+        { offset: 0, stride: w * 2 },
+        { offset: w * h * 2, stride: cw * 2 },
+        { offset: w * h * 2 + cw * ch * 2, stride: cw * 2 },
+      ],
+      // sin etiqueta, la convención: BT.709 en HD, BT.601 por debajo
+      matrix: pix?.matrix ?? (h > 576 ? 'bt709' : 'bt601'),
+      fullRange: pix?.full ?? false,
+      rotation, // sin -noautorotate lo enderezaría ffmpeg (ver la extracción)
+    },
+  };
 }
 
 /** Tamaño real de la salida, del log de ffmpeg. Hace falta porque ffmpeg
@@ -584,6 +686,9 @@ function parseOutputSize(message: string): [number, number] | null {
 export function extractFramesFallback(
   file: File,
   opts: ExtractOptions = {},
+  /** Matriz y rango según mediabunny, si abrió el contenedor: valen cuando
+   *  el log de ffmpeg no los dice. */
+  hint: { matrix: DeepSpec['matrix'] | null; fullRange: boolean | null } | null = null,
 ): Promise<ExtractResult> {
   return withFF(async (ff) => {
     // Parar = terminar la instancia: exec bloquea el worker de ffmpeg y no
@@ -614,13 +719,31 @@ export function extractFramesFallback(
       const fps = opts.fps || probe.fps || 12;
       const dt = 1 / fps;
       const est = Math.max(1, Math.round((end - start) * fps));
+      // más de 8 bits en la fuente (HEVC de 10 bits, ProRes): los planos
+      // YUV tal cual, que convierte el núcleo con la matriz y el rango del
+      // flujo, como los de WebCodecs (el rgb48le de swscale sale un 0,4 %
+      // oscuro: el blanco de 10 bits, 940, le da 65283 y no 65535). Otros
+      // formatos profundos (RGB, P010…): rgb48le. Si no, RGBA de 8 bits.
+      const deep = !opts.fast8 && (probe.depth ?? 8) > 8;
+      const planar = deep && probe.pix ? planarFormat(probe.pix.fmt) : null;
+      const outFmt = !deep ? 'rgba' : planar ? probe.pix?.fmt.replace('yuva', 'yuv') : 'rgb48le';
+      const bpp = deep ? 6 : 4;
+      const pix: PixInfo | null = probe.pix && {
+        ...probe.pix,
+        matrix: probe.pix.matrix ?? hint?.matrix ?? null,
+        full: probe.pix.rangeKnown ? probe.pix.full : !!hint?.fullRange,
+      };
+      if (planar)
+        console.info(
+          `[ffmpeg] ${file.name}: ${probe.pix?.fmt}, matrix ${pix?.matrix ?? 'untagged'} (ffmpeg says ${probe.pix?.matrix ?? 'nothing'}), ${pix?.full ? 'full' : 'limited'} range`,
+        );
       // los fotogramas crudos de cada tanda (w×h×4 bytes cada uno: 33 MB en
       // 4K) viven en el sistema de archivos de ffmpeg hasta que se leen:
       // tandas cortas en 4K/6K. Cada tanda vuelve a buscar desde el fotograma
       // clave anterior, así que tampoco conviene que sean minúsculas.
       const BATCH = Math.max(
         4,
-        Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * 4))),
+        Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * bpp))),
       );
       // PNG siempre, aunque `opts.lazy` lo pida: volver a decodificar por
       // aquí cuesta minutos, así que el fotograma se guarda (phase1 lo
@@ -648,21 +771,27 @@ export function extractFramesFallback(
             '-loglevel',
             'info',
             '-nostats',
+            // planos YUV: sin el giro de ffmpeg, que traspone la croma y con
+            // ella su posición; el núcleo gira después de convertir
+            ...(planar ? ['-noautorotate'] : []),
             '-ss',
             t.toFixed(4),
             '-i',
             path,
+            // round=up: el fotograma en el instante o justo antes, como los
+            // muestrea WebCodecs (video.ts); el redondeo por defecto tomaba
+            // el último de cada intervalo, hasta medio intervalo después
             '-vf',
-            `fps=${fps}`,
+            `fps=${fps}:round=up`,
             '-frames:v',
             String(want),
-            // RGBA de 8 bits, sin comprimir: es lo que el worker vuelca en el
-            // lienzo tal cual. El resto del pipeline es de 8 bits (fuentes
-            // de 10 bits incluidas), y el PNG lo hace el navegador.
+            // sin comprimir: RGBA de 8 bits, que el worker vuelca en el
+            // lienzo tal cual, o RGB de 16 bits de una fuente más profunda.
+            // La matriz y el rango los toma swscale del propio flujo
             '-c:v',
             'rawvideo',
             '-pix_fmt',
-            'rgba',
+            outFmt ?? 'rgb48le',
             '-f',
             'image2',
             'f_%03d.raw',
@@ -683,7 +812,11 @@ export function extractFramesFallback(
             got++;
             // readFile copia el fotograma fuera de ffmpeg: ArrayBuffer
             // propio, que se transfiere al worker sin otra copia
-            await queue.push({ rgba: data as Bytes, w, h }, t + (i - 1) * dt);
+            const bytes = data as Bytes;
+            await queue.push(
+              !deep ? { rgba: bytes, w, h } : deepFrame(bytes, w, h, planar, pix, probe.rotation),
+              t + (i - 1) * dt,
+            );
           }
           if (!got) break; // fin del archivo antes de lo estimado
           t += got * dt;

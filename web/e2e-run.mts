@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { browserFromArgs, HEADERS_FILE, launch, serveDist } from './e2e-browsers.mts';
@@ -123,16 +123,68 @@ if (!existsSync(avi)) {
     { stdio: 'ignore' },
   );
 }
-// MOV con ProRes: contenedor legible por mediabunny pero códec que WebCodecs
-// no decodifica, como los MOV HEVC 10 bits de las cámaras. Ejercita el
-// desvío por canDecode() hacia ffmpeg.wasm.
+// Video de 10 bits con contenido de 10 bits de verdad: una rampa de luma de
+// unos 800 niveles que se desplaza (cada fotograma distinto), croma neutra
+// en la mitad de arriba y de color en la de abajo. Sin pérdida, para que los
+// códigos que lee la página sean exactamente los de la fuente. Tres
+// variantes: VP9 perfil 2 en WebM (BT.709; WebCodecs entrega sus planos por
+// software en Chrome), el mismo en MP4 con matriz BT.601 y girado 90° por
+// metadatos (un móvil en vertical), y HEVC Main 10 (en Chrome solo por
+// hardware y sin los 10 bits: obliga a ir por ffmpeg.wasm).
+const RAMP =
+  "format=yuv420p10le,geq=lum='64+mod(X*876/W+T*200\\,876)':cb='if(lt(Y\\,H/2)\\,512\\,512+(X-W/2)*3)':cr='if(lt(Y\\,H/2)\\,512\\,512+(Y-3*H/4)*6)'";
+const rampSrc = ['-f', 'lavfi', '-i', 'nullsrc=s=320x180:r=10:d=1', '-vf', RAMP];
+// bitexact: sin el UID aleatorio ni la fecha que Matroska escribe en cada
+// archivo, así el SHA-256 de la muestra se repite de una corrida a otra
+const tags = (m: string): string[] => [
+  ...['-color_primaries', m, '-color_trc', m, '-colorspace', m, '-color_range', 'tv'],
+  ...['-fflags', '+bitexact'],
+];
+const deepSamples: [string, string[]][] = [
+  [
+    'e2e_sample_deep.webm',
+    [...rampSrc, '-c:v', 'libvpx-vp9', '-profile:v', '2', '-lossless', '1', ...tags('bt709')],
+  ],
+  [
+    'e2e_sample_hevc10.mp4',
+    [
+      ...rampSrc,
+      ...['-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-tag:v', 'hvc1'],
+      ...['-x265-params', 'lossless=1:log-level=error', ...tags('bt709')],
+    ],
+  ],
+];
+for (const [name, args] of deepSamples) {
+  const file = join(DIST, name);
+  if (!existsSync(file)) spawnSync('ffmpeg', [...args, '-y', file], { stdio: 'ignore' });
+}
+// MOV con ProRes 422 (10 bits, 4:2:2): contenedor legible por mediabunny
+// pero códec que WebCodecs no decodifica en ningún navegador. Ejercita el
+// desvío por canDecode() hacia ffmpeg.wasm, con la misma rampa de 10 bits.
 const mov = join(DIST, 'e2e_sample_prores.mov');
 if (!existsSync(mov)) {
   spawnSync(
     'ffmpeg',
-    ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12:duration=2', '-c:v', 'prores', '-y', mov],
+    [...rampSrc, '-c:v', 'prores_ks', '-profile:v', '2', ...tags('bt709'), '-y', mov],
     { stdio: 'ignore' },
   );
+}
+const rot = join(DIST, 'e2e_sample_deep_rot.mp4');
+if (!existsSync(rot)) {
+  const pre = join(DIST, 'rot_pre.mp4');
+  spawnSync(
+    'ffmpeg',
+    [
+      ...rampSrc,
+      ...['-c:v', 'libvpx-vp9', '-profile:v', '2', '-lossless', '1', ...tags('smpte170m')],
+      ...['-y', pre],
+    ],
+    { stdio: 'ignore' },
+  );
+  spawnSync('ffmpeg', ['-display_rotation:v:0', '90', '-i', pre, '-c', 'copy', '-y', rot], {
+    stdio: 'ignore',
+  });
+  await rm(pre, { force: true });
 }
 const which = browserFromArgs();
 const { port, close: closeServer } = await serveDist(DIST);
@@ -157,6 +209,7 @@ const report = (await driver.run('return globalThis.e2eReport ?? null;').catch((
   outputs: Record<string, string>;
   lossless: { sequence: string[] };
   compressed?: import('./e2e-verify.mts').CompressedFacts;
+  deepVideo?: import('./e2e-verify.mts').DeepFact[];
   csp: string[];
 } | null;
 // los archivos que la página deja para verificar por fuera, en base64
@@ -191,7 +244,7 @@ const RUN_DIR = join(ARTIFACT_DIR, which);
 await mkdir(RUN_DIR, { recursive: true });
 for (const [name, b64] of Object.entries(files))
   await writeFile(join(RUN_DIR, name), Buffer.from(b64, 'base64'));
-const { verifyCompressed, verifyLossless } = await import('./e2e-verify.mts');
+const { verifyCompressed, verifyDeep, verifyLossless } = await import('./e2e-verify.mts');
 const lossless = await verifyLossless(RUN_DIR, report?.lossless.sequence ?? []);
 for (const line of lossless.log) console.log(line);
 const lossy = await verifyCompressed(
@@ -200,7 +253,10 @@ const lossy = await verifyCompressed(
   report?.lossless.sequence ?? [],
 );
 for (const line of lossy.log) console.log(line);
-const passed = title === 'E2E-OK' && cspViolations.length === 0 && lossless.ok && lossy.ok;
+const deep = await verifyDeep(RUN_DIR, DIST, report?.deepVideo ?? []);
+for (const line of deep.log) console.log(line);
+const passed =
+  title === 'E2E-OK' && cspViolations.length === 0 && lossless.ok && lossy.ok && deep.ok;
 
 // Informe verificable: entradas (muestras generadas, núcleo WASM, cabeceras
 // del sitio) y salidas por SHA-256, más cada paso comprobado. No lleva
@@ -217,7 +273,7 @@ for (const f of (await readdir(join(DIST, 'assets'))).filter((n) => n.endsWith('
 inputs['public/_headers'] = sha256(HEADERS_FILE);
 const ffmpeg =
   spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' }).stdout?.split('\n')[0] ?? null;
-const outputs = { ...(report?.outputs ?? {}), ...lossless.outputs };
+const outputs = { ...(report?.outputs ?? {}), ...lossless.outputs, ...deep.outputs };
 const artifact = {
   suite: 'browser-pipeline',
   browser: which,
@@ -228,6 +284,7 @@ const artifact = {
     no_csp_violations: cspViolations.length === 0,
     ...lossless.checks,
     ...lossy.checks,
+    ...deep.checks,
   },
   environment: { browser: driver.version, ffmpeg, node: process.version },
   inputs,

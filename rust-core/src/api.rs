@@ -775,3 +775,92 @@ pub fn conform_frame(
 ) -> Result<Vec<u8>, JsValue> {
     crate::conform::conform_png(bytes, w, h, sixteen, alpha).map_err(err)
 }
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeepSpec {
+    format: String,
+    w: usize,
+    h: usize,
+    planes: Vec<DeepPlane>,
+    matrix: String,
+    full_range: bool,
+    #[serde(default)]
+    rotation: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct DeepPlane {
+    offset: usize,
+    stride: usize,
+}
+
+/// Un fotograma de video de más de 8 bits (planos de `VideoFrame.copyTo` o el
+/// `rgb48le` de ffmpeg.wasm; ver yuv.rs) a RGB de 16 bits. Devuelve {w, h} y,
+/// según lo pedido, `png` (PNG de 16 bits), `rgba16` (RGBA de 16 bits
+/// little-endian, lo que recibe una hoja) y la miniatura de 8 bits `thumb`
+/// de `thumbW` de ancho (con `tw`, `th`).
+#[wasm_bindgen]
+pub fn deep_frame(
+    data: &[u8],
+    spec_json: &str,
+    png: bool,
+    rgba16: bool,
+    thumb_w: u32,
+) -> Result<JsValue, JsValue> {
+    let spec: DeepSpec = serde_json::from_str(spec_json)
+        .map_err(|e| err(format!("Invalid video frame description: {e}")))?;
+    let planes: Vec<crate::yuv::Plane> = spec
+        .planes
+        .iter()
+        .map(|p| crate::yuv::Plane {
+            offset: p.offset,
+            stride: p.stride,
+        })
+        .collect();
+    let img = crate::yuv::to_rgb16(&crate::yuv::Frame {
+        data,
+        format: &spec.format,
+        w: spec.w,
+        h: spec.h,
+        planes: &planes,
+        matrix: crate::yuv::Matrix::parse(&spec.matrix).map_err(err)?,
+        full_range: spec.full_range,
+        rotation: spec.rotation,
+    })
+    .map_err(err)?;
+    let (w, h) = (img.w, img.h);
+    let out = Object::new();
+    Reflect::set(&out, &"w".into(), &JsValue::from_f64(w as f64)).ok();
+    Reflect::set(&out, &"h".into(), &JsValue::from_f64(h as f64)).ok();
+    if rgba16 {
+        let mut le = Vec::with_capacity(w * h * 8);
+        for px in img.data.as_chunks::<3>().0 {
+            for v in px {
+                le.extend_from_slice(&v.to_le_bytes());
+            }
+            le.extend_from_slice(&u16::MAX.to_le_bytes());
+        }
+        Reflect::set(&out, &"rgba16".into(), &Uint8Array::from(le.as_slice())).ok();
+    }
+    let img = DynImg::U16(img);
+    if thumb_w > 0 {
+        // como la miniatura de 8 bits del navegador: 256 px de ancho
+        let tw = thumb_w as usize;
+        let th = ((h as f64 / w as f64) * tw as f64).round().max(1.0) as usize;
+        let (proxy, _) = img.proxy_rgb8(tw.max(th) * 2);
+        let small = crate::img::resize_rgb(&proxy, tw, th, crate::img::Filter::Lanczos3);
+        let mut rgba = Vec::with_capacity(tw * th * 4);
+        for px in small.data.as_chunks::<3>().0 {
+            rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+        }
+        Reflect::set(&out, &"thumb".into(), &Uint8Array::from(rgba.as_slice())).ok();
+        Reflect::set(&out, &"tw".into(), &JsValue::from_f64(tw as f64)).ok();
+        Reflect::set(&out, &"th".into(), &JsValue::from_f64(th as f64)).ok();
+    }
+    if png {
+        let bytes = codecs::encode_png_dyn(&img);
+        Reflect::set(&out, &"png".into(), &Uint8Array::from(bytes.as_slice())).ok();
+    }
+    Ok(out.into())
+}

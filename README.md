@@ -40,6 +40,13 @@ Between phase 1 and phase 2, you do the manual work:
 
 ### Contact sheets
 
+- A video with more than 8 bits for each channel (10-bit camera HEVC,
+  ProRes, 10-bit VP9 or AV1) keeps them: its frames are 16-bit PNGs, and the
+  sheets made from them are 16-bit too. Some browsers decode such a video
+  fast only at 8 bits (Chrome with 10-bit HEVC, Firefox and Safari with 10-bit
+  VP9); there the 10 bits go through
+  the built-in converter, which is much slower, and one option trades them
+  for speed.
 - You can stop a long extraction with one button. The frames extracted so
   far stay loaded, so you can change the range or the frame rate and extract
   again.

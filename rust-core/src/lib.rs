@@ -19,3 +19,4 @@ pub mod qr;
 pub mod scanproc;
 pub mod sheet;
 pub mod text;
+pub mod yuv;

@@ -137,6 +137,9 @@ listed in `.git-blame-ignore-revs`; `git config blame.ignoreRevsFile
   nothing. The deliberate exception is `refreshPreview()` in
   `web/src/phase1.ts`, which runs on every control change and only logs: a
   toast on each keystroke would be worse than the silence.
+- **`localStorage` is always read inside `try`/`catch`**: the browser
+  throws when site data is blocked. Only `store.ts` and `migrate.ts` touch
+  it; a phase that needs a stored value asks `store.ts`.
 - `console.*` is used for diagnostics only, never as the way the user is told
   something.
 - There is no telemetry, no analytics and no remote logging. Nothing leaves the
@@ -157,7 +160,7 @@ listed in `.git-blame-ignore-revs`; `git config blame.ignoreRevsFile
 ## 6) Known Convention Divergence
 
 The comments in the source are Spanish, and so are the comments in the
-configuration files that sit next to the source (`Cargo.toml`,
+Node scripts (`web/*.mts`) and in the configuration files that sit next to the source (`Cargo.toml`,
 `rust-toolchain.toml`, `rustfmt.toml`, `biome.jsonc`). The user interface
 strings, the error messages that reach the user, the README, the commit
 messages and the whole of `.github/workflows/ci.yml` are English.
@@ -169,3 +172,4 @@ messages and the whole of `.github/workflows/ci.yml` are English.
 - `web/biome.jsonc`, `web/package.json` (`lint`, `lint:fix`, `format`)
 - `web/src/pool.ts`, `web/src/worker.ts`, `web/src/ui.ts`, `web/src/main.ts`
 - `.github/workflows/ci.yml`, `.git-blame-ignore-revs`
+- `web/src/store.ts`, `web/src/migrate.ts`, `web/src/phase2.ts` (storage access)

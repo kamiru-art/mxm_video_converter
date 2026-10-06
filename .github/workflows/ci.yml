@@ -8,8 +8,9 @@
 #              only target that compiles api.rs, the WebAssembly boundary).
 #   2. web   — compiles the core to WebAssembly, type-checks the TypeScript
 #              (tsc, strict, three projects), lints and checks formatting
-#              (biome), builds the site, runs the
-#              browser end-to-end test (real Chrome, workers + WASM) and
+#              (biome), builds the site, runs the two
+#              browser end-to-end tests (real Chrome, workers + WASM: the
+#              pipeline, and the interface at desktop and phone size) and
 #              deploys that exact build to Cloudflare (mxmstudio.work),
 #              Pages-style. The deploy step is the only one gated to main.
 # The web job waits for the rust job, so nothing is published that has not
@@ -180,6 +181,16 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Browser end-to-end test (headless Chrome)
         run: npm run test:e2e
+        working-directory: web
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      # The interface, clicked through like a user: the example project at
+      # desktop size and at phone size (390×844, touch), sheets, simulated
+      # scans, MOV, ZIP and MP4, the in-page preview, and no sideways scroll
+      # on any screen. The pipeline test above calls the modules directly;
+      # this is the one that catches a button wired to nothing.
+      - name: Interface end-to-end test (headless Chrome, desktop and phone)
+        run: npm run test:ui
         working-directory: web
         env:
           CHROME_PATH: /usr/bin/google-chrome

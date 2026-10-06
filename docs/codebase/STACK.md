@@ -37,8 +37,8 @@ ZIP64, store only) have no dependency: they are written in this repository.
 
 | Dependency | Version | Role in system |
 |------------|---------|----------------|
-| `mediabunny` | ^1.55.3 | Demuxes video and decodes it with WebCodecs: the first decode path for frames and the decoder of the original sound. It no longer encodes anything; the final video is written by `web/src/pngmov.ts` (MOV) or `web/src/zipwriter.ts` (ZIP). |
-| `@ffmpeg/ffmpeg`, `@ffmpeg/core`, `@ffmpeg/util` | ^0.12 | The fallback decoder for files WebCodecs refuses, and the muxer for the two MOV exports. About 32 MB, loaded only when needed. |
+| `mediabunny` | ^1.55.3 | Demuxes video and decodes it with WebCodecs (the first decode path for frames, `web/src/video.ts`, and the decoder of the original sound, `web/src/export.ts`), and encodes and muxes the compressed MP4 (`web/src/lossy.ts`). The lossless outputs do not use it: the MOV is written by `web/src/pngmov.ts`, the ZIP by `web/src/zipwriter.ts`. |
+| `@ffmpeg/ffmpeg`, `@ffmpeg/core`, `@ffmpeg/core-mt`, `@ffmpeg/util` | ^0.12 | The fallback decoder for files WebCodecs refuses (AVI, ProRes, HEVC in Firefox). `core-mt` is the multithreaded core, used only when a runtime probe says it works (Firefox yes, Chrome no). About 32 MB, loaded only when needed. No export uses ffmpeg any more. |
 
 There is no UI framework. The interface is built with `document.createElement`
 through the `el()` helper in `web/src/ui.ts`.
@@ -56,6 +56,8 @@ through the `el()` helper in `web/src/ui.ts`.
 | Vite 8 | Development server and production bundle. | `web/package.json` |
 | Biome 2 | Linter and formatter of the web (`npm run lint`, `npm run lint:fix`, `npm run format`). Chosen over ESLint + Prettier because TypeScript 7's package no longer ships the JavaScript compiler API that typescript-eslint needs. | `web/biome.jsonc`, `web/package.json` |
 | `puppeteer-core` 25 | Drives Chrome, and Zen/Firefox over WebDriver BiDi, for both browser tests; Safari goes through `safaridriver`, which ships with macOS. | `web/e2e-browsers.mts` |
+| `make-icons.mts` | Generates every PNG icon and the link-preview image from the SVG favicon in `index.html`; `--check` runs in CI. | `web/make-icons.mts` |
+| `carry-assets.mts` | Runs in CI just before the deploy: copies into `dist/` the hashed files of the versions published in the last 14 days, so a tab opened before a deploy keeps working. | `web/carry-assets.mts`, `.github/workflows/ci.yml` |
 | `wrangler` 4 | Publishes to Cloudflare. It is not a declared dependency; CI pins the version in the action. | `.github/workflows/ci.yml`, `web/wrangler.jsonc` |
 
 See `CONVENTIONS.md` §2 for what each tool enforces and why.
@@ -79,6 +81,8 @@ npm run lint         # biome: lint + formatting check (lint:fix applies fixes)
 npm run dev          # development server (does NOT produce web/public/ffmpeg/)
 npm run test:e2e     # pipeline end-to-end test; needs Chrome and ffmpeg (-- --browser=zen|safari)
 npm run test:ui      # interface end-to-end test, desktop and phone (-- --browser=zen|safari)
+npm run test:migration  # the move between the two PUBLISHED sites (after npm run build)
+node make-icons.mts  # regenerate the icons after changing the favicon (--check in CI)
 npm run build        # production bundle into web/dist
 npx wrangler@4 deploy
 ```
@@ -105,5 +109,5 @@ npx wrangler@4 deploy
 
 - `rust-toolchain.toml`, `rust-core/Cargo.toml`, `rust-core/Cargo.lock`, `rust-core/rustfmt.toml`
 - `web/package.json`, `web/package-lock.json`, `web/biome.jsonc`
-- `web/vite.config.ts`, `web/wrangler.jsonc`
+- `web/vite.config.ts`, `web/wrangler.jsonc`, `web/make-icons.mts`, `web/carry-assets.mts`
 - `.github/workflows/ci.yml`
