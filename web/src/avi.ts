@@ -6,7 +6,7 @@
 
 import type { LogEvent } from '@ffmpeg/ffmpeg';
 import { FFFSType, FFmpeg } from '@ffmpeg/ffmpeg';
-import type { DeepFrame } from './commands.ts';
+import type { DeepFrame, DeepSpec } from './commands.ts';
 import { BadRangeError } from './errors.ts';
 import { FrameQueue } from './frames.ts';
 import { loadFlag, saveFlag } from './store.ts';
@@ -527,6 +527,8 @@ interface PixInfo {
   fmt: string;
   depth: number;
   full: boolean;
+  /** El log dice el rango (pc o tv). */
+  rangeKnown: boolean;
   matrix: 'bt601' | 'bt709' | 'bt2020' | null;
 }
 
@@ -549,7 +551,8 @@ function pixInfo(log: string): PixInfo | null {
           : csp.startsWith('bt2020')
             ? 'bt2020'
             : null;
-    return { fmt, depth, full: tags.includes('pc') || fmt.startsWith('yuvj'), matrix };
+    const full = tags.includes('pc') || fmt.startsWith('yuvj');
+    return { fmt, depth, full, rangeKnown: full || tags.includes('tv'), matrix };
   }
   return null;
 }
@@ -683,6 +686,9 @@ function parseOutputSize(message: string): [number, number] | null {
 export function extractFramesFallback(
   file: File,
   opts: ExtractOptions = {},
+  /** Matriz y rango según mediabunny, si abrió el contenedor: valen cuando
+   *  el log de ffmpeg no los dice. */
+  hint: { matrix: DeepSpec['matrix'] | null; fullRange: boolean | null } | null = null,
 ): Promise<ExtractResult> {
   return withFF(async (ff) => {
     // Parar = terminar la instancia: exec bloquea el worker de ffmpeg y no
@@ -722,6 +728,15 @@ export function extractFramesFallback(
       const planar = deep && probe.pix ? planarFormat(probe.pix.fmt) : null;
       const outFmt = !deep ? 'rgba' : planar ? probe.pix?.fmt.replace('yuva', 'yuv') : 'rgb48le';
       const bpp = deep ? 6 : 4;
+      const pix: PixInfo | null = probe.pix && {
+        ...probe.pix,
+        matrix: probe.pix.matrix ?? hint?.matrix ?? null,
+        full: probe.pix.rangeKnown ? probe.pix.full : !!hint?.fullRange,
+      };
+      if (planar)
+        console.info(
+          `[ffmpeg] ${file.name}: ${probe.pix?.fmt}, matrix ${pix?.matrix ?? 'untagged'} (ffmpeg says ${probe.pix?.matrix ?? 'nothing'}), ${pix?.full ? 'full' : 'limited'} range`,
+        );
       // los fotogramas crudos de cada tanda (w×h×4 bytes cada uno: 33 MB en
       // 4K) viven en el sistema de archivos de ffmpeg hasta que se leen:
       // tandas cortas en 4K/6K. Cada tanda vuelve a buscar desde el fotograma
@@ -799,9 +814,7 @@ export function extractFramesFallback(
             // propio, que se transfiere al worker sin otra copia
             const bytes = data as Bytes;
             await queue.push(
-              !deep
-                ? { rgba: bytes, w, h }
-                : deepFrame(bytes, w, h, planar, probe.pix, probe.rotation),
+              !deep ? { rgba: bytes, w, h } : deepFrame(bytes, w, h, planar, pix, probe.rotation),
               t + (i - 1) * dt,
             );
           }

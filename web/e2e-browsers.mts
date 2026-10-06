@@ -174,7 +174,7 @@ async function puppeteerDriver(kind: 'chrome' | 'zen', viewport?: Viewport): Pro
   const pageErrors: string[] = [];
   page.on('console', (m) => {
     const t = m.text();
-    if (t.startsWith('[E2E]')) console.log(t);
+    if (t.startsWith('[E2E]') || t.startsWith('[ffmpeg]')) console.log(t);
     if (/Content Security Policy|Refused to (load|execute|connect|create)/i.test(t))
       cspConsole.push(t);
   });

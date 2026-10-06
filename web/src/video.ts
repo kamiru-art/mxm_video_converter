@@ -137,13 +137,13 @@ function isHdrOrWide(sample: VideoSample): boolean {
   return transfer === 'pq' || transfer === 'hlg' || primaries === 'bt2020';
 }
 
-/** Cómo leer los planos de `sample`, o null si no es un fotograma de más de
- *  8 bits que este módulo sepa convertir (ver "Profundidad"). */
-function deepSpecOf(sample: VideoSample): DeepSpec | null {
-  if (!sample.format || !DEEP_FORMATS.test(sample.format) || isHdrOrWide(sample)) return null;
-  const par = sample.pixelAspectRatio;
-  if (par.num !== par.den) return null;
-  const m: string | null = sample.colorSpace.matrix;
+/** La matriz de WebCodecs en los nombres del núcleo. Sin etiqueta, la
+ *  convención: BT.709 en HD, BT.601 por debajo (`height` 0: no decidir). */
+export function colourOf(
+  m: string | null,
+  fullRange: boolean | null,
+  height: number,
+): { matrix: DeepSpec['matrix'] | null; fullRange: boolean | null } {
   const matrix =
     m === 'bt709'
       ? 'bt709'
@@ -151,11 +151,21 @@ function deepSpecOf(sample: VideoSample): DeepSpec | null {
         ? 'bt601'
         : m === 'bt2020-ncl'
           ? 'bt2020'
-          : m == null
-            ? sample.visibleRect.height > 576
+          : m == null && height
+            ? height > 576
               ? 'bt709'
               : 'bt601'
             : null;
+  return { matrix, fullRange };
+}
+
+/** Cómo leer los planos de `sample`, o null si no es un fotograma de más de
+ *  8 bits que este módulo sepa convertir (ver "Profundidad"). */
+function deepSpecOf(sample: VideoSample): DeepSpec | null {
+  if (!sample.format || !DEEP_FORMATS.test(sample.format) || isHdrOrWide(sample)) return null;
+  const par = sample.pixelAspectRatio;
+  if (par.num !== par.den) return null;
+  const { matrix } = colourOf(sample.colorSpace.matrix, null, sample.visibleRect.height);
   if (!matrix) return null;
   return {
     format: sample.format,
@@ -318,9 +328,17 @@ function sampleTimes(start: number, end: number, fps: number): number[] {
  * Devuelve el número de fotogramas extraídos.
  */
 export async function extractFrames(file: File, opts: ExtractOptions = {}): Promise<ExtractResult> {
-  const useFallback = async (): Promise<ExtractResult> => {
+  // `track`: el contenedor que mediabunny sí abrió. Su espacio de color sirve
+  // a ffmpeg.wasm cuando su propio log no trae la matriz (un MOV de ProRes
+  // escrito por otro ffmpeg puede llegarle sin etiqueta)
+  const useFallback = async (track?: InputVideoTrack): Promise<ExtractResult> => {
+    const hint = track ? await track.getColorSpace().catch(() => null) : null;
     const { extractFramesFallback } = await import('./avi.ts');
-    return extractFramesFallback(file, opts);
+    return extractFramesFallback(
+      file,
+      opts,
+      hint ? colourOf(hint.matrix ?? null, hint.fullRange ?? null, 0) : null,
+    );
   };
   // lo tecleado, antes de decodificar nada: este es el único camino hacia los
   // tres decodificadores (los dos de mediabunny y el de ffmpeg.wasm)
@@ -347,7 +365,7 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
       console.warn(
         `[video] ${file.name}: WebCodecs cannot decode this codec here; using the ffmpeg.wasm decoder (slower).`,
       );
-      return useFallback();
+      return await useFallback(probe.track);
     }
     const { track, duration, fps: nativeFps } = probe;
     const start = Math.max(0, opts.start ?? 0);
@@ -359,7 +377,7 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
       console.info(
         `[video] ${file.name}: ${depth.depth}-bit source that WebCodecs only gives at 8 bits here; ffmpeg.wasm keeps the depth.`,
       );
-      return useFallback();
+      return await useFallback(probe.track);
     }
     // con await: el `finally` de abajo cierra el Input, y extractDeep lo usa
     if (depth?.planes) return await extractDeep(track, start, end, nativeFps, duration, file, opts);
@@ -405,7 +423,7 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
       // decodificador: se propaga tal cual.
       if (queue.count === 0 && !queue.failed) {
         console.warn('[video] WebCodecs decode failed, retrying with ffmpeg.wasm:', e);
-        return useFallback();
+        return await useFallback(probe.track);
       }
       throw e;
     }
