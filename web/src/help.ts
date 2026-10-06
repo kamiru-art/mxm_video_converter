@@ -68,7 +68,10 @@ offline. You can also <strong>install it</strong> as a desktop or phone app
 (in Chrome and Edge, the install icon in the address bar; on iPhone and iPad,
 Share → Add to Home Screen) and it opens in its own window, with or without
 a connection. Frames are extracted <strong>losslessly</strong> (PNG) with no color
-filtering. Projects from the original desktop app (<code>layout.json</code>
+filtering, and with every bit the video has: a 10-bit video gives 16-bit frames
+and 16-bit sheets. Where the browser decodes such a video fast only at 8 bits
+(Chrome with 10-bit HEVC, for instance), the built-in converter keeps the 10 bits, much more
+slowly; <em>Fast 8-bit decode</em> trades them for speed. Projects from the original desktop app (<code>layout.json</code>
 v1 and v2, QRs included) are processed unchanged.</p>
 <p>This tool was born from a real artist's workflow and is released free,
 forever, for everyone. The

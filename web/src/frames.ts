@@ -34,6 +34,7 @@ const THUMB_W = 256;
 /** Lo que se transfiere con cada fuente: el ImageBitmap entero (una copia en
  *  la GPU) o el buffer de los píxeles crudos. */
 export function frameTransfer(source: FrameSource): Transferable[] {
+  if ('spec' in source) return [source.data.buffer];
   return 'rgba' in source ? [source.rgba.buffer] : [source];
 }
 
@@ -86,7 +87,7 @@ export class FrameQueue {
     const job = this.jobs.shift();
     if (!job) return;
     try {
-      const { png, thumb, w, h } = await job.result;
+      const { png, thumb, w, h, deep } = await job.result;
       if (!thumb) throw new Error('The frame encoder returned no thumbnail.');
       // ProjectFrame.thumb es un OffscreenCanvas: los píxeles se vuelcan en uno
       const canvas = new OffscreenCanvas(thumb.w, thumb.h);
@@ -95,7 +96,7 @@ export class FrameQueue {
         0,
         0,
       );
-      await this.opts.onFrame?.(png, canvas, job.t, this.count, w, h);
+      await this.opts.onFrame?.(png, canvas, job.t, this.count, w, h, !!deep);
       this.count++;
       this.opts.onProgress?.(this.count, this.est);
     } catch (e) {

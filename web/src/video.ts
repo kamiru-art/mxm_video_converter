@@ -3,12 +3,16 @@
 // sin pérdida, está en export.ts.
 //
 // Filosofía de calidad: cada fotograma extraído se guarda como PNG (sin
-// pérdida) a resolución nativa; no se aplica ningún filtro de color.
+// pérdida) a resolución nativa; no se aplica ningún filtro de color, y entra
+// con los bits que tiene: un clip de 10 o 12 bits da fotogramas de 16 bits
+// (ver "Profundidad" más abajo y rust-core/src/yuv.rs).
 
-import type { InputVideoTrack, WrappedCanvas } from 'mediabunny';
-import { ALL_FORMATS, BlobSource, CanvasSink, Input } from 'mediabunny';
+import type { InputVideoTrack, VideoSample, WrappedCanvas } from 'mediabunny';
+import { ALL_FORMATS, BlobSource, CanvasSink, Input, VideoSampleSink } from 'mediabunny';
+import type { DeepFrame, DeepSpec } from './commands.ts';
 import { BadRangeError } from './errors.ts';
 import { FrameQueue } from './frames.ts';
+import type { Bytes } from './types.ts';
 
 // ffmpeg.wasm cubre lo que WebCodecs no: contenedores que mediabunny no abre
 // (AVI, MPG…) y códecs que el navegador no decodifica aunque el contenedor
@@ -27,6 +31,11 @@ export interface ExtractOptions {
    *  minutos por pasada y entrega el PNG igual, así que quien llama mira
    *  `blob`, no esta opción. */
   lazy?: boolean;
+  /** 8 bits aunque la fuente tenga más: el decodificador por hardware del
+   *  navegador en vez de ffmpeg.wasm (ver planDepth). Por defecto, no. */
+  fast8?: boolean;
+  /** `deep`: el fotograma tiene más de 8 bits por canal (PNG de 16 bits, o
+   *  se volverá a decodificar a 16 bits). */
   onFrame?: (
     blob: Blob | null,
     thumb: OffscreenCanvas,
@@ -34,6 +43,7 @@ export interface ExtractOptions {
     i: number,
     w: number,
     h: number,
+    deep: boolean,
   ) => void | Promise<void>;
   /** `i` fotogramas entregados hasta ahora, de unos `est` (null si no se sabe). */
   onProgress?: (i: number, est: number | null) => void;
@@ -58,6 +68,145 @@ export interface ProbeResult {
   width: number;
   height: number;
   fallback?: boolean;
+  /** Bits por canal de la fuente, si se saben. */
+  depth?: number | null;
+  /** Fuente de más de 8 bits que este navegador solo decodifica a 8 por
+   *  hardware: conservarlos va por ffmpeg.wasm, mucho más lento. */
+  deepNeedsFallback?: boolean;
+}
+
+// ── Profundidad ───────────────────────────────────────────────
+//
+// El lienzo del navegador es de 8 bits. Para no perder los bits de más:
+//  - si WebCodecs entrega el fotograma en sus planos de 10 o 12 bits (VP9
+//    perfil 2, AV1 de 10 bits por software, Firefox y Safari según el
+//    códec), se copian con `copyTo` y el núcleo los convierte a RGB de 16
+//    bits con la matriz y el rango del propio fotograma;
+//  - si la fuente tiene más de 8 bits pero el navegador solo da un
+//    fotograma opaco de la GPU (el HEVC de 10 bits de cámara en Chrome:
+//    `format` null; medido el 2026-10-06 con un MOV de Lumix, y tampoco una
+//    textura float16 de WebGPU conserva más de 8 bits), la extracción va por
+//    ffmpeg.wasm, que da `rgb48le`. Es mucho más lenta: `fast8` la evita.
+// HDR (PQ, HLG) y BT.2020 se quedan en el lienzo de 8 bits: ahí el navegador
+// adapta el color a la pantalla, y una conversión directa saldría lavada.
+
+const DEEP_FORMATS = /^I4(20|22|44)A?P1[02]$/;
+
+/** Bits por canal que declara la pista, o null si no se sabe. */
+function codecDepth(cfg: VideoDecoderConfig | null): number | null {
+  if (!cfg) return null;
+  const c = cfg.codec;
+  const vp9 = /^vp09\.\d\d\.\d\d\.(\d\d)/.exec(c);
+  if (vp9) return +vp9[1];
+  const av1 = /^av01\.\d\.\d\d[MH]\.(\d\d)/.exec(c);
+  if (av1) return +av1[1];
+  const d = cfg.description;
+  const box = !d
+    ? null
+    : ArrayBuffer.isView(d)
+      ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength)
+      : new Uint8Array(d);
+  if (/^(hev1|hvc1)\./.test(c)) {
+    // hvcC: bitDepthLumaMinus8 en los 3 bits bajos del byte 17
+    if (box && box.length > 17) return (box[17] & 7) + 8;
+    const profile = /^(?:hev1|hvc1)\.[A-C]?(\d+)/.exec(c);
+    return profile ? (+profile[1] === 2 ? 10 : 8) : null;
+  }
+  if (/^(avc1|avc3)\./.test(c)) {
+    const profile = Number.parseInt(c.slice(5, 7), 16);
+    if (![110, 122, 244].includes(profile)) return 8;
+    // avcC: tras los SPS y PPS, la extensión de los perfiles High lleva
+    // bit_depth_luma_minus8
+    if (box && box.length > 6) {
+      let at = 6;
+      for (let n = box[5] & 31; n > 0 && at + 2 <= box.length; n--)
+        at += 2 + ((box[at] << 8) | box[at + 1]);
+      for (let n = box[at++] ?? 0; n > 0 && at + 2 <= box.length; n--)
+        at += 2 + ((box[at] << 8) | box[at + 1]);
+      if (at + 2 <= box.length) return (box[at + 1] & 7) + 8;
+    }
+    return 10;
+  }
+  return null;
+}
+
+function isHdrOrWide(sample: VideoSample): boolean {
+  // los tipos del DOM de TypeScript aún no listan estos valores
+  const transfer: string | null = sample.colorSpace.transfer;
+  const primaries: string | null = sample.colorSpace.primaries;
+  return transfer === 'pq' || transfer === 'hlg' || primaries === 'bt2020';
+}
+
+/** Cómo leer los planos de `sample`, o null si no es un fotograma de más de
+ *  8 bits que este módulo sepa convertir (ver "Profundidad"). */
+function deepSpecOf(sample: VideoSample): DeepSpec | null {
+  if (!sample.format || !DEEP_FORMATS.test(sample.format) || isHdrOrWide(sample)) return null;
+  const par = sample.pixelAspectRatio;
+  if (par.num !== par.den) return null;
+  const m: string | null = sample.colorSpace.matrix;
+  const matrix =
+    m === 'bt709'
+      ? 'bt709'
+      : m === 'bt470bg' || m === 'smpte170m'
+        ? 'bt601'
+        : m === 'bt2020-ncl'
+          ? 'bt2020'
+          : m == null
+            ? sample.visibleRect.height > 576
+              ? 'bt709'
+              : 'bt601'
+            : null;
+  if (!matrix) return null;
+  return {
+    format: sample.format,
+    w: sample.visibleRect.width,
+    h: sample.visibleRect.height,
+    planes: [],
+    matrix,
+    fullRange: !!sample.colorSpace.fullRange,
+    rotation: sample.rotation,
+  };
+}
+
+/** Los planos de `sample` tal cual, listos para el núcleo. */
+async function copyDeep(sample: VideoSample, spec: DeepSpec): Promise<DeepFrame> {
+  const data = new Uint8Array(sample.allocationSize()) as Bytes;
+  const layout = await sample.copyTo(data);
+  return {
+    data,
+    spec: { ...spec, planes: layout.map((p) => ({ offset: p.offset, stride: p.stride })) },
+  };
+}
+
+/** El fotograma de 8 bits, girado como manda el video, como hace CanvasSink. */
+async function sampleBitmap(sample: VideoSample): Promise<ImageBitmap> {
+  const canvas = new OffscreenCanvas(sample.displayWidth, sample.displayHeight);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not create a 2D canvas context.');
+  sample.draw(ctx, 0, 0);
+  return createImageBitmap(canvas);
+}
+
+interface DepthPlan {
+  depth: number | null;
+  /** WebCodecs entrega los planos de más de 8 bits. */
+  planes: boolean;
+  /** Más de 8 bits que WebCodecs no entrega: hace falta ffmpeg.wasm. */
+  needsFallback: boolean;
+}
+
+/** Decodifica UN fotograma para saber por dónde conservar la profundidad. */
+async function planDepth(track: InputVideoTrack, at: number): Promise<DepthPlan> {
+  const depth = codecDepth(await track.getDecoderConfig());
+  const sample = await new VideoSampleSink(track).getSample(at);
+  if (!sample) return { depth, planes: false, needsFallback: false };
+  try {
+    if (deepSpecOf(sample))
+      return { depth: Math.max(depth ?? 0, 10), planes: true, needsFallback: false };
+    return { depth, planes: false, needsFallback: (depth ?? 8) > 8 && !isHdrOrWide(sample) };
+  } finally {
+    sample.close();
+  }
 }
 
 interface MediabunnyProbe {
@@ -101,11 +250,33 @@ export async function probeVideo(file: File): Promise<ProbeResult> {
     // ffmpeg.wasm, minutos en vez de segundos: que el aviso salga AHORA, en
     // el sondeo, y no después de pulsar Extract
     const fallback = !(await p.track.canDecode());
+    let depth: DepthPlan | null = null;
+    try {
+      // sin decodificador aquí, la profundidad la dice la pista (y la
+      // conserva ffmpeg.wasm, que es por donde irá)
+      depth = fallback
+        ? {
+            depth: codecDepth(await p.track.getDecoderConfig()),
+            planes: false,
+            needsFallback: false,
+          }
+        : await planDepth(p.track, 0);
+    } catch (e) {
+      console.warn('[video] could not read the bit depth:', e);
+    }
     // sondeo y nada más: aquí no decodifica nadie, así que el Input se cierra
     // ya y no se devuelve (ni `track`, que moriría con él). El formato
     // coincide con el de probeFallback
     p.input.dispose();
-    return { duration: p.duration, fps: p.fps, width: p.width, height: p.height, fallback };
+    return {
+      duration: p.duration,
+      fps: p.fps,
+      width: p.width,
+      height: p.height,
+      fallback,
+      depth: depth?.depth ?? null,
+      deepNeedsFallback: depth?.needsFallback ?? false,
+    };
   } catch (e) {
     // mediabunny no abre el contenedor: que lo intente ffmpeg.wasm; si
     // tampoco puede, el error original es el informativo
@@ -183,6 +354,15 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
     const end = Math.min(duration, opts.end ?? duration);
     // ya recortado a la duración real: cubre el inicio pasado el final
     assertRange(start, end, duration);
+    const depth = opts.fast8 ? null : await planDepth(track, start);
+    if (depth?.needsFallback) {
+      console.info(
+        `[video] ${file.name}: ${depth.depth}-bit source that WebCodecs only gives at 8 bits here; ffmpeg.wasm keeps the depth.`,
+      );
+      return useFallback();
+    }
+    // con await: el `finally` de abajo cierra el Input, y extractDeep lo usa
+    if (depth?.planes) return await extractDeep(track, start, end, nativeFps, duration, file, opts);
     // poolSize 2: mediabunny reutiliza los lienzos, y el fotograma sale de
     // ellos (createImageBitmap) antes de pedir el siguiente
     const sink = new CanvasSink(track, { poolSize: 2 });
@@ -241,6 +421,54 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
   }
 }
 
+/** Como el bucle de extractFrames, pero con los planos de más de 8 bits:
+ *  cada fotograma va al worker sin pasar por el lienzo. */
+async function extractDeep(
+  track: InputVideoTrack,
+  start: number,
+  end: number,
+  nativeFps: number,
+  duration: number,
+  file: File,
+  opts: ExtractOptions,
+): Promise<ExtractResult> {
+  const sink = new VideoSampleSink(track);
+  const times = opts.fps && opts.fps > 0 ? sampleTimes(start, end, opts.fps) : null;
+  const est = times ? times.length : nativeFps ? Math.round((end - start) * nativeFps) : null;
+  const samples: AsyncIterable<VideoSample | null> = times
+    ? sink.samplesAtTimestamps(times)
+    : sink.samples(start, end);
+  const queue = new FrameQueue(opts, est, !opts.lazy);
+  let cancelled = false;
+  for await (const sample of samples) {
+    if (opts.signal?.aborted) {
+      sample?.close();
+      cancelled = true;
+      break;
+    }
+    if (!sample) continue; // ver el mismo caso en extractFrames
+    try {
+      const spec = deepSpecOf(sample);
+      // un fotograma de 8 bits a mitad de un clip de 10 (no debería pasar):
+      // entra como los de 8, por el lienzo
+      await queue.push(
+        spec ? await copyDeep(sample, spec) : await sampleBitmap(sample),
+        sample.timestamp,
+      );
+    } finally {
+      sample.close();
+    }
+  }
+  await queue.finish();
+  return {
+    count: queue.count,
+    fps: opts.fps || nativeFps || 12,
+    duration,
+    origen: file.name,
+    cancelled,
+  };
+}
+
 /**
  * Vuelve a decodificar del video los fotogramas de `times` (segundos, los
  * `t` que dio la extracción) y entrega cada uno como ImageBitmap con el
@@ -252,7 +480,8 @@ export async function extractFrames(file: File, opts: ExtractOptions = {}): Prom
 export async function decodeVideoFrames(
   file: File,
   times: number[],
-  onFrame: (index: number, image: ImageBitmap) => void | Promise<void>,
+  onFrame: (index: number, image: ImageBitmap | DeepFrame) => void | Promise<void>,
+  deep = false,
 ): Promise<void> {
   if (!times.length) return;
   const probe = await probeMediabunny(file);
@@ -261,6 +490,23 @@ export async function decodeVideoFrames(
       throw new Error(`${file.name}: this browser can no longer decode the video.`);
     }
     const order = times.map((_t, i) => i).sort((a, b) => times[a] - times[b]);
+    // `deep`: los planos de más de 8 bits, como en la extracción
+    if (deep) {
+      const sink = new VideoSampleSink(probe.track);
+      let k = 0;
+      for await (const sample of sink.samplesAtTimestamps(order.map((i) => times[i]))) {
+        const index = order[k++];
+        if (!sample) throw new Error(`${file.name}: no frame at ${times[index].toFixed(3)} s.`);
+        try {
+          const spec = deepSpecOf(sample);
+          await onFrame(index, spec ? await copyDeep(sample, spec) : await sampleBitmap(sample));
+        } finally {
+          sample.close();
+        }
+      }
+      if (k !== times.length) throw new Error(`${file.name}: the decoder stopped early.`);
+      return;
+    }
     const sink = new CanvasSink(probe.track, { poolSize: 2 });
     let k = 0;
     for await (const wrapped of sink.canvasesAtTimestamps(order.map((i) => times[i]))) {

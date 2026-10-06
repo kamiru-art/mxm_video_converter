@@ -12,6 +12,8 @@ loads.
 | Cloudflare Workers | Static hosting | Serves the built site at `mxmstudio.work` (MXM Studio account), with the single-page-application fallback. `www.mxmstudio.work` is a zone Redirect Rule (301 to the apex, path and query kept) on a proxied placeholder record, set in the dashboard, not a Worker. | API token, held as a GitHub secret. | High: it is how the application reaches users. | `web/wrangler.jsonc`, `.github/workflows/ci.yml` |
 | Cloudflare Workers, old address | Hand-over | `mxm.sebastianlopez.me` (Sebastián's own account) serves the last build published there with a "moved" page in place of `index.html`: it carries `localStorage` to the new address and retires the old service worker. Published by hand, never by CI. | Local `wrangler` login | Medium: links and installed apps from before the move go through it. | `deploy/old-domain/`, `web/src/migrate.ts` |
 | GitHub Actions | CI/CD | Runs the Rust tests, builds the WebAssembly and the site, runs the browser test, deploys. | The workflow's own `GITHUB_TOKEN`, with `contents: read`. | High | `.github/workflows/ci.yml` |
+| The live site, at deploy time | HTTP fetch from CI | `web/carry-assets.mts` reads `https://mxmstudio.work/` and `/asset-history.json` to carry the recent hashed files into the new deploy. | None | Low: on failure it warns and the deploy goes on. | `web/carry-assets.mts` |
+| GitHub (public repository) | Link | The only feedback channel the site offers: the "Source code" link in the footer and in Help. Issues are enabled. | None | Low | `web/index.html`, `web/src/help.ts`, `gh repo view` |
 | Google Fonts | Static asset over the network | Web fonts for the interface. | None | Low: the page still works without them. | `web/src/sw.ts` (`FONT_HOSTS`) |
 | `ffmpeg.wasm` | Bundled asset, about 32 MB | Decodes what WebCodecs refuses (AVI, camera MOV in HEVC 10-bit or ProRes). The export no longer uses it. | None | Medium: without it, AVI files and some camera MOV files do not open. The lossless export does not depend on it. | `web/src/avi.ts`, `web/prepare-ffmpeg.mts` |
 | Browser platform APIs | Runtime | WebAssembly, WebCodecs, WebGPU, Web Workers, `localStorage`, service worker, `createImageBitmap`. | None | High | `web/src/pool.ts`, `web/src/video.ts`, `web/src/webgpu.ts` |
@@ -26,7 +28,7 @@ third-party API.
 | Store | What it holds | Where it lives | Evidence |
 |-------|---------------|----------------|----------|
 | `localStorage`, one key `mxm-studio-v1` | The presets, the calibration profiles, and the last phase 1 settings. | The user's browser. | `web/src/store.ts` |
-| `localStorage`, `mxm_ram_gb` and `mxm-migrated-ids` | The memory the user typed in phase 2; the ids of the old-address browsers whose data was already imported here. | The user's browser. | `web/src/phase2.ts`, `web/src/migrate.ts` |
+| `localStorage`, `mxm_ram_gb` and `mxm-migrated-ids` | The memory the user typed in phase 2; the ids of the old-address browsers whose data was already imported here. | The user's browser. | `web/src/store.ts`, `web/src/migrate.ts` |
 | In-memory `project` object | The frames, the layout, the sheet images, the processed frames, the report. Lost on reload. | The tab. | `web/src/project.ts` |
 | Cache Storage, three caches | The application shell, the hashed assets, the fonts. | The user's browser. | `web/src/sw.ts` |
 
@@ -89,10 +91,18 @@ are set again.
 - **Google Fonts unreachable**: the interface falls back to the local font
   stack. The service worker serves the fonts from its cache after the first
   visit.
-- **`web/public/ffmpeg/` missing**: `web/src/avi.ts` fetches
-  `manifest.json` without checking the response, so the failure appears as a
-  confusing `SyntaxError` rather than a clear message. This is the state of a
-  fresh clone under `npm run dev`. See `CONCERNS.md`.
+- **`web/public/ffmpeg/` missing** (a fresh clone under `npm run dev`):
+  `coreManifest()` in `web/src/avi.ts` checks the status and the
+  content type of `manifest.json`, because the SPA fallback answers a missing
+  file with `index.html` and status 200, and throws a message that says to
+  rebuild `web/public/ffmpeg/`.
+- **`mxmstudio.work` unreachable at deploy time**: `web/carry-assets.mts`
+  warns and the deploy goes on without the older files; tabs opened before
+  that deploy may fail on their next lazy import until reloaded.
+- **`localStorage` blocked by the browser** (site data disabled): every
+  access goes through `store.ts` or `migrate.ts` and is caught; the presets,
+  profiles and the RAM setting then last only for the session. Not covered by
+  a test.
 - **WebCodecs absent or refusing a file**: the application falls back to
   `ffmpeg.wasm` (`web/src/video.ts`).
 - **WebGPU absent**: the scans are straightened in WebAssembly instead
@@ -103,4 +113,4 @@ are set again.
 - `.github/workflows/ci.yml`, `web/wrangler.jsonc`
 - `web/src/store.ts`, `web/src/project.ts`, `web/src/sw.ts`
 - `web/src/avi.ts`, `web/src/video.ts`, `web/src/webgpu.ts`
-- `web/prepare-ffmpeg.mts`
+- `web/prepare-ffmpeg.mts`, `web/carry-assets.mts`, `web/src/migrate.ts`, `deploy/old-domain/`

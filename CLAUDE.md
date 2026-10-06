@@ -50,7 +50,14 @@ in PSNR against a lossless reference (High ≥ 28 dB), a fixed bitrate must
 land within ±40 %, and a 642×361 frame (a width Chrome used to shift by a
 pixel) must come out 644×362 with a white edge and the drawing in place. A 16-bit chain runs too: 16-bit frames →
 16-bit sheet (PNG, TIFF, PDF) → 16-bit scan → crops of one size → copied into
-the MOV. The page runs under the CSP and COOP/COEP headers of
+the MOV. Video sources of 10 bits keep them: a 10-bit luma ramp encoded as
+VP9 in WebM (BT.709), as VP9 in MP4 with BT.601 and a 90° rotation, as HEVC
+Main 10 and as ProRes 422 is extracted by whatever route the browser allows
+(WebCodecs planes, or `ffmpeg.wasm` where the browser gives only 8 bits), and
+each must give 16-bit frames and 16-bit sheets; the runner decodes each
+source with the local `ffmpeg` and requires the frame to match the BT.709/601
+definition to ±1/65535 where the chroma is neutral (an 8-bit path misses by
+over a hundred). The page runs under the CSP and COOP/COEP headers of
 `web/public/_headers`; any violation fails the run.
 
 The interface suite (`web/e2e-ui.mts`) clicks through the example project on

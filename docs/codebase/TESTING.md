@@ -4,7 +4,7 @@
 
 | Layer | Tool | What it covers | Evidence |
 |-------|------|----------------|----------|
-| Rust unit | The built-in `#[test]` harness | 65 tests across the domain modules, 9 of them for the two new modules (`conform.rs`, `photo.rs`), each preceded by the list of the ways it could fail | `rust-core/src/*.rs` |
+| Rust unit | The built-in `#[test]` harness | 73 tests across the domain modules; those of `conform.rs`, `photo.rs` and `yuv.rs` (8, the twelve ways a 10-bit frame conversion can go wrong) are preceded by the list of the ways it could fail | `rust-core/src/*.rs` |
 | Rust integration | The same harness, in `tests/` | 7 end-to-end round trips: build a sheet, simulate a scan of it, recover the frames | `rust-core/tests/pipeline.rs` |
 | Rust lint and format | `cargo clippy -- -D warnings` (native and wasm32), `cargo fmt --check` | Every warning is an error; see `CONVENTIONS.md` §2 | `rust-core/Cargo.toml`, `rust-core/rustfmt.toml` |
 | Web lint and format | Biome (`npm run lint`) | `any`, `@ts-ignore`, default exports, non-null assertions, floating promises, formatting | `web/biome.jsonc` |
@@ -19,10 +19,16 @@ interface test drives the `mount*` phases through their buttons.
 
 ## 2) Current State
 
-Measured on the current tree with `cargo test --release`:
+Measured on `4716a9a` on 2026-10-05 (macOS, Apple Silicon, Chrome):
+`cargo test --release`, `npm run typecheck`, `npm run lint`,
+`npm run test:e2e`, `npm run test:ui` (desktop and phone size) and
+`npm run test:migration` against the two published sites all pass, and
+`shasum -a 256 -c` accepts `browser-pipeline.chrome.json` and
+`ui.chrome.json`. The Zen and Safari reports in `artifacts/e2e/` are from
+2026-09-29 and were not re-run. The Rust counts:
 
 ```
-Unit tests (src/lib.rs):          65 passed; 0 failed
+Unit tests (src/lib.rs):          73 passed; 0 failed
 Integration (tests/pipeline.rs):   7 passed; 0 failed
 Doc-tests:                          0
 ```
@@ -110,6 +116,26 @@ come out 644×362, the added edge white in luma and the drawing aligned with
 its source (at least 30 dB, and far above the same comparison one pixel
 over): Chrome shifted every frame of a 4k + 2 width by one pixel.
 
+Video sources deeper than 8 bits are covered by four samples generated in
+`e2e-run.mts` from one 10-bit luma ramp (about 800 levels, scrolling, neutral
+chroma in the top half and colour in the bottom): VP9 profile 2 in WebM
+(BT.709), the same in MP4 with BT.601 and a 90° display rotation, HEVC Main 10
+and ProRes 422. Each is extracted lazily by whatever route the browser takes
+(WebCodecs planes, or `ffmpeg.wasm` where the browser gives only 8 bits; the
+log names it) and must give frames flagged deep, a 16-bit frame PNG of the
+rotated size, more than 256 red levels in the neutral half, the same colours
+as the browser's own 8-bit path (mean shift within ±3 levels), the same PNG
+lazily as eagerly, a 16-bit sheet whose `_frames/` file equals the frame PNG,
+and plain 8-bit frames with `fast8`. `verifyDeep` (`e2e-verify.mts`) then
+decodes each source with the local `ffmpeg` and applies the BT.709/601
+definition to its YUV planes: where the chroma is neutral the frame must match
+to ±1/65535, and over the whole frame the error must stay under one 10-bit
+code. A frame that went through 8 bits fails both (129/65535 and 1.40 codes,
+checked by hand on 2026-10-06). swscale's own `rgb48le` is not used as the
+reference: it maps 10-bit white to 65283. Passed on 2026-10-06 in Chrome (VP9
+through WebCodecs planes, HEVC and ProRes through `ffmpeg.wasm`), Zen and
+Safari (all four through `ffmpeg.wasm`).
+
 The 16-bit sheet path is covered end to end in the same run: four 16-bit
 frames with a fine gradient become a 16-bit sheet in PNG, TIFF and PDF (the
 PDF declares `/BitsPerComponent 16`); more than 256 distinct red levels must
@@ -174,8 +200,11 @@ Known gaps, by size:
 - All of `web/src` has no unit tests. The interface test drives one path
   through each phase (the example project); the other options of phase 1
   (video input, cyanotype, presets) are not clicked.
-- CI runs the pipeline test in Chrome only; Zen, Safari and the interface
-  test are run by hand. [ASK USER] whether CI should run the interface test.
+- CI runs the pipeline and the interface tests in Chrome only; Zen, Safari
+  and the migration test are run by hand.
+- No suite runs on a real phone. The phone size of `test:ui` is a desktop
+  browser at 390×844 (Chrome also emulates touch); iOS Safari's memory limits
+  and in-app browsers (Instagram, TikTok, Facebook) are not covered.
 
 ## 7) CI
 
@@ -183,8 +212,11 @@ Known gaps, by size:
 branch and on every pull request. The `rust` job runs `cargo fmt --check`,
 the tests, and clippy with warnings as errors, natively and for wasm32. The
 `web` job waits for it, compiles the core to WebAssembly, type-checks, runs
-Biome (`npm run lint`), runs the browser test, builds the site, and — only on
-a push to `main` — deploys the same build it just tested. The deploy lives
+Biome (`npm run lint`), checks that the icons match the favicon
+(`make-icons.mts --check`), runs the pipeline and the interface browser tests
+(desktop and phone size), builds the site, and — only
+on a push to `main` or a manual run of `main` — carries the recent hashed files
+over (`carry-assets.mts`) and deploys the same build it just tested. The deploy lives
 inside the `web` job on purpose, so that exactly one build exists in the
 pipeline and what gets published is what the test ran against.
 

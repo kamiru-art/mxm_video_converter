@@ -3,7 +3,14 @@
 // Cada respuesta incluye `mem` (bytes de memoria WASM) y `pinned` (estado PDF
 // vivo) para que el pool pueda reciclar workers hinchados sin perder nada.
 
-import type { CommandName, Commands, RawRgba, WorkerRequest, WorkerResponse } from './commands.ts';
+import type {
+  CommandName,
+  Commands,
+  DeepFrame,
+  RawRgba,
+  WorkerRequest,
+  WorkerResponse,
+} from './commands.ts';
 import { errMsg } from './errors.ts';
 import type { Bytes, DecodedImage, ImageInfo, RenderSheetOutput, ScanOutput } from './types.ts';
 import type { InitOutput } from './wasm/mxm_core.js';
@@ -53,6 +60,30 @@ function scanTransfer(r: ScanOutput): Transferable[] {
   for (const f of r.sin_identificar) transfer.push(f.png.buffer);
   if (r.overlay) transfer.push(r.overlay.buffer);
   return transfer;
+}
+
+type DeepOut = Commands['deep_frame']['result'];
+
+function deepFrame(
+  frame: DeepFrame,
+  png: boolean,
+  rgba16: boolean,
+  thumbW: number,
+): Transferred<DeepOut> {
+  const r = core.deep_frame(frame.data, JSON.stringify(frame.spec), png, rgba16, thumbW) as {
+    w: number;
+    h: number;
+    png?: Bytes;
+    rgba16?: Bytes;
+    thumb?: Bytes;
+    tw?: number;
+    th?: number;
+  };
+  const value: DeepOut = { w: r.w, h: r.h, png: r.png, rgba16: r.rgba16 };
+  if (r.thumb) value.thumb = { rgba: r.thumb, w: r.tw ?? 0, h: r.th ?? 0 };
+  const transfer: Transferable[] = [];
+  for (const b of [r.png, r.rgba16, r.thumb]) if (b) transfer.push(b.buffer);
+  return { value, transfer };
 }
 
 const handlers: Handlers = {
@@ -176,8 +207,18 @@ const handlers: Handlers = {
   // el mismo que usaba el hilo principal, y aquí corren varios a la vez. El
   // lienzo es opaco a propósito: un fotograma de video no tiene
   // transparencia, y un PNG RGB pesa un 20 % menos que el mismo en RGBA.
+  deep_frame: (a) => deepFrame(a.frame, !!a.png, !!a.rgba16, a.thumbW ?? 0),
   encode_frame: async (a) => {
     const src = a.image;
+    // más de 8 bits: lo convierte el núcleo, y el PNG sale de 16 bits
+    if ('spec' in src) {
+      const r = deepFrame(src, a.png !== false, false, a.thumbW ?? 0).value;
+      const png = r.png ? new Blob([r.png], { type: 'image/png' }) : null;
+      return {
+        value: { png, thumb: r.thumb ?? null, w: r.w, h: r.h, deep: true },
+        transfer: r.thumb ? [r.thumb.rgba.buffer] : [],
+      };
+    }
     const w = 'rgba' in src ? src.w : src.width;
     const h = 'rgba' in src ? src.h : src.height;
     const canvas = new OffscreenCanvas(w, h);

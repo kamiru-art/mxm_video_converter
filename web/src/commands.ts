@@ -6,9 +6,31 @@
 import type { Bytes, DecodedImage, ImageInfo, RenderSheetOutput, ScanOutput } from './types.ts';
 
 /** Un fotograma de video tal como sale del decodificador: un ImageBitmap
- *  (WebCodecs) o RGBA de 8 bits sin comprimir (ffmpeg.wasm). Los dos son
- *  transferibles: el fotograma se mueve al worker, no se copia. */
-export type FrameSource = ImageBitmap | RawRgba;
+ *  (WebCodecs, 8 bits), RGBA de 8 bits sin comprimir (ffmpeg.wasm) o, de una
+ *  fuente de más de 8 bits, sus planos sin convertir (DeepFrame). Los tres
+ *  son transferibles: el fotograma se mueve al worker, no se copia. */
+export type FrameSource = ImageBitmap | RawRgba | DeepFrame;
+
+/** Cómo leer los planos de un DeepFrame (rust-core/src/yuv.rs). */
+export interface DeepSpec {
+  /** I420P10, I422P10, I444P10, I420P12… (WebCodecs) o RGB48LE (ffmpeg). */
+  format: string;
+  w: number;
+  h: number;
+  /** Desplazamiento y paso de fila, en bytes, de cada plano. */
+  planes: { offset: number; stride: number }[];
+  matrix: 'bt601' | 'bt709' | 'bt2020';
+  fullRange: boolean;
+  /** Grados en el sentido de las agujas del reloj (metadatos del video). */
+  rotation: number;
+}
+
+/** Un fotograma de más de 8 bits por canal, aún en los planos del
+ *  decodificador: el núcleo lo pasa a RGB de 16 bits. */
+export interface DeepFrame {
+  data: Bytes;
+  spec: DeepSpec;
+}
 
 /** Píxeles RGBA de 8 bits sin comprimir, con su tamaño. */
 export interface RawRgba {
@@ -29,6 +51,8 @@ export interface EncodedFrame {
   thumb: RawRgba | null;
   w: number;
   h: number;
+  /** El fotograma tenía más de 8 bits y el PNG es de 16. */
+  deep?: boolean;
 }
 
 export interface Commands {
@@ -106,6 +130,12 @@ export interface Commands {
   conform_frame: {
     args: { bytes: Bytes; w: number; h: number; sixteen: boolean; alpha: boolean };
     result: Bytes;
+  };
+  /** Un DeepFrame a RGB de 16 bits: el PNG de 16 bits, el RGBA de 16 bits
+   *  que recibe una hoja y la miniatura de 8 bits, según se pidan. */
+  deep_frame: {
+    args: { frame: DeepFrame; png?: boolean; rgba16?: boolean; thumbW?: number };
+    result: { w: number; h: number; png?: Bytes; rgba16?: Bytes; thumb?: RawRgba };
   };
   /** PNG sin pérdida de un buffer RGBA de 8 bits: bytes, no un Blob. */
   encode_png_rgba: { args: { rgba: Bytes; w: number; h: number }; result: Bytes };

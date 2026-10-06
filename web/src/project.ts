@@ -1,5 +1,6 @@
 // Estado del proyecto compartido entre fases (vive en memoria).
 
+import type { DeepFrame } from './commands.ts';
 import { frameTransfer } from './frames.ts';
 import { poolSize, run } from './pool.ts';
 import type { Bytes, VideoMeta } from './types.ts';
@@ -11,6 +12,9 @@ export interface VideoRef {
   file: File;
   /** Instante del fotograma, en segundos, tal como lo dio la extracción. */
   t: number;
+  /** Fuente de más de 8 bits cuyos planos entrega WebCodecs: a resolución
+   *  nativa se vuelve a decodificar a 16 bits (video.ts, "Profundidad"). */
+  deep?: boolean;
 }
 
 /** Un fotograma cargado en la fase ①: de un video, de una carpeta de
@@ -111,8 +115,25 @@ function bitmapToRgba(bmp: ImageBitmap, maxSide: number | null): RgbaImage {
   return { data: new Uint8Array(d.data.buffer.slice(0)), w, h };
 }
 
+/** Un fotograma de más de 8 bits a RGBA de 16 bits, en un worker. */
+async function deepToRgba(frame: DeepFrame): Promise<RgbaImage> {
+  const r = await run('deep_frame', { frame, rgba16: true }, frameTransfer(frame));
+  if (!r.rgba16) throw new Error('The frame converter returned no pixels.');
+  return { data: r.rgba16, w: r.w, h: r.h, deep: true };
+}
+
+/** Lo que entrega el decodificador, a RGBA: a 16 bits los planos de más de
+ *  8 (siempre a resolución nativa), a 8 el resto. */
+function toRgba(image: ImageBitmap | DeepFrame, maxSide: number | null): Promise<RgbaImage> {
+  return image instanceof ImageBitmap
+    ? Promise.resolve(bitmapToRgba(image, maxSide))
+    : deepToRgba(image);
+}
+
 /** Agrupa por archivo los fotogramas de video y decodifica cada grupo en
- *  una pasada, en orden de tiempo, entregando (ref, imagen). */
+ *  una pasada, en orden de tiempo, entregando (ref, imagen). A resolución
+ *  nativa (`maxSide` null) los de más de 8 bits salen en 16; las vistas
+ *  previas, en 8. */
 async function decodeGrouped(
   refs: VideoRef[],
   maxSide: number | null,
@@ -128,7 +149,8 @@ async function decodeGrouped(
     await decodeVideoFrames(
       file,
       list.map((r) => r.t),
-      (i, bmp) => onFrame(list[i], bitmapToRgba(bmp, maxSide)),
+      async (i, image) => onFrame(list[i], await toRgba(image, maxSide)),
+      maxSide === null && !!list[0].deep,
     );
   }
 }
@@ -160,12 +182,18 @@ export async function prefetchPreviews(idxs: number[]): Promise<void> {
   });
 }
 
-/** Un fotograma de video decodificado él solo. */
-async function decodeOne(ref: VideoRef): Promise<ImageBitmap> {
-  let out: ImageBitmap | null = null;
-  await decodeVideoFrames(ref.file, [ref.t], (_i, bmp) => {
-    out = bmp;
-  });
+/** Un fotograma de video decodificado él solo; `deep`: en sus planos de
+ *  más de 8 bits, si los tiene. */
+async function decodeOne(ref: VideoRef, deep = false): Promise<ImageBitmap | DeepFrame> {
+  let out: ImageBitmap | DeepFrame | null = null;
+  await decodeVideoFrames(
+    ref.file,
+    [ref.t],
+    (_i, image) => {
+      out = image;
+    },
+    deep && !!ref.deep,
+  );
   if (!out) throw new Error('The video frame could not be decoded.');
   return out;
 }
@@ -176,7 +204,7 @@ export async function framePng(idx: number): Promise<Blob> {
   const f = project.frames[idx];
   if (f.blob) return f.blob;
   if (!f.video) throw new Error(`Frame ${f.name} has no image.`);
-  const image = await decodeOne(f.video);
+  const image = await decodeOne(f.video, true);
   const r = await run('encode_frame', { image, png: true }, frameTransfer(image));
   if (!r.png) throw new Error('The frame encoder returned no PNG.');
   return r.png;
@@ -230,17 +258,15 @@ export function framePngs(idxs: number[]): FramePngs {
       await decodeVideoFrames(
         file,
         list.map((e) => e.ref.t),
-        async (k, bmp) => {
+        async (k, image) => {
           if (cancelled) {
-            bmp.close();
+            if (image instanceof ImageBitmap) image.close();
             throw new Error('cancelled');
           }
-          const job = run('encode_frame', { image: bmp, png: true }, frameTransfer(bmp)).then(
-            (r) => {
-              if (!r.png) throw new Error('The frame encoder returned no PNG.');
-              return r.png;
-            },
-          );
+          const job = run('encode_frame', { image, png: true }, frameTransfer(image)).then((r) => {
+            if (!r.png) throw new Error('The frame encoder returned no PNG.');
+            return r.png;
+          });
           deliver(list[k].i, job);
           const done: Promise<void> = job
             .then(
@@ -260,6 +286,7 @@ export function framePngs(idxs: number[]): FramePngs {
             });
           }
         },
+        !!list[0].ref.deep,
       );
     }
   };
@@ -338,7 +365,7 @@ export async function frameImageData(idx: number, full: boolean): Promise<RgbaIm
       prefetched.delete(f.video);
       out = pre;
     } else {
-      out = bitmapToRgba(await decodeOne(f.video), full ? null : 640);
+      out = await toRgba(await decodeOne(f.video, full), full ? null : 640);
     }
   } else if (!f.blob) {
     throw new Error(`Frame ${f.name} has no image.`);

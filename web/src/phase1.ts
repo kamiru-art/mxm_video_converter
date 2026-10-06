@@ -239,6 +239,9 @@ export function mountPhase1(root: HTMLElement): void {
   const endIn = el('input', { type: 'number', min: 0, step: 0.1, placeholder: 'end' });
   const fpsIn = el('input', { type: 'number', min: 0, step: 0.1, value: 4, placeholder: 'fps' });
   const allFrames = check('ALL frames (frame by frame)', false);
+  // solo aparece con una fuente de más de 8 bits (ver el sondeo, más abajo)
+  const fast8 = check('Fast 8-bit decode (drops the extra bits of this video)', false);
+  fast8.label.style.display = 'none';
   // con TODOS los frames el fps no aplica: se apaga para que se entienda
   allFrames.input.addEventListener('change', () => {
     fpsIn.disabled = allFrames.input.checked;
@@ -276,6 +279,7 @@ export function mountPhase1(root: HTMLElement): void {
     loadedVideo = video;
     await clearFrameCache();
     let cached = 0; // fotogramas que dejó ffmpeg.wasm como PNG (en disco)
+    let deepCount = 0; // fotogramas de más de 8 bits
     try {
       const eta = etaClock();
       const meta = await extractFrames(video, {
@@ -283,25 +287,31 @@ export function mountPhase1(root: HTMLElement): void {
         end: endIn.value ? parseFloat(endIn.value) : undefined,
         fps: allFrames.input.checked ? null : parseFloat(fpsIn.value) || null,
         signal: ctl.signal,
+        fast8: fast8.input.checked,
         // WebCodecs: sin PNG, el fotograma vive en el video (project.ts).
         // ffmpeg.wasm no lo honra y entrega el PNG, que va a la caché de disco
         lazy: true,
-        onFrame: async (blob, thumb, t, i, w, h) => {
+        onFrame: async (blob, thumb, t, i, w, h, deep) => {
           // se guarda el origen (video + posición): la etiqueta "Original
           // file name" se construye después con el control de dígitos
           const videoStem = video.name.replace(/\.[^.]+$/, '');
           const name = `${videoStem}_${String(i + 1).padStart(6, '0')}.png`;
           if (blob) cached++;
+          if (deep) deepCount++;
           project.frames.push({
             name,
             videoStem,
             seq: i,
             blob: blob ? await storeFrame(name, blob) : null,
-            video: blob ? undefined : { file: video, t },
+            // más de 8 bits: la hoja y los PNG los reciben en 16 (el PNG de
+            // ffmpeg ya es de 16; el del video se vuelve a decodificar así)
+            video: blob ? undefined : { file: video, t, deep },
             thumb,
             w,
             h,
             hasAlpha: false,
+            sixteen: deep,
+            needsWasmDecode: deep && !!blob,
           });
         },
         onProgress: (i, est) =>
@@ -325,11 +335,14 @@ export function mountPhase1(root: HTMLElement): void {
             ? `Stopped after ${meta.count} frame(s). They stay loaded: change the range or the fps and extract again.`
             : 'Stopped before the first frame.',
         );
-      } else if (cached) {
-        toast(`${meta.count} frames extracted losslessly (PNG).`, 'ok');
       } else {
+        const depthNote = deepCount
+          ? ' They keep every bit of the video: 16 bits per channel.'
+          : '';
         toast(
-          `${meta.count} frames read from the video. They are decoded again, at full quality, when the sheets are made.`,
+          cached
+            ? `${meta.count} frames extracted losslessly (PNG).${depthNote}`
+            : `${meta.count} frames read from the video. They are decoded again, at full quality, when the sheets are made.${depthNote}`,
           'ok',
         );
       }
@@ -376,7 +389,19 @@ export function mountPhase1(root: HTMLElement): void {
           const via = p.fallback
             ? '. This browser cannot decode this codec itself, so the built-in converter will do it: much slower (minutes for a 4K clip). Chrome or Edge decode it in hardware'
             : '';
-          videoInfo.textContent = `${pendingVideo.name}: ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}${via}. Pick range/fps and press “Extract”.`;
+          // más de 8 bits: se conservan, y si eso cuesta pasar por el
+          // conversor lento se dice, con la salida rápida a mano
+          const deep = (p.depth ?? 8) > 8;
+          fast8.label.style.display = deep ? '' : 'none';
+          fast8.input.checked = false;
+          const bits = deep
+            ? `. ${p.depth}-bit video: the frames keep all ${p.depth} bits (16-bit PNG and sheets)${
+                p.deepNeedsFallback
+                  ? '. This browser decodes it fast only at 8 bits, so keeping them goes through the built-in converter: much slower (minutes for a 4K clip). “Fast 8-bit decode” trades the extra bits for speed'
+                  : ''
+              }`
+            : '';
+          videoInfo.textContent = `${pendingVideo.name}: ${p.width}×${p.height}, ${p.duration.toFixed(1)} s${p.fps ? `, ${p.fps.toFixed(2)} fps` : ''}${via}${bits}. Pick range/fps and press “Extract”.`;
           endIn.value = p.duration.toFixed(1);
           extractBtn.disabled = false;
         } catch (e) {
@@ -895,7 +920,9 @@ export function mountPhase1(root: HTMLElement): void {
       if (seq !== sizeSeq) return; // llegó otra actualización mientras tanto
       const pagePx = Number(info.page_w) * Number(info.page_h);
       const pages = selectIndices(plan.numPages, ph1.sheets_include, ph1.sheets_exclude).length;
-      const sheetRgb = pages * pagePx * 3;
+      // una hoja con algún fotograma de más de 8 bits sale en 16
+      const deepSheets = plan.printed.some((p) => project.frames[p.frameIdx].sixteen);
+      const sheetRgb = pages * pagePx * 3 * (deepSheets ? 2 : 1);
       const parts: [string, number][] = [];
       if (s.fmt_png) parts.push(['PNG sheets', sheetRgb * 0.26]);
       if (s.fmt_tiff) parts.push(['TIFF sheets', sheetRgb]);
@@ -904,7 +931,7 @@ export function mountPhase1(root: HTMLElement): void {
         let frames = 0;
         for (const p of plan.printed) {
           const f = project.frames[p.frameIdx];
-          frames += f.blob ? f.blob.size : f.w * f.h * 3 * 0.41;
+          frames += f.blob ? f.blob.size : f.w * f.h * 3 * 0.41 * (f.sixteen ? 2 : 1);
         }
         parts.push([`${plan.printed.length} frame files`, frames]);
       }
@@ -1357,6 +1384,7 @@ export function mountPhase1(root: HTMLElement): void {
       field('fps', fpsIn),
     ),
     allFrames.label,
+    fast8.label,
     el('div', { class: 'btn-row' }, extractBtn, stopBtn),
     extractProg.root,
 

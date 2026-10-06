@@ -461,3 +461,122 @@ export async function verifyCompressed(
   }
   return { ok: Object.values(checks).every(Boolean), checks, outputs: {}, log };
 }
+
+// ── video de más de 8 bits ───────────────────────────────────────────
+
+export interface DeepFact {
+  /** El PNG de 16 bits del primer fotograma, en `dir`. */
+  file: string;
+  /** La muestra de la que salió, en dist/. */
+  source: string;
+  w: number;
+  h: number;
+  /** La mitad de arriba tiene croma neutra: ahí el error es solo redondeo. */
+  neutral: boolean;
+}
+
+/** El primer fotograma de `file` en crudo, en `pixFmt`, con el giro de los
+ *  metadatos aplicado (ffmpeg lo hace por defecto). */
+function firstFrame(file: string, pixFmt: string): Buffer {
+  const r = spawnSync(
+    'ffmpeg',
+    [
+      ...['-v', 'error', '-i', file, '-map', '0:v:0', '-frames:v', '1'],
+      ...['-f', 'rawvideo', '-pix_fmt', pixFmt, '-'],
+    ],
+    { maxBuffer: 1 << 28 },
+  );
+  if (r.status !== 0) throw new Error(`ffmpeg ${file}: ${r.stderr}`);
+  return r.stdout;
+}
+
+/** Cada fotograma de 10 bits que dejó la página contra la fuente, decodificada
+ *  por el ffmpeg de la máquina. La referencia NO es el rgb48le de swscale:
+ *  escala un 0,4 % corto (el blanco de 10 bits, 940, le da 65283 y no 65535)
+ *  y en colores saturados se aparta mucho más. Es la definición de la norma
+ *  (BT.709 o BT.601 según la etiqueta de la fuente, rango limitado o
+ *  completo) aplicada a los planos YUV que decodifica ffmpeg, con la croma
+ *  subida a 4:4:4 por swscale, que interpola a su manera y no como el núcleo:
+ *  - PNG de 16 bits, del tamaño de la fuente con su giro;
+ *  - donde la croma es neutra en la fuente y el PNG es gris (ahí la
+ *    interpolación de la croma no cuenta) cada muestra es exactamente la de la norma, ±1 de 65535 de redondeo; en
+ *    los clips de rampa (`neutral`) eso es al menos el 40 % del fotograma, y
+ *    un 8 bits ensanchado falla aquí por varios códigos de 10 bits;
+ *  - en todo el fotograma, error medio por debajo de un código de 10 bits:
+ *    una matriz equivocada, un fotograma equivocado o canales cruzados lo
+ *    pasan de largo. */
+export async function verifyDeep(
+  dir: string,
+  distDir: string,
+  facts: DeepFact[],
+): Promise<LosslessResult> {
+  const log: string[] = ['--- 10-bit video frames, checked with the local ffmpeg'];
+  const checks: Record<string, boolean> = {};
+  const outputs: Record<string, string> = {};
+  for (const f of facts) {
+    const key = `deep_${f.file.replace(/\.png$/, '')}`;
+    const png = join(dir, f.file);
+    const src = join(distDir, f.source);
+    if (!existsSync(png) || !existsSync(src)) {
+      checks[key] = false;
+      log.push(`✗ ${f.file}: missing (${existsSync(png) ? f.source : f.file})`);
+      continue;
+    }
+    const fmt = probe(png).find((s) => s.codec_type === 'video')?.pix_fmt ?? '';
+    const sv = probe(src).find((s) => s.codec_type === 'video') as Stream & {
+      color_range?: string;
+      color_space?: string;
+    };
+    const got = raw(png, 'rgb48le');
+    const [w, h] = size(png);
+    const sizeOk = w === f.w && h === f.h;
+    const csp = sv?.color_space ?? '';
+    const bt709 =
+      csp === 'bt709' || (!/^(smpte170m|bt470bg)$/.test(csp) && (sv?.height ?? 0) > 576);
+    const [kr, kb] = bt709 ? [0.2126, 0.0722] : [0.299, 0.114];
+    const kg = 1 - kr - kb;
+    const full = sv?.color_range === 'pc';
+    let mean = Number.POSITIVE_INFINITY;
+    let grey = 0;
+    let greyMax = 0;
+    if (sizeOk) {
+      const yuv = firstFrame(src, 'yuv444p10le');
+      const n = w * h;
+      let sum = 0;
+      for (let px = 0; px < n; px++) {
+        const code = (k: number): number => yuv.readUInt16LE((k * n + px) * 2);
+        const l = full ? code(0) / 1023 : (code(0) - 64) / 876;
+        const cb = full ? (code(1) - 512) / 1023 : (code(1) - 512) / 896;
+        const cr = full ? (code(2) - 512) / 1023 : (code(2) - 512) / 896;
+        const r = l + 2 * (1 - kr) * cr;
+        const b = l + 2 * (1 - kb) * cb;
+        const want = [r, (l - kr * r - kb * b) / kg, b].map((v) =>
+          Math.round(Math.min(1, Math.max(0, v)) * 65535),
+        );
+        const px3 = [0, 1, 2].map((c) => got.readUInt16LE(px * 6 + c * 2));
+        for (let c = 0; c < 3; c++) sum += Math.abs(px3[c] - want[c]);
+        // neutra en los dos lados: gris en el PNG y U = V = 512 en la fuente
+        const neutral = code(1) === 512 && code(2) === 512;
+        if (neutral && px3[0] === px3[1] && px3[0] === px3[2]) {
+          grey++;
+          greyMax = Math.max(greyMax, ...[0, 1, 2].map((c) => Math.abs(px3[c] - want[c])));
+        }
+      }
+      mean = sum / (n * 3) / 64;
+    }
+    const greyShare = grey / (w * h);
+    const ok =
+      /^rgba?(48|64)/.test(fmt) &&
+      sizeOk &&
+      mean < 1 &&
+      greyMax <= 1 &&
+      (!f.neutral || greyShare >= 0.4);
+    checks[key] = ok;
+    outputs[`deep_video/${f.file}.rgb48`] = createHash('sha256').update(got).digest('hex');
+    log.push(
+      `${ok ? '✓' : '✗'} ${f.source} → ${f.file}: ${fmt} ${w}×${h} (want ${f.w}×${f.h}), ${bt709 ? 'BT.709' : 'BT.601'}; grey ${(greyShare * 100).toFixed(0)} %${f.neutral ? ' (want ≥ 40 %)' : ''} at most ${greyMax}/65535 off the standard (want ≤ 1); whole frame ${mean.toFixed(2)} codes of 10 bits off (want < 1)`,
+    );
+  }
+  if (!facts.length) log.push('· no 10-bit frames reached the runner');
+  return { ok: Object.values(checks).every(Boolean), checks, outputs, log };
+}
