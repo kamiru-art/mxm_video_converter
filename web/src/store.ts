@@ -13,6 +13,28 @@ const KEY = 'mxm-studio-v1';
 /** La RAM que el usuario declara en la fase ②: una clave aparte. */
 export const RAM_KEY = 'mxm_ram_gb';
 
+/** La RAM que el usuario declaró en la fase ②, o '' si no declaró nada.
+ *  Con los datos del sitio bloqueados, leer `localStorage` lanza; sin el
+ *  try, la fase ② no llegaba a montarse. */
+export function loadRam(): string {
+  try {
+    return localStorage.getItem(RAM_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Guarda (o borra, con '') la RAM declarada. No lanza: sin almacenamiento
+ *  vale para esta sesión y se vuelve a pedir la próxima. */
+export function saveRam(gb: string): void {
+  try {
+    if (gb) localStorage.setItem(RAM_KEY, gb);
+    else localStorage.removeItem(RAM_KEY);
+  } catch {
+    /* sin almacenamiento */
+  }
+}
+
 /** Qué guarda cada clase de perfil. */
 export interface ProfileMap {
   presets: PresetProfile;
