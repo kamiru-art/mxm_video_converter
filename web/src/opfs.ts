@@ -94,7 +94,10 @@ let tabLock: Promise<boolean> | null = null;
 
 /** Toma el candado de esta pestaña y no lo suelta mientras viva. true si lo
  *  tiene: hasta entonces no se escribe nada, o una pestaña que barriera en
- *  ese momento vería la carpeta sin dueño y la borraría. */
+ *  ese momento vería la carpeta sin dueño y la borraría. Se toma al escribir
+ *  por primera vez, no al abrir: una pestaña que no guarda nada no lo
+ *  necesita, y hay navegadores que no guardan en la caché de atrás/adelante
+ *  una página con un candado tomado. */
 function holdTabLock(): Promise<boolean> {
   if (!tabLock) {
     tabLock = new Promise<boolean>((resolve) => {
@@ -178,7 +181,9 @@ async function removeOld(
  *  reciente (CLOSED_OUTPUT_AGE_MS). Nunca toca la carpeta de una pestaña
  *  viva, ni la de esta. */
 export async function sweepStorage(): Promise<void> {
-  if (!(await holdTabLock())) return;
+  // sin candado propio: la carpeta de esta pestaña, si ya existe, se salta
+  // por su id
+  if (!supported()) return;
   try {
     const root = await navigator.storage.getDirectory();
     let tabs: FileSystemDirectoryHandle | null = null;
