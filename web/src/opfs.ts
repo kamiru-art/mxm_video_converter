@@ -96,8 +96,8 @@ let tabLock: Promise<boolean> | null = null;
  *  tiene: hasta entonces no se escribe nada, o una pestaña que barriera en
  *  ese momento vería la carpeta sin dueño y la borraría. Se toma al escribir
  *  por primera vez, no al abrir ni al vaciar (tabDir): una pestaña que no
- *  guarda nada no lo necesita, y hay navegadores que no guardan en la caché
- *  de atrás/adelante una página con un candado tomado. */
+ *  guarda nada no lo necesita, y Firefox no guarda en la caché de
+ *  atrás/adelante una página con un candado tomado. */
 function holdTabLock(): Promise<boolean> {
   if (!tabLock) {
     tabLock = new Promise<boolean>((resolve) => {
@@ -116,22 +116,40 @@ function holdTabLock(): Promise<boolean> {
   return tabLock;
 }
 
-/** Safari suelta los candados de una página que entra en la caché de
+let retaking: Promise<void> | null = null;
+
+/** Safari 26 suelta los candados de una página que entra en la caché de
  *  atrás/adelante y no los devuelve al volver: sin el suyo, la carpeta de
- *  esta pestaña parecería de una pestaña cerrada y la siguiente que se abra
- *  la borraría. Al volver se toma otra vez, si de verdad se perdió (Chrome y
- *  Firefox lo conservan, y pedirlo dos veces se quedaría esperando para
- *  siempre). */
-async function retakeTabLock(): Promise<void> {
-  if (!tabLock || !(await tabLock)) return;
-  try {
-    const { held } = await navigator.locks.query();
-    if ((held ?? []).some((l) => l.name === `${LOCK_PREFIX}${TAB_ID}`)) return;
-  } catch {
-    return;
-  }
-  tabLock = null;
-  await holdTabLock();
+ *  esta pestaña parecería de una pestaña cerrada y cualquier pestaña que se
+ *  abriera después la borraría. Al volver se toma otra vez. Esto no protege
+ *  el rato que la página pasa en la caché: si en ese rato se abre la
+ *  aplicación en otra pestaña, la carpeta se borra igual y el ZIP lo dice
+ *  ("is no longer in this browser's storage").
+ *
+ *  Se pide con `ifAvailable`, que no espera: si el candado sigue siendo
+ *  suyo (Chrome lo conserva; Firefox no guarda en la caché una página con
+ *  un candado), no se concede y no pasa nada. No con `query()`: Chrome 146
+ *  saca de la caché a toda página cuyo candado alguien consulta, y volver
+ *  atrás en otra pestaña de la aplicación la recargaría. */
+function retakeTabLock(): Promise<void> {
+  retaking ??= (async () => {
+    if (!tabLock || !(await tabLock)) return;
+    const regained = await new Promise<boolean>((resolve) => {
+      navigator.locks
+        .request(`${LOCK_PREFIX}${TAB_ID}`, { ifAvailable: true }, (lock) => {
+          resolve(!!lock);
+          // concedido: se había perdido, y ahora es suyo hasta que se cierre
+          return lock ? new Promise<void>(() => {}) : undefined;
+        })
+        .catch(() => resolve(false)); // vuelta a la caché a mitad: la próxima vez
+    });
+    // la carpeta pudo borrarse mientras tanto: las carpetas se vuelven a
+    // abrir (y a crear), o lo nuevo iría a parar a memoria sin avisar
+    if (regained) dirPromises.clear();
+  })().finally(() => {
+    retaking = null;
+  });
+  return retaking;
 }
 
 if (typeof window !== 'undefined')
@@ -530,7 +548,11 @@ export function holdFrames(): () => void {
 /** Vacía la caché. Al empezar una extracción y al montar la fase: un
  *  proyecto no sobrevive a la recarga, así que sus archivos tampoco. */
 export function clearFrameCache(dirName = DIR): Promise<void> {
-  if (readers > 0) {
+  // los recompuestos (EXPORT) sí: la exportación que los vacía es la misma
+  // que tiene tomado el préstamo, y los de la anterior ya no los lee nadie.
+  // Con el préstamo de por medio no se borraban nunca y cada exportación
+  // sumaba otra copia de la secuencia en el disco
+  if (readers > 0 && dirName !== EXPORT) {
     console.warn(`[opfs] "${dirName}" kept: an export is reading it`);
     return Promise.resolve();
   }
