@@ -152,6 +152,36 @@ function holdTabLock(): Promise<boolean> {
   return tabLock;
 }
 
+/** La marca de una pestaña que se cerró (o se recargó) de verdad, y no
+ *  fue a la caché de atrás/adelante: su carpeta se barre sin esperar
+ *  ALIVE_GRACE_MS. En localStorage porque `pagehide` no espera a nada
+ *  asíncrono. */
+const CLOSED_PREFIX = 'mxm-closed-';
+
+function markClosed(id: string): void {
+  try {
+    localStorage.setItem(CLOSED_PREFIX + id, '1');
+  } catch {
+    /* sin localStorage: se barre una hora más tarde */
+  }
+}
+
+function isMarkedClosed(id: string): boolean {
+  try {
+    return localStorage.getItem(CLOSED_PREFIX + id) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function unmarkClosed(id: string): void {
+  try {
+    localStorage.removeItem(CLOSED_PREFIX + id);
+  } catch {
+    /* sin localStorage */
+  }
+}
+
 let beating = false;
 
 /** Toca el archivo `alive` de esta pestaña. */
@@ -172,7 +202,12 @@ function startHeartbeat(): void {
   if (beating) return;
   beating = true;
   void beat();
-  setInterval(() => void beat(), ALIVE_EVERY_MS);
+  // y de paso barre: lo de una pestaña cerrada sin marca se libera una hora
+  // más tarde aunque nadie vuelva a abrir la aplicación
+  setInterval(() => {
+    void beat();
+    void sweepStorage();
+  }, ALIVE_EVERY_MS);
 }
 
 let retaking: Promise<void> | null = null;
@@ -207,10 +242,19 @@ function retakeTabLock(): Promise<void> {
   return retaking;
 }
 
-if (typeof window !== 'undefined')
+if (typeof window !== 'undefined') {
   window.addEventListener('pageshow', (e) => {
-    if (e.persisted) void retakeTabLock();
+    if (e.persisted) {
+      unmarkClosed(TAB_ID);
+      void retakeTabLock();
+    }
   });
+  // `persisted` en false: la página no va a la caché de atrás/adelante, se
+  // cierra o se recarga, y su carpeta ya no la lee nadie
+  window.addEventListener('pagehide', (e) => {
+    if (!e.persisted && tabLock) markClosed(TAB_ID);
+  });
+}
 
 /** La carpeta de esta pestaña, o null si no hay disco donde escribir (o,
  *  con `create` en false, si todavía no escribió nada: sin escribir, la
@@ -288,7 +332,10 @@ async function removeOld(
 async function recentlyAlive(dir: FileSystemDirectoryHandle): Promise<boolean> {
   try {
     const f = await (await dir.getFileHandle(ALIVE)).getFile();
-    return Date.now() - f.lastModified < ALIVE_GRACE_MS;
+    // una fecha en el futuro (el reloj del sistema se atrasó) no cuenta
+    // como reciente para siempre
+    const age = Date.now() - f.lastModified;
+    return age > -ALIVE_EVERY_MS && age < ALIVE_GRACE_MS;
   } catch {
     return false; // sin señal (o de una versión anterior, que no la daba)
   }
@@ -335,24 +382,36 @@ export async function sweepStorage(): Promise<void> {
     }
     if (tabs) {
       const tabsDir = tabs;
-      for (const [name, h] of await listEntries(tabsDir)) {
+      const entries = await listEntries(tabsDir);
+      for (const [name, h] of entries) {
         if (h.kind !== 'directory' || name === TAB_ID) continue;
         try {
           const dir = h as FileSystemDirectoryHandle;
-          if (await recentlyAlive(dir)) continue;
+          if (!isMarkedClosed(name) && (await recentlyAlive(dir))) continue;
           // libre: su pestaña se cerró. Tomado: vive (o otra pestaña la
           // está barriendo ahora mismo). La promesa de request() espera a
           // que termine el vaciado
           await navigator.locks
             .request(`${LOCK_PREFIX}${name}`, { ifAvailable: true }, async (lock) => {
               // vacía ya, o la próxima vez (le queda una descarga reciente)
-              if (lock && (await emptyClosedTab(dir)))
+              if (lock && (await emptyClosedTab(dir))) {
                 await tabsDir.removeEntry(name).catch(() => {});
+                unmarkClosed(name);
+              }
             })
             .catch(() => {});
         } catch {
           /* ya no está */
         }
+      }
+      // marcas de carpetas que ya no existen
+      try {
+        const names = new Set(entries.map(([n]) => n));
+        for (const key of Object.keys(localStorage))
+          if (key.startsWith(CLOSED_PREFIX) && !names.has(key.slice(CLOSED_PREFIX.length)))
+            localStorage.removeItem(key);
+      } catch {
+        /* sin localStorage */
       }
     }
     for (const name of LEGACY_DIRS) {
@@ -611,38 +670,77 @@ export function storeProcessedFrame(label: string, png: Bytes | Blob): Promise<B
   return storeFrame(`${++processedSeq}-${sanitizeLabel(label)}.png`, png, PROCESSED);
 }
 
-let readers = 0;
+/** Un préstamo: por caché, la generación desde la que no se borra nada
+ *  (`exact`: sólo ésa). */
+interface Hold {
+  from: Map<string, number>;
+  exact: boolean;
+}
+const holds = new Set<Hold>();
+
+/** ¿Lee alguien la carpeta `folder` (`processed-3`…)? */
+function pinned(folder: string): boolean {
+  const m = /^(.*)-(\d+)$/.exec(folder);
+  if (!m) return false;
+  const gen = Number(m[2]);
+  for (const h of holds) {
+    const from = h.from.get(m[1]);
+    if (from !== undefined && (h.exact ? gen === from : gen >= from)) return true;
+  }
+  return false;
+}
+
+/** Lo que devuelve holdFrames: llamarlo suelta el préstamo; `narrow()` lo
+ *  deja sólo en las carpetas que había al tomarlo (para lo que se queda
+ *  mirando esos fotogramas, como la vista previa, sin frenar el borrado de
+ *  lo que venga después). */
+export interface FramesHold {
+  (): void;
+  narrow(): void;
+}
 
 /** Mientras una exportación (o el ZIP de la fase ②) lee los fotogramas del
  *  disco, NADIE en esta pestaña los borra. La fase ② los borra al montarse,
  *  al vaciar su informe y al reprocesar, y la ① al extraer: cualquiera de
  *  esas cosas, hecha mientras el muxer copiaba, le quitaba los archivos de
- *  debajo. Lo que se vacía mientras tanto se borra al soltar el último
- *  préstamo. Devuelve la función que lo suelta. (Las otras pestañas no los
- *  tocan: cada una tiene su carpeta, ver TABS.) */
-export function holdFrames(): () => void {
-  readers++;
+ *  debajo. Lo vaciado mientras tanto se borra al soltar el préstamo. (Las
+ *  otras pestañas no los tocan: cada una tiene su carpeta, ver TABS.) */
+export function holdFrames(): FramesHold {
+  const hold: Hold = {
+    from: new Map([DIR, PROCESSED, EXPORT].map((c) => [c, generations.get(c) ?? 0])),
+    exact: false,
+  };
+  holds.add(hold);
   let released = false;
-  return () => {
+  const release = (() => {
     if (released) return;
     released = true;
-    readers--;
-    if (readers === 0) void flushDoomed();
+    holds.delete(hold);
+    void flushDoomed();
+  }) as FramesHold;
+  release.narrow = () => {
+    hold.exact = true;
+    void flushDoomed();
   };
+  return release;
 }
 
-/** Borra las carpetas vaciadas, si nadie las está leyendo. */
+/** Borra las carpetas vaciadas que nadie lee. Una que no se deja borrar
+ *  (un archivo suyo todavía abierto) vuelve a la lista: se intenta otra vez
+ *  en el próximo vaciado o préstamo soltado, o la carpeta se quedaría para
+ *  siempre (las generaciones no repiten nombre). */
 function flushDoomed(): Promise<void> {
-  if (readers > 0 || doomed.size === 0) return clearing;
-  const folders = [...doomed];
-  doomed.clear();
+  const ready = [...doomed].filter((f) => !pinned(f));
+  if (!ready.length) return clearing;
+  for (const f of ready) doomed.delete(f);
   clearing = clearing.then(async () => {
     const tab = await tabDir(false);
-    for (const folder of folders) {
+    if (!tab) return;
+    for (const folder of ready) {
       try {
-        await tab?.removeEntry(folder, { recursive: true });
-      } catch {
-        /* no existía, o el navegador no deja */
+        await tab.removeEntry(folder, { recursive: true });
+      } catch (e) {
+        if (!(e instanceof DOMException && e.name === 'NotFoundError')) doomed.add(folder);
       }
     }
   });

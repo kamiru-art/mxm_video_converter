@@ -313,38 +313,64 @@ async function runFlow(
     const opfs = await driver.run<boolean>(
       `return !!navigator.storage?.getDirectory && typeof FileSystemFileHandle !== 'undefined' && 'createWritable' in FileSystemFileHandle.prototype && !!navigator.locks;`,
     );
-    // C se abre: su barrido NO toca la carpeta de B, que dio señales de vida
-    // hace un momento (podría ser una página en la caché de atrás/adelante)
+    // una página en la caché de atrás/adelante, simulada: una carpeta con
+    // recortes y una señal de vida reciente, sin candado (Safari 26 lo
+    // suelta) y sin la marca de cierre que deja una pestaña que se cierra
+    if (opfs)
+      await driver.run(`
+        const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs');
+        const d = await t.getDirectoryHandle('cached-page', { create: true });
+        const write = async (dir, name) => { const w = await (await dir.getFileHandle(name, { create: true })).createWritable(); await w.write(new Uint8Array([1])); await w.close(); };
+        await write(await d.getDirectoryHandle('processed-0', { create: true }), '1-video_001.png');
+        await write(d, 'alive');
+        return true;`);
+    // C se abre y barre: B se cerró (dejó su marca) y se vacía en el acto;
+    // la página "en la caché" se queda
     const tabC = await driver.newTab();
     await openApp(tabC, port, 'scans');
-    const kept = await tabC.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF(idB)}`);
+    const afterC = {
+      b: await tabC.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF(idB)}`),
+      cached: await tabC.run<string[]>(FOLDER_OF('cached-page')),
+    };
+    const outputs = (l: string[]): string => {
+      const other = l.filter((f) => !f.startsWith('out/'));
+      return other.length
+        ? `left: ${other.join(', ')}`
+        : `${l.filter((f) => f.startsWith('out/') && f !== 'out/').length} recent output(s) kept, nothing else`;
+    };
     check(
-      'a closed tab is kept while its last sign of life is recent',
+      'a closed tab leaves no frames on disk',
       again === 'processed again' &&
-        (opfs ? !!idB && kept.some((f) => /^processed-\d+\//.test(f)) : !idB),
+        (opfs ? !!idB && afterC.b.every((f) => f.startsWith('out/')) : !idB),
       opfs
-        ? `tab B's folder ${idB ? `holds ${kept.filter((f) => /\.png$/.test(f)).length} PNG files` : 'was not found'}`
+        ? `tab B's folder: ${outputs(afterC.b)}`
         : 'no private disk in this browser: frames stay in memory',
     );
-    // sin señal reciente (se borra su archivo alive, como si hubiera pasado
-    // una hora) y sin candado (se cerró): el barrido de la siguiente pestaña
+    check(
+      'a page that may be in the back/forward cache (recent sign of life, no lock) is kept',
+      !opfs || afterC.cached.includes('processed-0/1-video_001.png'),
+      opfs ? `${afterC.cached.length} entries kept` : 'no private disk in this browser',
+    );
+    // una hora más tarde (se borra su señal de vida): la siguiente pestaña
     // que se abre la vacía
-    let swept: string[] = [];
-    if (opfs && idB) {
+    let cachedLater: string[] = [];
+    if (opfs) {
       await tabC.run(
-        `const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs'); await (await t.getDirectoryHandle('${idB}')).removeEntry('alive'); return true;`,
+        `const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs'); await (await t.getDirectoryHandle('cached-page')).removeEntry('alive'); return true;`,
       );
       const tabD = await driver.newTab();
       await openApp(tabD, port, 'sheets');
-      swept = await tabD.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF(idB)}`);
+      cachedLater = await tabD.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF('cached-page')}`);
       await tabD.close();
     }
     check(
-      'a closed tab with no recent sign of life leaves no frames on disk',
-      !opfs || (!!idB && swept.every((f) => f.startsWith('out/'))),
+      'once its sign of life is an hour old, it is swept',
+      !opfs || cachedLater.length === 0,
       opfs
-        ? `tab B's folder after the sweep: ${swept.join(', ') || 'gone'}`
-        : 'no private disk in this browser: frames stay in memory',
+        ? cachedLater.length
+          ? `left: ${cachedLater.join(', ')}`
+          : 'gone'
+        : 'no private disk in this browser',
     );
     const third = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
     const zipA2 = third.b64 ? await readProcessedZip(third.b64) : null;

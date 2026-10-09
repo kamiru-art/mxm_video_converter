@@ -73,17 +73,22 @@ OPFS belongs to the origin, not to the tab. Each tab writes under
 `tabs/<id>/` (frames, scan crops, export frames, outputs) and clears only
 its own folder. A tab takes a Web Lock named after its id when it first
 writes and holds it for as long as it lives, and it touches its `alive`
-file every five minutes (timers stop in the back/forward cache). At
-start-up, `sweepStorage` empties a folder only when its `alive` is more than
-an hour old AND its lock is free, probed with `ifAvailable` and kept while
-it deletes; outputs younger than ten minutes, which a download may still
-read, stay. The hour protects pages in the back/forward cache: Safari 26
-drops their locks, and querying a lock held by a cached page makes Chrome
-146+ evict it (`WebLocksContention`, measured in Chrome 155), so nothing
-calls `navigator.locks.query()`. A page back from the cache takes its lock
-again (`ifAvailable`). Each cache lives in one folder per generation
-(`processed-0`, `processed-1`…): clearing moves on to the next one, and the
-old one is deleted once no export or ZIP holds the frames (`holdFrames`).
+file every five minutes (timers stop in the back/forward cache). A tab that
+really unloads (`pagehide` with `persisted` false: closed or reloaded)
+leaves a mark in `localStorage`. `sweepStorage` runs at start-up and with
+every heartbeat; it empties a folder only when it is marked closed or its
+`alive` is more than an hour old, AND its lock is free, probed with
+`ifAvailable` and kept while it deletes; outputs younger than ten minutes,
+which a download may still read, stay. The hour protects pages in the
+back/forward cache: Safari 26 drops their locks, and querying a lock held
+by a cached page makes Chrome 146+ evict it (`WebLocksContention`, measured
+in Chrome 155), so nothing calls `navigator.locks.query()`. A page back
+from the cache takes its lock again (`ifAvailable`). Each cache lives in
+one folder per generation (`processed-0`, `processed-1`…): clearing moves
+on to the next one, and the old one is deleted once no `holdFrames` pins
+it. An export or the scans ZIP pins every generation from the one it
+started with; when an export ends, its hold is narrowed to those
+generations and passed to the in-page preview until the next one.
 The shared folders of older versions are emptied after a day. Until
 2026-10 the folders were shared: opening the app in another tab at
 `#scans` (or "Clear results" there) deleted the first tab's crops, and its
