@@ -69,6 +69,17 @@ OPFS) and held as file-backed Blobs; without OPFS they stay in memory as
 before. Image folders, TIFF and the demo frames are files already and are
 untouched.
 
+OPFS belongs to the origin, not to the tab. Each tab writes under
+`tabs/<id>/` (frames, scan crops, export frames, outputs) and clears only
+its own folder. A live tab holds a Web Lock named after its id for as long
+as it lives; at start-up, `sweepStorage` deletes the folders whose lock is
+gone (closed, reloaded or crashed tabs), keeping outputs younger than ten
+minutes that a download may still read, and empties the shared folders of
+older versions after a day. Until 2026-10 the folders were shared: opening
+the app in another tab at `#scans` (or "Clear results" there) deleted the
+first tab's crops, and its ZIP failed with `NotFoundError` (Chrome, Opera,
+Safari) or `AbortError` (Firefox).
+
 ## 3) Layer/Module Responsibilities
 
 | Layer or module | Owns | Must not own | Evidence |

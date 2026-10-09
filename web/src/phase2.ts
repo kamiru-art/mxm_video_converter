@@ -4,7 +4,7 @@ import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame } from './gen.ts';
 import { generateSheets, resolveCyanCurve } from './gen.ts';
 import { imageInfo } from './imageinfo.ts';
-import { clearProcessedCache, storeProcessedFrame } from './opfs.ts';
+import { clearProcessedCache, holdFrames, storeProcessedFrame } from './opfs.ts';
 import { poolSize, recycleIdle, run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
 import { project } from './project.ts';
@@ -930,6 +930,9 @@ export function mountPhase2(root: HTMLElement): void {
       {
         class: 'btn sun',
         onclick: async () => {
+          // "Clear results" o "Reprocess" a mitad borraban los recortes que
+          // el ZIP estaba leyendo: mientras dure, se quedan en el disco
+          const release = holdFrames();
           try {
             const files = new Map<string, ZipEntryData>();
             for (const [label, png] of project.processedFrames) {
@@ -949,6 +952,8 @@ export function mountPhase2(root: HTMLElement): void {
             // esto, el botón simplemente no hacía nada
             console.error(e);
             toast(`Could not build the ZIP: ${errMsg(e)}`, 'err');
+          } finally {
+            release();
           }
         },
       },

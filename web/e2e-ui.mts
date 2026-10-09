@@ -22,7 +22,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Driver, Viewport } from './e2e-browsers.mts';
@@ -83,6 +84,76 @@ function step(body: string): string {
   return `const ui = window.__ui; ${body}`;
 }
 
+/** Abre la aplicación en `view` y espera a que se monte. */
+async function openApp(driver: Driver, port: number, view: string): Promise<void> {
+  await driver.open(`http://127.0.0.1:${port}/#${view}`);
+  await driver.run(`
+    const t0 = Date.now();
+    while (!document.querySelector('#view-${view} .paper')) {
+      if (Date.now() - t0 > 30000) throw new Error('the page did not mount');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return true;`);
+  await driver.run(INSTRUMENT);
+}
+
+/** El botón de la fase ② que baja los recortes y el informe: devuelve el
+ *  ZIP en base64, o el aviso de error si la página no pudo armarlo. */
+const PROCESSED_ZIP = step(`
+    const before = ui.downloads.length;
+    const errs = ui.toasts.length;
+    ui.button(/Download frames \\+ report/).click();
+    const r = await ui.until(() => {
+      const err = ui.toasts.slice(errs).find((t) => /Could not build the ZIP/.test(t));
+      if (err) return { error: err };
+      const d = ui.downloads.slice(before).find((x) => x.name === 'processed_frames.zip');
+      return d && { blob: d.blob };
+    }, 120000, 'the processed frames ZIP');
+    if (r.error) return { error: r.error };
+    const b64 = await new Promise((res, rej) => {
+      const f = new FileReader();
+      f.onload = () => res(String(f.result).split(',')[1] ?? '');
+      f.onerror = () => rej(f.error);
+      f.readAsDataURL(r.blob);
+    });
+    return { b64 };`);
+
+/** Lo que trae un ZIP de recortes, leído con el `unzip` de la máquina (que
+ *  además comprueba el CRC de cada entrada): el SHA-256 y el tamaño de cada
+ *  PNG de frames/, y el informe. */
+interface ProcessedZip {
+  crcOk: boolean;
+  frames: Record<string, { sha256: string; width: number; height: number }>;
+  extracted: number;
+}
+
+async function readProcessedZip(b64: string): Promise<ProcessedZip> {
+  const dir = await mkdtemp(join(tmpdir(), 'mxm-zip-'));
+  try {
+    const zip = join(dir, 'p.zip');
+    await writeFile(zip, Buffer.from(b64, 'base64'));
+    const crcOk = spawnSync('unzip', ['-tq', zip]).status === 0;
+    spawnSync('unzip', ['-q', '-o', zip, '-d', join(dir, 'x')]);
+    const frames: ProcessedZip['frames'] = {};
+    const names = await readdir(join(dir, 'x', 'frames')).catch(() => [] as string[]);
+    for (const n of names.sort()) {
+      const png = await readFile(join(dir, 'x', 'frames', n));
+      // IHDR: ancho y alto, big-endian, justo después de la firma
+      frames[n] = {
+        sha256: createHash('sha256').update(png).digest('hex'),
+        width: png.readUInt32BE(16),
+        height: png.readUInt32BE(20),
+      };
+    }
+    const informe = JSON.parse(
+      await readFile(join(dir, 'x', 'informe.json'), 'utf8').catch(() => '{}'),
+    ) as { frames_extraidos?: number };
+    return { crcOk, frames, extracted: informe.frames_extraidos ?? -1 };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 interface Check {
   name: string;
   ok: boolean;
@@ -93,6 +164,7 @@ async function runFlow(
   driver: Driver,
   port: number,
   shots: string,
+  tabs: boolean,
 ): Promise<{ checks: Check[]; mov: Buffer | null; mp4: Buffer | null }> {
   const checks: Check[] = [];
   const check = (name: string, ok: boolean, detail: string): void => {
@@ -114,15 +186,7 @@ async function runFlow(
     await shot(view);
   };
 
-  await driver.open(`http://127.0.0.1:${port}/#sheets`);
-  await driver.run(`
-    const t0 = Date.now();
-    while (!document.querySelector('#view-sheets .paper')) {
-      if (Date.now() - t0 > 30000) throw new Error('the page did not mount');
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return true;`);
-  await driver.run(INSTRUMENT);
+  await openApp(driver, port, 'sheets');
   const width = await driver.run<number>('return window.innerWidth;');
   check('window', true, `${width} px wide`);
   await screen('sheets');
@@ -149,6 +213,105 @@ async function runFlow(
   );
   check('scans simulated and processed', /Processing finished/.test(scans), scans);
   await shot('scans-done');
+
+  // ②b la aplicación abierta en OTRA pestaña a la vez, que es como alguien
+  // trabaja (una para cada proyecto, o la misma recargada): el disco privado
+  // del navegador es del origen, y abrir la fase ② en otra pestaña, procesar
+  // ahí y vaciar su informe borraba los recortes de ésta. Su ZIP fallaba con
+  // "NotFoundError: A requested file or directory could not be found…"
+  // (Opera, Chrome), "The object cannot be found here." (Safari) o
+  // "AbortError" (Firefox). La otra pestaña hace su propio proyecto con otro
+  // margen, se cierra, se abre una tercera (que barre lo que dejó la cerrada),
+  // y esta pestaña tiene que seguir bajando EXACTAMENTE los mismos recortes.
+  if (tabs) {
+    const first = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+    const zipA1 = first.b64 ? await readProcessedZip(first.b64) : null;
+    const nA = Object.keys(zipA1?.frames ?? {}).length;
+    check(
+      'tab A: frames ZIP before another tab opens',
+      !!zipA1 && zipA1.crcOk && nA === 6 && zipA1.extracted === 6,
+      first.error ??
+        `${nA} frames, CRC ${zipA1?.crcOk ? 'ok' : 'BAD'}, report says ${zipA1?.extracted}`,
+    );
+    const tabB = await driver.newTab();
+    await openApp(tabB, port, 'sheets');
+    const b = await tabB.run<string>(
+      step(`
+      ui.button(/example/).click();
+      await ui.until(() => ui.toasts.some((t) => /example frames ready/.test(t)), 60000, 'the example in tab B');
+      ui.button(/Generate sheets/).click();
+      await ui.until(() => ui.downloads.find((d) => /\\.zip$/.test(d.name)), 180000, 'the sheets ZIP in tab B');
+      location.hash = '#scans';
+      await ui.until(() => document.querySelector('#view-scans .paper'), 30000, 'phase 2 in tab B');
+      const bleed = [...document.querySelectorAll('#view-scans label.field')].find((l) => /Bleed/.test(l.textContent)).querySelector('input');
+      bleed.value = '4';
+      bleed.dispatchEvent(new Event('input'));
+      bleed.dispatchEvent(new Event('change'));
+      ui.button(/Simulate them/).click();
+      await ui.until(() => ui.toasts.some((t) => /Processing finished/.test(t)), 240000, 'processing in tab B');
+      return 'processed';`),
+    );
+    const second = await tabB.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+    const zipB = second.b64 ? await readProcessedZip(second.b64) : null;
+    const nB = Object.keys(zipB?.frames ?? {}).length;
+    // otro margen, otros recortes: si las dos pestañas compartieran archivos,
+    // aquí se vería
+    const sameAsA = Object.entries(zipB?.frames ?? {}).filter(
+      ([n, f]) => zipA1?.frames[n]?.sha256 === f.sha256,
+    ).length;
+    check(
+      'tab B: its own project, 4 % bleed, its own frames',
+      b === 'processed' && !!zipB && zipB.crcOk && nB === 6 && sameAsA === 0,
+      second.error ?? `${nB} frames, ${sameAsA} identical to tab A's`,
+    );
+    await tabB.run(
+      step(
+        `ui.button(/Clear results/).click(); await new Promise((r) => setTimeout(r, 500)); return true;`,
+      ),
+    );
+    await tabB.close();
+    const tabC = await driver.newTab();
+    await openApp(tabC, port, 'scans');
+    // la limpieza de la pestaña nueva corre al arrancar: se le da tiempo
+    await new Promise((r) => setTimeout(r, 2000));
+    // lo que quedó en el disco privado: carpetas de pestañas cerradas, sólo
+    // con salidas recientes (una descarga podría seguir leyéndolas)
+    const disk = await tabC.run<{ live: number; leftovers: string[] }>(`
+      const root = await navigator.storage.getDirectory();
+      let tabs;
+      try { tabs = await root.getDirectoryHandle('tabs'); } catch { return { live: -1, leftovers: [] }; }
+      const held = new Set((await navigator.locks.query()).held.map((l) => l.name));
+      let live = 0;
+      const leftovers = [];
+      for await (const [id, h] of tabs.entries()) {
+        if (held.has('mxm-tab-' + id)) { live++; continue; }
+        for await (const [sub] of h.entries()) if (sub !== 'out') leftovers.push(id + '/' + sub);
+      }
+      return { live, leftovers };`);
+    check(
+      'a closed tab leaves no frames on disk',
+      disk.live === -1 || disk.leftovers.length === 0,
+      disk.live === -1
+        ? 'no private disk in this browser: frames stay in memory'
+        : `${disk.live} live tab folders, closed tabs left: ${disk.leftovers.join(', ') || 'nothing but recent outputs'}`,
+    );
+    const third = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+    const zipA2 = third.b64 ? await readProcessedZip(third.b64) : null;
+    const changed = Object.keys(zipA1?.frames ?? {}).filter(
+      (n) => zipA2?.frames[n]?.sha256 !== zipA1?.frames[n]?.sha256,
+    );
+    check(
+      'tab A: same frames ZIP after tabs B and C',
+      !!zipA2 && zipA2.crcOk && changed.length === 0 && Object.keys(zipA2.frames).length === 6,
+      third.error ??
+        (changed.length ? `changed: ${changed.join(', ')}` : '6 frames, byte for byte the same'),
+    );
+    await writeFile(
+      join(shots, 'tabs.json'),
+      `${JSON.stringify({ tabA: zipA1?.frames, tabB: zipB?.frames, tabAAfter: zipA2?.frames }, null, 2)}\n`,
+    );
+    await tabC.close();
+  }
 
   // ③ el video sin pérdida: MOV, ZIP de PNG, y la vista previa
   await screen('video');
@@ -184,8 +347,9 @@ async function runFlow(
     const sel = [...document.querySelectorAll('#view-video select')].find((s) => [...s.options].some((o) => o.value === 'frames'));
     sel.value = 'frames';
     sel.dispatchEvent(new Event('change'));
+    const before = ui.downloads.length;
     ui.button(/Save the video/).click();
-    const d = await ui.until(() => ui.downloads.find((x) => /\\.zip$/.test(x.name) && x !== ui.downloads[0]), 180000, 'the frames ZIP');
+    const d = await ui.until(() => ui.downloads.slice(before).find((x) => /\\.zip$/.test(x.name)), 180000, 'the frames ZIP');
     return d.name + ' ' + d.blob.size + ' bytes';`),
   );
   check('PNG frames ZIP saved', /\.zip \d+ bytes$/.test(frames), frames);
@@ -270,7 +434,8 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
   version = driver.version;
   let checks: Check[] = [];
   try {
-    const out = await runFlow(driver, port, shots);
+    // las pestañas una vez, en la ventana de escritorio: el disco es el mismo
+    const out = await runFlow(driver, port, shots, name === 'desktop');
     checks = out.checks;
     if (out.mov) {
       // el MOV de la página, visto por el ffprobe de la máquina: PNG, del

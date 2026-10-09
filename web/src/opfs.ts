@@ -9,9 +9,36 @@
 // memoria: el navegador lo lee del disco cuando alguien lo pide. Sin OPFS
 // (o sin createWritable, Safari antiguo) el Blob se queda en memoria como
 // hasta ahora, que Chrome también pagina a disco por su cuenta.
+//
+// OPFS es del ORIGEN, no de la pestaña: dos pestañas de la aplicación ven
+// las mismas carpetas. Por eso cada pestaña escribe en la suya,
+// `tabs/<id>/…`, y sólo vacía la suya. Las de pestañas cerradas las barre
+// la siguiente que se abre (sweepStorage): una pestaña viva tiene tomado un
+// candado de Web Locks con su id, que el navegador suelta solo al cerrarla,
+// al recargarla o si se cae. Antes las carpetas eran comunes y abrir la
+// aplicación en otra pestaña (o en la misma, en #scans) borraba los recortes
+// de la primera: su ZIP fallaba con "NotFoundError: A requested file or
+// directory could not be found…" (medido en Opera y Chrome).
 
 import type { Bytes } from './types.ts';
 import { sanitizeLabel } from './ui.ts';
+
+/** Las carpetas de cada pestaña. */
+const TABS = 'tabs';
+/** Esta pestaña: el nombre de su carpeta y de su candado. */
+const TAB_ID =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const LOCK_PREFIX = 'mxm-tab-';
+/** Las carpetas de versiones anteriores, comunes a todas las pestañas. Una
+ *  pestaña con la versión vieja aún abierta las sigue usando, así que sólo
+ *  se borra de ellas lo que lleva un día sin tocarse. */
+const LEGACY_DIRS = ['frames', 'processed', 'export', 'out'];
+const LEGACY_AGE_MS = 24 * 3600e3;
+/** Una salida de una pestaña ya cerrada se respeta este tiempo: su descarga
+ *  puede seguir leyéndola (cerrar o recargar la pestaña no la corta). */
+const CLOSED_OUTPUT_AGE_MS = 10 * 60e3;
 
 const DIR = 'frames';
 /** Los fotogramas recortados de los escaneos (fase ②). Un proyecto largo
@@ -46,32 +73,166 @@ const dirPromises = new Map<string, Promise<FileSystemDirectoryHandle | null>>()
  *  archivos nuevos. (Las salidas van por nombre único y por edad.) */
 let clearing: Promise<void> = Promise.resolve();
 
+/** Sin Web Locks no hay forma de saber qué carpetas siguen en uso, y sin
+ *  eso o no se borra nunca nada o se borra lo de otra pestaña: se queda en
+ *  memoria. Todo navegador con createWritable tiene Web Locks (Chrome 69,
+ *  Firefox 96, Safari 15.4). */
 function supported(): boolean {
   return (
     typeof navigator !== 'undefined' &&
     !!navigator.storage &&
     typeof navigator.storage.getDirectory === 'function' &&
     typeof FileSystemFileHandle !== 'undefined' &&
-    'createWritable' in FileSystemFileHandle.prototype
+    'createWritable' in FileSystemFileHandle.prototype &&
+    !!navigator.locks &&
+    typeof navigator.locks.request === 'function' &&
+    typeof navigator.locks.query === 'function'
   );
+}
+
+let tabLock: Promise<boolean> | null = null;
+
+/** Toma el candado de esta pestaña y no lo suelta mientras viva. true si lo
+ *  tiene: hasta entonces no se escribe nada, o una pestaña que barriera en
+ *  ese momento vería la carpeta sin dueño y la borraría. */
+function holdTabLock(): Promise<boolean> {
+  if (!tabLock) {
+    tabLock = new Promise<boolean>((resolve) => {
+      if (!supported()) {
+        resolve(false);
+        return;
+      }
+      navigator.locks
+        .request(`${LOCK_PREFIX}${TAB_ID}`, { mode: 'exclusive' }, () => {
+          resolve(true);
+          return new Promise<void>(() => {}); // hasta que la pestaña se cierre
+        })
+        .catch(() => resolve(false)); // un documento sin candados (sandbox…)
+    });
+  }
+  return tabLock;
+}
+
+/** La carpeta de esta pestaña, o null si no hay disco donde escribir (o,
+ *  con `create` en false, si todavía no escribió nada). */
+async function tabDir(create = true): Promise<FileSystemDirectoryHandle | null> {
+  if (!(await holdTabLock())) return null;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const tabs = await root.getDirectoryHandle(TABS, { create });
+    return await tabs.getDirectoryHandle(TAB_ID, { create });
+  } catch {
+    return null; // sin cuota, modo privado, política del navegador…
+  }
 }
 
 function cacheDir(name = DIR): Promise<FileSystemDirectoryHandle | null> {
   let p = dirPromises.get(name);
   if (!p) {
     p = (async () => {
-      if (!supported()) return null;
       await clearing;
+      const tab = await tabDir();
+      if (!tab) return null;
       try {
-        const root = await navigator.storage.getDirectory();
-        return await root.getDirectoryHandle(name, { create: true });
+        return await tab.getDirectoryHandle(name, { create: true });
       } catch {
-        return null; // sin cuota, modo privado, política del navegador…
+        return null;
       }
     })();
     dirPromises.set(name, p);
   }
   return p;
+}
+
+/** Borra de `dir` los archivos que llevan más de `olderThanMs` sin tocarse,
+ *  cada uno por su cuenta: uno bloqueado (una descarga lo está leyendo) no
+ *  impide borrar los demás. Las subcarpetas, enteras si `dirs`. Devuelve
+ *  cuántas entradas quedan. */
+async function removeOld(
+  dir: FileSystemDirectoryHandle,
+  olderThanMs: number,
+  dirs = false,
+): Promise<number> {
+  const now = Date.now();
+  let left = 0;
+  for await (const [name, h] of dir.entries()) {
+    try {
+      if (h.kind === 'directory') {
+        if (dirs) await dir.removeEntry(name, { recursive: true });
+        else left++;
+        continue;
+      }
+      const f = await (h as FileSystemFileHandle).getFile();
+      if (now - f.lastModified > olderThanMs) await dir.removeEntry(name);
+      else left++;
+    } catch {
+      left++; // en uso, o ya no está
+    }
+  }
+  return left;
+}
+
+/** Libera el disco que dejaron las pestañas cerradas (y las versiones
+ *  anteriores). Al arrancar la aplicación: lo que haya escrito una pestaña
+ *  que ya no tiene su candado no lo va a leer nadie, salvo una descarga
+ *  reciente (CLOSED_OUTPUT_AGE_MS). Nunca toca la carpeta de una pestaña
+ *  viva, ni la de esta. */
+export async function sweepStorage(): Promise<void> {
+  if (!(await holdTabLock())) return;
+  try {
+    const root = await navigator.storage.getDirectory();
+    let tabs: FileSystemDirectoryHandle | null = null;
+    try {
+      tabs = await root.getDirectoryHandle(TABS);
+    } catch {
+      /* ninguna pestaña escribió nada todavía */
+    }
+    if (tabs) {
+      // primero la lista de carpetas y DESPUÉS la de candados: una pestaña
+      // toma el suyo antes de crear su carpeta, así que toda carpeta de la
+      // lista cuyo candado no aparece es de una pestaña que ya se cerró
+      const names: string[] = [];
+      for await (const [name, h] of tabs.entries()) if (h.kind === 'directory') names.push(name);
+      const state = await navigator.locks.query();
+      const live = new Set(
+        [...(state.held ?? []), ...(state.pending ?? [])]
+          .map((l) => l.name ?? '')
+          .filter((n) => n.startsWith(LOCK_PREFIX))
+          .map((n) => n.slice(LOCK_PREFIX.length)),
+      );
+      for (const name of names) {
+        if (name === TAB_ID || live.has(name)) continue;
+        try {
+          const dead = await tabs.getDirectoryHandle(name);
+          for await (const [sub, h] of dead.entries()) {
+            if (h.kind !== 'directory') {
+              await dead.removeEntry(sub).catch(() => {});
+            } else if (sub === OUT) {
+              const out = await dead.getDirectoryHandle(OUT);
+              if (!(await removeOld(out, CLOSED_OUTPUT_AGE_MS, true)))
+                await dead.removeEntry(OUT).catch(() => {});
+            } else {
+              await dead.removeEntry(sub, { recursive: true }).catch(() => {});
+            }
+          }
+          // vacía ya, o la próxima vez (le queda una descarga reciente)
+          await tabs.removeEntry(name).catch(() => {});
+        } catch {
+          /* otra pestaña la está barriendo a la vez */
+        }
+      }
+    }
+    for (const name of LEGACY_DIRS) {
+      try {
+        const dir = await root.getDirectoryHandle(name);
+        if (!(await removeOld(dir, LEGACY_AGE_MS))) await root.removeEntry(name);
+      } catch {
+        /* no existe, o la usa una pestaña de la versión anterior */
+      }
+    }
+  } catch {
+    /* sin OPFS, o el navegador no deja */
+  }
 }
 
 /** Guarda `data` en disco y devuelve un Blob respaldado por el archivo. Si
@@ -173,11 +334,11 @@ function memoryOutput(type: string): OutputFile {
 }
 
 async function outDir(): Promise<FileSystemDirectoryHandle | null> {
-  if (!supported()) return null;
+  await clearing;
+  const tab = await tabDir();
+  if (!tab) return null;
   try {
-    await clearing;
-    const root = await navigator.storage.getDirectory();
-    return await root.getDirectoryHandle(OUT, { create: true });
+    return await tab.getDirectoryHandle(OUT, { create: true });
   } catch {
     return null;
   }
@@ -287,30 +448,19 @@ export async function openSeekableOutput(
   }
 }
 
-/** Borra las salidas viejas: todas al montar la fase, y al empezar una
+/** Borra las salidas viejas de ESTA pestaña: todas, o al empezar una
  *  generación las de hace más de `olderThanMs` (la descarga de la anterior
- *  puede seguir leyendo la suya). */
+ *  puede seguir leyendo la suya). Las de pestañas cerradas las barre
+ *  sweepStorage. */
 export async function clearOutputs(olderThanMs = 0): Promise<void> {
-  if (!supported()) return;
+  const tab = await tabDir(false);
+  if (!tab) return;
   try {
-    const root = await navigator.storage.getDirectory();
     if (!olderThanMs) {
-      await root.removeEntry(OUT, { recursive: true });
+      await tab.removeEntry(OUT, { recursive: true });
       return;
     }
-    const dir = await root.getDirectoryHandle(OUT);
-    const now = Date.now();
-    for await (const [name, h] of dir.entries()) {
-      // cada archivo por su cuenta: uno bloqueado (una descarga en curso lo
-      // está leyendo) no impide borrar los demás
-      try {
-        if (h.kind !== 'file') continue;
-        const f = await (h as FileSystemFileHandle).getFile();
-        if (now - f.lastModified > olderThanMs) await dir.removeEntry(name);
-      } catch {
-        /* en uso, o ya no está */
-      }
-    }
+    await removeOld(await tab.getDirectoryHandle(OUT), olderThanMs);
   } catch {
     /* no existía, o el navegador no deja */
   }
@@ -331,12 +481,12 @@ export function storeProcessedFrame(label: string, png: Bytes | Blob): Promise<B
 
 let readers = 0;
 
-/** Mientras una exportación lee los fotogramas del disco, NADIE los borra.
- *  La fase ② los borra al montarse y al vaciar su informe, y la ① al
- *  extraer: cualquiera de esas cosas, hecha en otra pestaña de la
- *  aplicación mientras el muxer copiaba, le quitaba los archivos de debajo.
- *  Devuelve la función que suelta el préstamo. (Entre PESTAÑAS distintas no
- *  alcanza: OPFS es del origen, no de la pestaña.) */
+/** Mientras una exportación lee los fotogramas del disco, NADIE en esta
+ *  pestaña los borra. La fase ② los borra al montarse y al vaciar su
+ *  informe, y la ① al extraer: cualquiera de esas cosas, hecha mientras el
+ *  muxer copiaba, le quitaba los archivos de debajo. Devuelve la función que
+ *  suelta el préstamo. (Las otras pestañas no los tocan: cada una tiene su
+ *  carpeta, ver TABS.) */
 export function holdFrames(): () => void {
   readers++;
   let released = false;
@@ -357,9 +507,9 @@ export function clearFrameCache(dirName = DIR): Promise<void> {
   dirPromises.delete(dirName);
   if (!supported()) return Promise.resolve();
   clearing = clearing.then(async () => {
+    const tab = await tabDir(false);
     try {
-      const root = await navigator.storage.getDirectory();
-      await root.removeEntry(dirName, { recursive: true });
+      await tab?.removeEntry(dirName, { recursive: true });
     } catch {
       /* no existía, o el navegador no deja */
     }
