@@ -74,8 +74,11 @@ body {
 }
 .strip::-webkit-scrollbar { display: none; }
 .frame {
-  flex: 1 1 0; min-width: 110px;
+  /* cada pestaña mide al menos su texto en una línea: en el teléfono la tira
+     se desplaza en vez de partir «paper → frames» en dos líneas centradas */
+  flex: 1 1 0; min-width: max-content;
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  text-align: left; white-space: nowrap;
   padding: 10px 14px;
   background: var(--prusia-800);
   border: 1px solid var(--prusia-700);
