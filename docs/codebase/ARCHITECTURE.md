@@ -71,8 +71,12 @@ untouched.
 
 OPFS belongs to the origin, not to the tab. Each tab writes under
 `tabs/<id>/` (frames, scan crops, export frames, outputs) and clears only
-its own folder. A live tab holds a Web Lock named after its id for as long
-as it lives; at start-up, `sweepStorage` deletes the folders whose lock is
+its own folder. A tab takes a Web Lock named after its id when it first
+writes, and holds it for as long as it lives. Safari 26 drops it when the
+page enters the back/forward cache, so it is taken again on `pageshow` (with
+`ifAvailable`: a `query()` makes Chrome 146 evict other cached pages that
+hold a lock); while the page sits in Safari's cache its folder is not
+protected. At start-up, `sweepStorage` deletes the folders whose lock is
 gone (closed, reloaded or crashed tabs), keeping outputs younger than ten
 minutes that a download may still read, and empties the shared folders of
 older versions after a day. Until 2026-10 the folders were shared: opening
