@@ -110,6 +110,10 @@ export interface Driver {
   cspConsole: string[];
   /** Errores de JavaScript sin capturar (sólo donde se pueden oír). */
   pageErrors: string[];
+  /** Otra pestaña del MISMO navegador: mismo perfil, mismo disco privado
+   *  (OPFS), como cuando alguien abre la aplicación dos veces. Sus errores y
+   *  avisos de CSP van a las mismas listas; su `close` cierra sólo ella. */
+  newTab(): Promise<Driver>;
   close(): Promise<void>;
 }
 
@@ -160,41 +164,47 @@ async function puppeteerDriver(kind: 'chrome' | 'zen', viewport?: Viewport): Pro
     headless: true,
     args: kind === 'chrome' ? CHROME_ARGS : [],
   });
-  const page = await browser.newPage();
-  if (viewport)
-    await page.setViewport({
-      width: viewport.width,
-      height: viewport.height,
-      // Firefox por BiDi no emula un teléfono: sólo el tamaño
-      ...(viewport.mobile && kind === 'chrome'
-        ? { isMobile: true, hasTouch: true, deviceScaleFactor: 3 }
-        : {}),
-    });
   const cspConsole: string[] = [];
   const pageErrors: string[] = [];
-  page.on('console', (m) => {
-    const t = m.text();
-    if (t.startsWith('[E2E]') || t.startsWith('[ffmpeg]')) console.log(t);
-    if (/Content Security Policy|Refused to (load|execute|connect|create)/i.test(t))
-      cspConsole.push(t);
-  });
-  page.on('pageerror', (e) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    pageErrors.push(msg);
-    console.log('PAGEERROR:', msg);
-  });
-  return {
-    version: await browser.version(),
-    cspConsole,
-    pageErrors,
-    screenshot: async () => Buffer.from(await page.screenshot({ type: 'png' })),
-    async open(url) {
-      await page.goto(url);
-    },
-    title: () => page.title(),
-    run: <T,>(body: string) => page.evaluate(`(async () => { ${body} })()`) as Promise<T>,
-    close: () => browser.close(),
+  const version = await browser.version();
+  /** Una pestaña nueva; `whole`: su close cierra el navegador entero. */
+  const wrap = async (whole: boolean): Promise<Driver> => {
+    const page = await browser.newPage();
+    if (viewport)
+      await page.setViewport({
+        width: viewport.width,
+        height: viewport.height,
+        // Firefox por BiDi no emula un teléfono: sólo el tamaño
+        ...(viewport.mobile && kind === 'chrome'
+          ? { isMobile: true, hasTouch: true, deviceScaleFactor: 3 }
+          : {}),
+      });
+    page.on('console', (m) => {
+      const t = m.text();
+      if (t.startsWith('[E2E]') || t.startsWith('[ffmpeg]')) console.log(t);
+      if (/Content Security Policy|Refused to (load|execute|connect|create)/i.test(t))
+        cspConsole.push(t);
+    });
+    page.on('pageerror', (e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      pageErrors.push(msg);
+      console.log('PAGEERROR:', msg);
+    });
+    return {
+      version,
+      cspConsole,
+      pageErrors,
+      screenshot: async () => Buffer.from(await page.screenshot({ type: 'png' })),
+      async open(url) {
+        await page.goto(url);
+      },
+      title: () => page.title(),
+      run: <T,>(body: string) => page.evaluate(`(async () => { ${body} })()`) as Promise<T>,
+      newTab: () => wrap(false),
+      close: () => (whole ? browser.close() : page.close()),
+    };
   };
+  return wrap(true);
 }
 
 /** Safari por WebDriver clásico: safaridriver en un puerto libre y HTTP. */
@@ -230,26 +240,52 @@ async function safariDriver(viewport?: Viewport): Promise<Driver> {
   await call('POST', `${s}/timeouts`, { script: 600000, pageLoad: 60000 });
   if (viewport)
     await call('POST', `${s}/window/rect`, { width: viewport.width, height: viewport.height });
-  return {
-    version,
-    cspConsole: [],
-    pageErrors: [],
-    screenshot: async () => Buffer.from(String(await call('GET', `${s}/screenshot`)), 'base64'),
-    async open(url) {
-      await call('POST', `${s}/url`, { url });
-    },
-    title: async () => String(await call('GET', `${s}/title`)),
-    run: async <T,>(body: string) =>
-      (await call('POST', `${s}/execute/async`, {
-        script: `const done = arguments[arguments.length - 1];
+  // WebDriver clásico manda a UNA ventana a la vez: cada pestaña se pone
+  // delante antes de cada orden suya
+  let current = String(await call('GET', `${s}/window`));
+  const tab = (handle: string, closeIt: () => Promise<void>): Driver => {
+    const on = async <T,>(f: () => Promise<T>): Promise<T> => {
+      if (current !== handle) {
+        await call('POST', `${s}/window`, { handle });
+        current = handle;
+      }
+      return f();
+    };
+    return {
+      version,
+      cspConsole: [],
+      pageErrors: [],
+      screenshot: () =>
+        on(async () => Buffer.from(String(await call('GET', `${s}/screenshot`)), 'base64')),
+      open: (url) => on(async () => void (await call('POST', `${s}/url`, { url }))),
+      title: () => on(async () => String(await call('GET', `${s}/title`))),
+      run: <T,>(body: string) =>
+        on(
+          async () =>
+            (await call('POST', `${s}/execute/async`, {
+              script: `const done = arguments[arguments.length - 1];
           (async () => { ${body} })().then((v) => done(v), (e) => done({ __error: String(e) }));`,
-        args: [],
-      })) as T,
-    async close() {
-      await call('DELETE', s).catch(() => {});
-      proc.kill();
-    },
+              args: [],
+            })) as T,
+        ),
+      async newTab() {
+        const w = (await on(() => call('POST', `${s}/window/new`, { type: 'tab' }))) as {
+          handle: string;
+        };
+        return tab(w.handle, () =>
+          on(async () => {
+            await call('DELETE', `${s}/window`);
+            current = '';
+          }),
+        );
+      },
+      close: closeIt,
+    };
   };
+  return tab(current, async () => {
+    await call('DELETE', s).catch(() => {});
+    proc.kill();
+  });
 }
 
 /** Abre `which` (con `viewport`, si se da). */

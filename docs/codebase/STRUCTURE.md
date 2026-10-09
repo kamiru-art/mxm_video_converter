@@ -49,7 +49,7 @@
 | `web/src/worker.ts` | A command name to core function table. | Business rules. |
 | `web/src/phase*.ts` | The DOM of one phase and its event handling. | Direct WebAssembly calls; everything goes through `run()`. |
 | `web/src/project.ts` | The state shared between phases, in memory, and the on-demand decoding of frames that live in their video. | Persistence. |
-| `web/src/opfs.ts` | The only writer of the browser's private file system: the PNG cache of frames decoded by `ffmpeg.wasm`, and the output files (the ZIP and the PDF) written chunk by chunk. | Anything else. |
+| `web/src/opfs.ts` | The only writer of the browser's private file system: the PNG cache of frames decoded by `ffmpeg.wasm`, the scan crops, and the output files (the ZIP and the PDF) written chunk by chunk, each tab in its own folder, plus the sweep of closed tabs' folders. | Anything else. |
 | `web/src/export.ts` | The final video: plans the sequence, conforms what must be conformed in the pool, writes the MOV (`pngmov.ts`) or the PNG ZIP, decodes the original sound. | Any lossy codec (that is `lossy.ts`). |
 | `web/src/lossy.ts` | The compressed MP4: presets and fixed bitrate, codec choice, frame decoding ahead of the encoder, sound. | Planning the sequence (reuses `export.ts`). |
 | `web/src/zip.ts` | The streaming ZIP writer (`ZipSink`) and `makeZip` on top of it. | Deciding what goes in. |
