@@ -95,9 +95,9 @@ let tabLock: Promise<boolean> | null = null;
 /** Toma el candado de esta pestaña y no lo suelta mientras viva. true si lo
  *  tiene: hasta entonces no se escribe nada, o una pestaña que barriera en
  *  ese momento vería la carpeta sin dueño y la borraría. Se toma al escribir
- *  por primera vez, no al abrir: una pestaña que no guarda nada no lo
- *  necesita, y hay navegadores que no guardan en la caché de atrás/adelante
- *  una página con un candado tomado. */
+ *  por primera vez, no al abrir ni al vaciar (tabDir): una pestaña que no
+ *  guarda nada no lo necesita, y hay navegadores que no guardan en la caché
+ *  de atrás/adelante una página con un candado tomado. */
 function holdTabLock(): Promise<boolean> {
   if (!tabLock) {
     tabLock = new Promise<boolean>((resolve) => {
@@ -116,9 +116,34 @@ function holdTabLock(): Promise<boolean> {
   return tabLock;
 }
 
+/** Safari suelta los candados de una página que entra en la caché de
+ *  atrás/adelante y no los devuelve al volver: sin el suyo, la carpeta de
+ *  esta pestaña parecería de una pestaña cerrada y la siguiente que se abra
+ *  la borraría. Al volver se toma otra vez, si de verdad se perdió (Chrome y
+ *  Firefox lo conservan, y pedirlo dos veces se quedaría esperando para
+ *  siempre). */
+async function retakeTabLock(): Promise<void> {
+  if (!tabLock || !(await tabLock)) return;
+  try {
+    const { held } = await navigator.locks.query();
+    if ((held ?? []).some((l) => l.name === `${LOCK_PREFIX}${TAB_ID}`)) return;
+  } catch {
+    return;
+  }
+  tabLock = null;
+  await holdTabLock();
+}
+
+if (typeof window !== 'undefined')
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) void retakeTabLock();
+  });
+
 /** La carpeta de esta pestaña, o null si no hay disco donde escribir (o,
- *  con `create` en false, si todavía no escribió nada). */
+ *  con `create` en false, si todavía no escribió nada: sin escribir, la
+ *  pestaña no tiene carpeta ni toma el candado). */
 async function tabDir(create = true): Promise<FileSystemDirectoryHandle | null> {
+  if (!create && !tabLock) return null;
   if (!(await holdTabLock())) return null;
   try {
     const root = await navigator.storage.getDirectory();
