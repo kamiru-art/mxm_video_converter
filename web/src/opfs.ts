@@ -13,12 +13,13 @@
 // OPFS es del ORIGEN, no de la pestaña: dos pestañas de la aplicación ven
 // las mismas carpetas. Por eso cada pestaña escribe en la suya,
 // `tabs/<id>/…`, y sólo vacía la suya. Las de pestañas cerradas las barre
-// la siguiente que se abre (sweepStorage): una pestaña viva tiene tomado un
-// candado de Web Locks con su id, que el navegador suelta solo al cerrarla,
-// al recargarla o si se cae. Antes las carpetas eran comunes y abrir la
-// aplicación en otra pestaña (o en la misma, en #scans) borraba los recortes
-// de la primera: su ZIP fallaba con "NotFoundError: A requested file or
-// directory could not be found…" (medido en Opera y Chrome).
+// la siguiente que se abre (sweepStorage). Una pestaña que escribió tiene
+// tomado un candado de Web Locks con su id, que el navegador suelta solo al
+// cerrarla, al recargarla o si se cae, y toca su archivo `alive` cada pocos
+// minutos. Antes las carpetas eran comunes y abrir la aplicación en otra
+// pestaña (o en la misma, en #scans) borraba los recortes de la primera: su
+// ZIP fallaba con "NotFoundError: A requested file or directory could not
+// be found…" (medido en Opera y Chrome).
 
 import type { Bytes } from './types.ts';
 import { sanitizeLabel } from './ui.ts';
@@ -39,6 +40,19 @@ const LEGACY_AGE_MS = 24 * 3600e3;
 /** Una salida de una pestaña ya cerrada se respeta este tiempo: su descarga
  *  puede seguir leyéndola (cerrar o recargar la pestaña no la corta). */
 const CLOSED_OUTPUT_AGE_MS = 10 * 60e3;
+/** La señal de vida de una pestaña: un archivo que toca cada ALIVE_EVERY_MS
+ *  mientras vive (los temporizadores se paran en la caché de
+ *  atrás/adelante). */
+const ALIVE = 'alive';
+const ALIVE_EVERY_MS = 5 * 60e3;
+/** Una carpeta con señal de vida más reciente que esto no se barre, ni se
+ *  pregunta por su candado: puede ser de una página en la caché de
+ *  atrás/adelante. Safari 26 le suelta el candado (parecería cerrada y se
+ *  borraría), y preguntar por el candado de una página guardada en la caché
+ *  de Chrome 146+ la saca de ella (al volver atrás se recargaría y perdería
+ *  el proyecto). Lo de una pestaña cerrada se libera, así, una hora más
+ *  tarde. */
+const ALIVE_GRACE_MS = 60 * 60e3;
 
 const DIR = 'frames';
 /** Los fotogramas recortados de los escaneos (fase ②). Un proyecto largo
@@ -68,10 +82,20 @@ function exact(chunk: Bytes | Blob): Bytes | Blob {
 }
 
 const dirPromises = new Map<string, Promise<FileSystemDirectoryHandle | null>>();
-/** Un vaciado de la caché de fotogramas en curso: esa carpeta no se vuelve
- *  a crear hasta que termine, o el borrado se llevaría por delante los
- *  archivos nuevos. (Las salidas van por nombre único y por edad.) */
+/** Los borrados de esta pestaña, uno detrás de otro. */
 let clearing: Promise<void> = Promise.resolve();
+/** Cada caché (DIR, PROCESSED, EXPORT) vive en una carpeta por generación,
+ *  `processed-0`, `processed-1`…: vaciarla es pasar a la siguiente, y la
+ *  anterior se borra en cuanto nadie la lee (holdFrames). Lo que se escribe
+ *  después de vaciar va siempre a la carpeta nueva, que ese borrado no
+ *  toca. */
+const generations = new Map<string, number>();
+/** Carpetas vaciadas que esperan a que terminen sus lectores. */
+const doomed = new Set<string>();
+
+function folderOf(name: string): string {
+  return `${name}-${generations.get(name) ?? 0}`;
+}
 
 /** Sin Web Locks no hay forma de saber qué carpetas siguen en uso, y sin
  *  eso o no se borra nunca nada o se borra lo de otra pestaña: se queda en
@@ -85,9 +109,21 @@ function supported(): boolean {
     typeof FileSystemFileHandle !== 'undefined' &&
     'createWritable' in FileSystemFileHandle.prototype &&
     !!navigator.locks &&
-    typeof navigator.locks.request === 'function' &&
-    typeof navigator.locks.query === 'function'
+    typeof navigator.locks.request === 'function'
   );
+}
+
+/** Pide el candado `name` sin esperar. true si se concedió: entonces queda
+ *  tomado hasta que `hold` termine (para siempre si `hold` no termina). */
+function tryLock(name: string, hold: () => Promise<void>): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    navigator.locks
+      .request(name, { ifAvailable: true }, (lock) => {
+        resolve(!!lock);
+        return lock ? hold() : undefined;
+      })
+      .catch(() => resolve(false));
+  });
 }
 
 let tabLock: Promise<boolean> | null = null;
@@ -116,36 +152,55 @@ function holdTabLock(): Promise<boolean> {
   return tabLock;
 }
 
+let beating = false;
+
+/** Toca el archivo `alive` de esta pestaña. */
+async function beat(): Promise<void> {
+  const tab = await tabDir();
+  if (!tab) return;
+  try {
+    const w = await (await tab.getFileHandle(ALIVE, { create: true })).createWritable();
+    await w.write(new Uint8Array([1]));
+    await w.close();
+  } catch {
+    /* sin cuota: la próxima vez */
+  }
+}
+
+/** Empieza a dar señales de vida, una vez, al crear la carpeta. */
+function startHeartbeat(): void {
+  if (beating) return;
+  beating = true;
+  void beat();
+  setInterval(() => void beat(), ALIVE_EVERY_MS);
+}
+
 let retaking: Promise<void> | null = null;
 
 /** Safari 26 suelta los candados de una página que entra en la caché de
- *  atrás/adelante y no los devuelve al volver: sin el suyo, la carpeta de
- *  esta pestaña parecería de una pestaña cerrada y cualquier pestaña que se
- *  abriera después la borraría. Al volver se toma otra vez. Esto no protege
- *  el rato que la página pasa en la caché: si en ese rato se abre la
- *  aplicación en otra pestaña, la carpeta se borra igual y el ZIP lo dice
- *  ("is no longer in this browser's storage").
+ *  atrás/adelante y no los devuelve al volver. Mientras está en la caché la
+ *  protege su señal de vida (ALIVE_GRACE_MS); al volver se toma otra vez el
+ *  candado, o la carpeta quedaría sin dueño para siempre.
  *
  *  Se pide con `ifAvailable`, que no espera: si el candado sigue siendo
  *  suyo (Chrome lo conserva; Firefox no guarda en la caché una página con
  *  un candado), no se concede y no pasa nada. No con `query()`: Chrome 146
- *  saca de la caché a toda página cuyo candado alguien consulta, y volver
- *  atrás en otra pestaña de la aplicación la recargaría. */
+ *  saca de la caché a toda página cuyo candado alguien consulta. Si no se
+ *  concede se intenta otra vez: otra pestaña pudo estar barriendo la carpeta
+ *  con el candado de ésta en la mano. */
 function retakeTabLock(): Promise<void> {
   retaking ??= (async () => {
     if (!tabLock || !(await tabLock)) return;
-    const regained = await new Promise<boolean>((resolve) => {
-      navigator.locks
-        .request(`${LOCK_PREFIX}${TAB_ID}`, { ifAvailable: true }, (lock) => {
-          resolve(!!lock);
-          // concedido: se había perdido, y ahora es suyo hasta que se cierre
-          return lock ? new Promise<void>(() => {}) : undefined;
-        })
-        .catch(() => resolve(false)); // vuelta a la caché a mitad: la próxima vez
-    });
+    let regained = false;
+    for (let i = 0; i < 2 && !regained; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 3000));
+      // concedido: se había perdido, y ahora es suyo hasta que se cierre
+      regained = await tryLock(`${LOCK_PREFIX}${TAB_ID}`, () => new Promise<void>(() => {}));
+    }
     // la carpeta pudo borrarse mientras tanto: las carpetas se vuelven a
     // abrir (y a crear), o lo nuevo iría a parar a memoria sin avisar
     if (regained) dirPromises.clear();
+    await beat();
   })().finally(() => {
     retaking = null;
   });
@@ -166,7 +221,9 @@ async function tabDir(create = true): Promise<FileSystemDirectoryHandle | null> 
   try {
     const root = await navigator.storage.getDirectory();
     const tabs = await root.getDirectoryHandle(TABS, { create });
-    return await tabs.getDirectoryHandle(TAB_ID, { create });
+    const dir = await tabs.getDirectoryHandle(TAB_ID, { create });
+    if (create) startHeartbeat();
+    return dir;
   } catch {
     return null; // sin cuota, modo privado, política del navegador…
   }
@@ -175,12 +232,12 @@ async function tabDir(create = true): Promise<FileSystemDirectoryHandle | null> 
 function cacheDir(name = DIR): Promise<FileSystemDirectoryHandle | null> {
   let p = dirPromises.get(name);
   if (!p) {
+    const folder = folderOf(name);
     p = (async () => {
-      await clearing;
       const tab = await tabDir();
       if (!tab) return null;
       try {
-        return await tab.getDirectoryHandle(name, { create: true });
+        return await tab.getDirectoryHandle(folder, { create: true });
       } catch {
         return null;
       }
@@ -188,6 +245,15 @@ function cacheDir(name = DIR): Promise<FileSystemDirectoryHandle | null> {
     dirPromises.set(name, p);
   }
   return p;
+}
+
+/** Las entradas de `dir`, leídas enteras ANTES de borrar nada: borrar a
+ *  mitad de recorrerla deja el resultado sin definir en la especificación,
+ *  y una entrada saltada dejaba la carpeta llena para otra vez. */
+async function listEntries(dir: FileSystemDirectoryHandle): Promise<[string, FileSystemHandle][]> {
+  const out: [string, FileSystemHandle][] = [];
+  for await (const entry of dir.entries()) out.push(entry);
+  return out;
 }
 
 /** Borra de `dir` los archivos que llevan más de `olderThanMs` sin tocarse,
@@ -201,7 +267,7 @@ async function removeOld(
 ): Promise<number> {
   const now = Date.now();
   let left = 0;
-  for await (const [name, h] of dir.entries()) {
+  for (const [name, h] of await listEntries(dir)) {
     try {
       if (h.kind === 'directory') {
         if (dirs) await dir.removeEntry(name, { recursive: true });
@@ -218,14 +284,46 @@ async function removeOld(
   return left;
 }
 
+/** ¿Dio la pestaña de `dir` señales de vida hace menos de ALIVE_GRACE_MS? */
+async function recentlyAlive(dir: FileSystemDirectoryHandle): Promise<boolean> {
+  try {
+    const f = await (await dir.getFileHandle(ALIVE)).getFile();
+    return Date.now() - f.lastModified < ALIVE_GRACE_MS;
+  } catch {
+    return false; // sin señal (o de una versión anterior, que no la daba)
+  }
+}
+
+/** Vacía la carpeta de una pestaña cerrada, salvo las salidas recientes (su
+ *  descarga puede seguir leyéndolas). true si quedó vacía. */
+async function emptyClosedTab(dir: FileSystemDirectoryHandle): Promise<boolean> {
+  let left = 0;
+  for (const [sub, h] of await listEntries(dir)) {
+    try {
+      if (h.kind !== 'directory') {
+        await dir.removeEntry(sub);
+      } else if (sub === OUT) {
+        const out = await dir.getDirectoryHandle(OUT);
+        if (await removeOld(out, CLOSED_OUTPUT_AGE_MS, true)) left++;
+        else await dir.removeEntry(OUT);
+      } else {
+        await dir.removeEntry(sub, { recursive: true });
+      }
+    } catch {
+      left++; // en uso: la próxima vez
+    }
+  }
+  return left === 0;
+}
+
 /** Libera el disco que dejaron las pestañas cerradas (y las versiones
- *  anteriores). Al arrancar la aplicación: lo que haya escrito una pestaña
- *  que ya no tiene su candado no lo va a leer nadie, salvo una descarga
- *  reciente (CLOSED_OUTPUT_AGE_MS). Nunca toca la carpeta de una pestaña
- *  viva, ni la de esta. */
+ *  anteriores). Al arrancar la aplicación. Una carpeta se vacía sólo si su
+ *  pestaña lleva más de ALIVE_GRACE_MS sin señales de vida Y su candado
+ *  está libre: entonces la carpeta se vacía con ese candado en la mano, y
+ *  su dueño, si vuelve, lo pide otra vez al rato (retakeTabLock). Nunca toca la
+ *  carpeta de esta pestaña. Lo que la pestaña cerrada dejó lo leía sólo
+ *  ella, salvo una descarga reciente (CLOSED_OUTPUT_AGE_MS). */
 export async function sweepStorage(): Promise<void> {
-  // sin candado propio: la carpeta de esta pestaña, si ya existe, se salta
-  // por su id
   if (!supported()) return;
   try {
     const root = await navigator.storage.getDirectory();
@@ -236,37 +334,24 @@ export async function sweepStorage(): Promise<void> {
       /* ninguna pestaña escribió nada todavía */
     }
     if (tabs) {
-      // primero la lista de carpetas y DESPUÉS la de candados: una pestaña
-      // toma el suyo antes de crear su carpeta, así que toda carpeta de la
-      // lista cuyo candado no aparece es de una pestaña que ya se cerró
-      const names: string[] = [];
-      for await (const [name, h] of tabs.entries()) if (h.kind === 'directory') names.push(name);
-      const state = await navigator.locks.query();
-      const live = new Set(
-        [...(state.held ?? []), ...(state.pending ?? [])]
-          .map((l) => l.name ?? '')
-          .filter((n) => n.startsWith(LOCK_PREFIX))
-          .map((n) => n.slice(LOCK_PREFIX.length)),
-      );
-      for (const name of names) {
-        if (name === TAB_ID || live.has(name)) continue;
+      const tabsDir = tabs;
+      for (const [name, h] of await listEntries(tabsDir)) {
+        if (h.kind !== 'directory' || name === TAB_ID) continue;
         try {
-          const dead = await tabs.getDirectoryHandle(name);
-          for await (const [sub, h] of dead.entries()) {
-            if (h.kind !== 'directory') {
-              await dead.removeEntry(sub).catch(() => {});
-            } else if (sub === OUT) {
-              const out = await dead.getDirectoryHandle(OUT);
-              if (!(await removeOld(out, CLOSED_OUTPUT_AGE_MS, true)))
-                await dead.removeEntry(OUT).catch(() => {});
-            } else {
-              await dead.removeEntry(sub, { recursive: true }).catch(() => {});
-            }
-          }
-          // vacía ya, o la próxima vez (le queda una descarga reciente)
-          await tabs.removeEntry(name).catch(() => {});
+          const dir = h as FileSystemDirectoryHandle;
+          if (await recentlyAlive(dir)) continue;
+          // libre: su pestaña se cerró. Tomado: vive (o otra pestaña la
+          // está barriendo ahora mismo). La promesa de request() espera a
+          // que termine el vaciado
+          await navigator.locks
+            .request(`${LOCK_PREFIX}${name}`, { ifAvailable: true }, async (lock) => {
+              // vacía ya, o la próxima vez (le queda una descarga reciente)
+              if (lock && (await emptyClosedTab(dir)))
+                await tabsDir.removeEntry(name).catch(() => {});
+            })
+            .catch(() => {});
         } catch {
-          /* otra pestaña la está barriendo a la vez */
+          /* ya no está */
         }
       }
     }
@@ -382,7 +467,6 @@ function memoryOutput(type: string): OutputFile {
 }
 
 async function outDir(): Promise<FileSystemDirectoryHandle | null> {
-  await clearing;
   const tab = await tabDir();
   if (!tab) return null;
   try {
@@ -529,12 +613,13 @@ export function storeProcessedFrame(label: string, png: Bytes | Blob): Promise<B
 
 let readers = 0;
 
-/** Mientras una exportación lee los fotogramas del disco, NADIE en esta
- *  pestaña los borra. La fase ② los borra al montarse y al vaciar su
- *  informe, y la ① al extraer: cualquiera de esas cosas, hecha mientras el
- *  muxer copiaba, le quitaba los archivos de debajo. Devuelve la función que
- *  suelta el préstamo. (Las otras pestañas no los tocan: cada una tiene su
- *  carpeta, ver TABS.) */
+/** Mientras una exportación (o el ZIP de la fase ②) lee los fotogramas del
+ *  disco, NADIE en esta pestaña los borra. La fase ② los borra al montarse,
+ *  al vaciar su informe y al reprocesar, y la ① al extraer: cualquiera de
+ *  esas cosas, hecha mientras el muxer copiaba, le quitaba los archivos de
+ *  debajo. Lo que se vacía mientras tanto se borra al soltar el último
+ *  préstamo. Devuelve la función que lo suelta. (Las otras pestañas no los
+ *  tocan: cada una tiene su carpeta, ver TABS.) */
 export function holdFrames(): () => void {
   readers++;
   let released = false;
@@ -542,31 +627,38 @@ export function holdFrames(): () => void {
     if (released) return;
     released = true;
     readers--;
+    if (readers === 0) void flushDoomed();
   };
 }
 
-/** Vacía la caché. Al empezar una extracción y al montar la fase: un
- *  proyecto no sobrevive a la recarga, así que sus archivos tampoco. */
-export function clearFrameCache(dirName = DIR): Promise<void> {
-  // los recompuestos (EXPORT) sí: la exportación que los vacía es la misma
-  // que tiene tomado el préstamo, y los de la anterior ya no los lee nadie.
-  // Con el préstamo de por medio no se borraban nunca y cada exportación
-  // sumaba otra copia de la secuencia en el disco
-  if (readers > 0 && dirName !== EXPORT) {
-    console.warn(`[opfs] "${dirName}" kept: an export is reading it`);
-    return Promise.resolve();
-  }
-  dirPromises.delete(dirName);
-  if (!supported()) return Promise.resolve();
+/** Borra las carpetas vaciadas, si nadie las está leyendo. */
+function flushDoomed(): Promise<void> {
+  if (readers > 0 || doomed.size === 0) return clearing;
+  const folders = [...doomed];
+  doomed.clear();
   clearing = clearing.then(async () => {
     const tab = await tabDir(false);
-    try {
-      await tab?.removeEntry(dirName, { recursive: true });
-    } catch {
-      /* no existía, o el navegador no deja */
+    for (const folder of folders) {
+      try {
+        await tab?.removeEntry(folder, { recursive: true });
+      } catch {
+        /* no existía, o el navegador no deja */
+      }
     }
   });
   return clearing;
+}
+
+/** Vacía la caché. Al empezar una extracción y al montar la fase: un
+ *  proyecto no sobrevive a la recarga, así que sus archivos tampoco. Lo
+ *  nuevo va desde ya a otra carpeta (generations); la vaciada se borra
+ *  ahora, o cuando se suelte el último préstamo de holdFrames. */
+export function clearFrameCache(dirName = DIR): Promise<void> {
+  if (!supported()) return Promise.resolve();
+  doomed.add(folderOf(dirName));
+  generations.set(dirName, (generations.get(dirName) ?? 0) + 1);
+  dirPromises.delete(dirName);
+  return flushDoomed();
 }
 
 let exportSeq = 0;
@@ -576,8 +668,10 @@ export function storeExportFrame(png: Bytes | Blob): Promise<Blob> {
   return storeFrame(`${++exportSeq}.png`, png, EXPORT);
 }
 
-/** Fuera los recompuestos de la exportación anterior: al empezar otra, que
- *  es cuando ya nadie los referencia (el panel bloquea una segunda a la vez). */
+/** Fuera los recompuestos de la exportación anterior: al empezar otra. Con
+ *  la exportación en curso (que tiene tomado el préstamo) se borran al
+ *  terminar ella; antes no se borraban nunca y cada exportación sumaba otra
+ *  copia de la secuencia en el disco. */
 export function clearExportCache(): Promise<void> {
   return clearFrameCache(EXPORT);
 }

@@ -118,6 +118,33 @@ const PROCESSED_ZIP = step(`
     });
     return { b64 };`);
 
+/** Las carpetas de pestañas del disco privado (null si no hay). */
+const TAB_FOLDERS = `
+  try {
+    const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs');
+    const out = [];
+    for await (const [name] of t.entries()) out.push(name);
+    return out;
+  } catch { return null; }`;
+
+/** Espera a que termine el barrido de la página recién abierta (main.ts
+ *  marca <html data-storage-swept>), sin plazos fijos. */
+const UNTIL_SWEPT = `
+  const t0 = Date.now();
+  while (document.documentElement.dataset.storageSwept !== '1') {
+    if (Date.now() - t0 > 30000) throw new Error('the storage sweep did not finish');
+    await new Promise((r) => setTimeout(r, 100));
+  }`;
+
+/** Lo que hay dentro de la carpeta de la pestaña `id`, recursivo ([] si ya
+ *  no existe). */
+const FOLDER_OF = (id: string): string => `
+  const walk = async (d, pre) => { const o = []; for await (const [n, h] of d.entries()) { o.push(pre + n + (h.kind === 'directory' ? '/' : '')); if (h.kind === 'directory') o.push(...await walk(h, pre + n + '/')); } return o; };
+  try {
+    const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs');
+    return await walk(await t.getDirectoryHandle(${JSON.stringify(id)}), '');
+  } catch { return []; }`;
+
 /** Lo que trae un ZIP de recortes, leído con el `unzip` de la máquina (que
  *  además comprueba el CRC de cada entrada): el SHA-256 y el tamaño de cada
  *  PNG de frames/, y el informe. */
@@ -233,6 +260,9 @@ async function runFlow(
       first.error ??
         `${nA} frames, CRC ${zipA1?.crcOk ? 'ok' : 'BAD'}, report says ${zipA1?.extracted}`,
     );
+    // las carpetas de pestañas que hay en el disco privado ahora: la que
+    // aparezca después es la de la pestaña B
+    const before = await driver.run<string[] | null>(TAB_FOLDERS);
     const tabB = await driver.newTab();
     await openApp(tabB, port, 'sheets');
     const b = await tabB.run<string>(
@@ -264,36 +294,57 @@ async function runFlow(
       b === 'processed' && !!zipB && zipB.crcOk && nB === 6 && sameAsA === 0,
       second.error ?? `${nB} frames, ${sameAsA} identical to tab A's`,
     );
-    await tabB.run(
-      step(
-        `ui.button(/Clear results/).click(); await new Promise((r) => setTimeout(r, 500)); return true;`,
-      ),
+    // B vacía su informe (en la versión anterior eso borraba los recortes de
+    // A) y procesa otra vez: se cierra con recortes en el disco
+    const again = await tabB.run<string>(
+      step(`
+      const n = ui.toasts.length;
+      ui.button(/Clear results/).click();
+      await new Promise((r) => setTimeout(r, 500));
+      (ui.button(/Simulate them/) ?? ui.button(/Reprocess the/)).click();
+      await ui.until(() => ui.toasts.slice(n).some((t) => /Processing finished/.test(t)), 240000, 'processing again in tab B');
+      return 'processed again';`),
     );
+    const after = await driver.run<string[] | null>(TAB_FOLDERS);
+    const idB = (after ?? []).find((f) => !(before ?? []).includes(f)) ?? '';
     await tabB.close();
+    // sin disco privado (Safari antiguo, modo privado) todo va a memoria y
+    // no hay carpetas que mirar; con él, tiene que haberlas
+    const opfs = await driver.run<boolean>(
+      `return !!navigator.storage?.getDirectory && typeof FileSystemFileHandle !== 'undefined' && 'createWritable' in FileSystemFileHandle.prototype && !!navigator.locks;`,
+    );
+    // C se abre: su barrido NO toca la carpeta de B, que dio señales de vida
+    // hace un momento (podría ser una página en la caché de atrás/adelante)
     const tabC = await driver.newTab();
     await openApp(tabC, port, 'scans');
-    // la limpieza de la pestaña nueva corre al arrancar: se le da tiempo
-    await new Promise((r) => setTimeout(r, 2000));
-    // lo que quedó en el disco privado: carpetas de pestañas cerradas, sólo
-    // con salidas recientes (una descarga podría seguir leyéndolas)
-    const disk = await tabC.run<{ live: number; leftovers: string[] }>(`
-      const root = await navigator.storage.getDirectory();
-      let tabs;
-      try { tabs = await root.getDirectoryHandle('tabs'); } catch { return { live: -1, leftovers: [] }; }
-      const held = new Set((await navigator.locks.query()).held.map((l) => l.name));
-      let live = 0;
-      const leftovers = [];
-      for await (const [id, h] of tabs.entries()) {
-        if (held.has('mxm-tab-' + id)) { live++; continue; }
-        for await (const [sub] of h.entries()) if (sub !== 'out') leftovers.push(id + '/' + sub);
-      }
-      return { live, leftovers };`);
+    const kept = await tabC.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF(idB)}`);
     check(
-      'a closed tab leaves no frames on disk',
-      disk.live === -1 || disk.leftovers.length === 0,
-      disk.live === -1
-        ? 'no private disk in this browser: frames stay in memory'
-        : `${disk.live} live tab folders, closed tabs left: ${disk.leftovers.join(', ') || 'nothing but recent outputs'}`,
+      'a closed tab is kept while its last sign of life is recent',
+      again === 'processed again' &&
+        (opfs ? !!idB && kept.some((f) => /^processed-\d+\//.test(f)) : !idB),
+      opfs
+        ? `tab B's folder ${idB ? `holds ${kept.filter((f) => /\.png$/.test(f)).length} PNG files` : 'was not found'}`
+        : 'no private disk in this browser: frames stay in memory',
+    );
+    // sin señal reciente (se borra su archivo alive, como si hubiera pasado
+    // una hora) y sin candado (se cerró): el barrido de la siguiente pestaña
+    // que se abre la vacía
+    let swept: string[] = [];
+    if (opfs && idB) {
+      await tabC.run(
+        `const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs'); await (await t.getDirectoryHandle('${idB}')).removeEntry('alive'); return true;`,
+      );
+      const tabD = await driver.newTab();
+      await openApp(tabD, port, 'sheets');
+      swept = await tabD.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF(idB)}`);
+      await tabD.close();
+    }
+    check(
+      'a closed tab with no recent sign of life leaves no frames on disk',
+      !opfs || (!!idB && swept.every((f) => f.startsWith('out/'))),
+      opfs
+        ? `tab B's folder after the sweep: ${swept.join(', ') || 'gone'}`
+        : 'no private disk in this browser: frames stay in memory',
     );
     const third = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
     const zipA2 = third.b64 ? await readProcessedZip(third.b64) : null;

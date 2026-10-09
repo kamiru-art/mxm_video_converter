@@ -72,17 +72,23 @@ untouched.
 OPFS belongs to the origin, not to the tab. Each tab writes under
 `tabs/<id>/` (frames, scan crops, export frames, outputs) and clears only
 its own folder. A tab takes a Web Lock named after its id when it first
-writes, and holds it for as long as it lives. Safari 26 drops it when the
-page enters the back/forward cache, so it is taken again on `pageshow` (with
-`ifAvailable`: a `query()` makes Chrome 146 evict other cached pages that
-hold a lock); while the page sits in Safari's cache its folder is not
-protected. At start-up, `sweepStorage` deletes the folders whose lock is
-gone (closed, reloaded or crashed tabs), keeping outputs younger than ten
-minutes that a download may still read, and empties the shared folders of
-older versions after a day. Until 2026-10 the folders were shared: opening
-the app in another tab at `#scans` (or "Clear results" there) deleted the
-first tab's crops, and its ZIP failed with `NotFoundError` (Chrome, Opera,
-Safari) or `AbortError` (Firefox).
+writes and holds it for as long as it lives, and it touches its `alive`
+file every five minutes (timers stop in the back/forward cache). At
+start-up, `sweepStorage` empties a folder only when its `alive` is more than
+an hour old AND its lock is free, probed with `ifAvailable` and kept while
+it deletes; outputs younger than ten minutes, which a download may still
+read, stay. The hour protects pages in the back/forward cache: Safari 26
+drops their locks, and querying a lock held by a cached page makes Chrome
+146+ evict it (`WebLocksContention`, measured in Chrome 155), so nothing
+calls `navigator.locks.query()`. A page back from the cache takes its lock
+again (`ifAvailable`). Each cache lives in one folder per generation
+(`processed-0`, `processed-1`…): clearing moves on to the next one, and the
+old one is deleted once no export or ZIP holds the frames (`holdFrames`).
+The shared folders of older versions are emptied after a day. Until
+2026-10 the folders were shared: opening the app in another tab at
+`#scans` (or "Clear results" there) deleted the first tab's crops, and its
+ZIP failed with `NotFoundError` (Chrome, Opera, Safari) or `AbortError`
+(Firefox).
 
 ## 3) Layer/Module Responsibilities
 
