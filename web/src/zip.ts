@@ -6,6 +6,7 @@
 // en Chrome depende del espacio libre del disco del sistema y se agotaba con
 // 0,7 GB en una máquina llena. El formato lo escribe zipwriter.ts (ZIP64).
 
+import { CancelledError } from './errors.ts';
 import { type OutputFile, openOutput } from './opfs.ts';
 import type { Bytes } from './types.ts';
 import { ZipWriter } from './zipwriter.ts';
@@ -24,13 +25,14 @@ const SLICE = 32e6;
  *  Safari) o "AbortError" (Firefox, que además se confundiría con el botón
  *  Cancel), y un Blob que el navegador ya no puede servir da
  *  "NotReadableError". `blobRead`: el error salió de leer un Blob, no de la
- *  función que produce la entrada (ahí un AbortError puede ser otra cosa). */
+ *  función que produce la entrada (ahí un AbortError puede ser otra cosa;
+ *  un NotFoundError no). */
 function unreadable(name: string, e: unknown, blobRead: boolean): Error {
   const kind = e instanceof DOMException ? e.name : '';
   const msg = e instanceof Error ? e.message : String(e);
-  if (blobRead && (kind === 'NotFoundError' || kind === 'AbortError'))
+  if (kind === 'NotFoundError' || (blobRead && kind === 'AbortError'))
     return new Error(
-      `"${name}" is no longer in this browser's storage (${msg}). The site data was cleared, or the browser freed disk space: load or process the project again.`,
+      `"${name}" can no longer be read (${msg}): its file is gone. The site data was cleared, the browser freed disk space, or the source file was moved: load or process the project again.`,
     );
   return new Error(
     `Could not read "${name}" while packing the ZIP (${msg}). The browser ran out of room for the files of this project: ` +
@@ -69,6 +71,11 @@ export class ZipSink {
     try {
       ready = typeof data === 'function' ? await data() : data;
     } catch (e) {
+      // una parada pedida (Cancel) sigue siendo una parada: envuelta, el
+      // usuario veía un error de espacio en disco en vez de "cancelado". Sólo
+      // la nuestra: un AbortError del navegador (un decodificador cerrado)
+      // es un fallo, no el botón Cancel
+      if (e instanceof CancelledError) throw e;
       // "NotReadableError" a secas no dice nada: el navegador se quedó sin
       // sitio para los Blobs (memoria y, detrás, disco libre del sistema) y
       // uno de los ya creados no se puede leer. Decir CUÁL y por qué.

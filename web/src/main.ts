@@ -63,7 +63,10 @@ phaseNav.addEventListener('click', (e) => {
 // lo que dejaron en el disco privado del navegador las pestañas ya cerradas
 // (y esta misma antes de recargarse): fotogramas, recortes, ZIP y PDF. Las
 // pestañas abiertas conservan lo suyo (ver opfs.ts)
-void sweepStorage();
+void sweepStorage().finally(() => {
+  // para las pruebas: el barrido terminó (e2e-ui.mts lo espera)
+  document.documentElement.dataset.storageSwept = '1';
+});
 
 window.addEventListener('hashchange', () => {
   const v = resolveRoute(location.hash.replace('#', ''));
