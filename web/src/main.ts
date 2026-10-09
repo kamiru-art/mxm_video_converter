@@ -4,7 +4,7 @@ import './style.css';
 import { errMsg } from './errors.ts';
 import { mountHelp } from './help.ts';
 import { runMigration } from './migrate.ts';
-import { clearOutputs } from './opfs.ts';
+import { sweepStorage } from './opfs.ts';
 import { mountPhase1 } from './phase1.ts';
 import { mountPhase2 } from './phase2.ts';
 import { mountPhase3 } from './phase3.ts';
@@ -60,11 +60,10 @@ phaseNav.addEventListener('click', (e) => {
   if (view) show(view);
 });
 
-// las salidas (ZIP, PDF) que dejó una sesión anterior en el disco privado
-// del navegador: cualquier fase puede haberlas escrito, así que se limpian
-// aquí y no solo al montar la fase ①; las de hace poco se respetan por si
-// otra pestaña las está descargando
-void clearOutputs(10 * 60e3);
+// lo que dejaron en el disco privado del navegador las pestañas ya cerradas
+// (y esta misma antes de recargarse): fotogramas, recortes, ZIP y PDF. Las
+// pestañas abiertas conservan lo suyo (ver opfs.ts)
+void sweepStorage();
 
 window.addEventListener('hashchange', () => {
   const v = resolveRoute(location.hash.replace('#', ''));

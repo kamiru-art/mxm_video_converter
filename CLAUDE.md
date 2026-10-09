@@ -63,7 +63,12 @@ over a hundred). The page runs under the CSP and COOP/COEP headers of
 The interface suite (`web/e2e-ui.mts`) clicks through the example project on
 `index.html` at 1440×900 and 390×844: sheets, simulated scans, MOV, ZIP and
 MP4 (the quality and bitrate fields appear only when they apply), the
-in-page preview playing, and no sideways scroll on any screen.
+in-page preview playing, and no sideways scroll on any screen. At desktop
+size it also opens the app in a second tab, which makes its own project with
+another bleed, clears it and closes, and then a third tab: the first tab's
+frames ZIP must come out byte for byte the same as before (each tab keeps
+its own folder of the browser's private disk, `web/src/opfs.ts`), and the
+closed tab must leave no frames on disk.
 
 Artifacts (git-ignored, rewritten every run): `artifacts/e2e/browser-pipeline.<browser>.json`
 with the result, the SHA-256 of every input (generated samples, WASM core,
