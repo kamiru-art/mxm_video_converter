@@ -16,8 +16,7 @@
 | `web/public/icons/` | Every icon (app, maskable, Apple, link preview), generated from the SVG favicon in `web/index.html` by `make-icons.mts`, which also stamps their URLs with the favicon's hash; CI runs `make-icons.mts --check`. Never edited by hand. | `web/make-icons.mts` |
 | `.github/workflows/` | One workflow: test, then build, then deploy. | `.github/workflows/ci.yml` |
 | `deploy/` | What the old address serves, published by hand: `old-domain/` hands users and their `localStorage` over to `mxmstudio.work`. `deploy/www-redirect/` holds only an untracked `.wrangler/` cache: the `www` redirect became a zone rule (`563e94f`) and the directory can be deleted. | `deploy/old-domain/build.sh`, `git ls-files deploy` |
-| `artifacts/e2e/` | What the browser suites write on each run (git-ignored): the JSON reports with their `.sha256`, the files the verifier decoded, the screenshots. | `CLAUDE.md`, `.gitignore` |
-| `CLAUDE.md` | The testing policy and how to run the three browser suites. | `CLAUDE.md` |
+| `artifacts/e2e/` | What the browser suites write on each run (git-ignored): the JSON reports with their `.sha256`, the files the verifier decoded, the screenshots. | `docs/codebase/TESTING.md`, `.gitignore` |
 | `docs/codebase/` | These documents. | this file |
 
 ## 2) Entry Points
