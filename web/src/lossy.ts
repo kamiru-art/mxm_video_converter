@@ -27,6 +27,7 @@ import {
   Quality,
   StreamTarget,
 } from 'mediabunny';
+import { deviceRamGb } from './device.ts';
 import { errMsg, throwIfCancelled } from './errors.ts';
 import type { ExportOptions, SequencePlan, VideoResult } from './export.ts';
 import { pcmForExport, planSequence, uniformPngs } from './export.ts';
@@ -203,7 +204,7 @@ class FrameQueue {
       this.next[i] = seen.get(seq[i]) ?? Number.POSITIVE_INFINITY;
       seen.set(seq[i], i);
     }
-    const budget = Math.min(512e6, (navigator.deviceMemory || 4) * 1e9 * 0.08);
+    const budget = Math.min(512e6, deviceRamGb() * 1e9 * 0.08);
     this.max = Math.max(2, Math.min(64, Math.floor(budget / Math.max(1, bytesPerFrame))));
   }
 

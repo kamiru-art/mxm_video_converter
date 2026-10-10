@@ -12,6 +12,7 @@ import { FrameQueue } from './frames.ts';
 import { loadFlag, saveFlag } from './store.ts';
 import type { Bytes } from './types.ts';
 import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
+import { ffmpegBatchFrames } from './video.ts';
 
 // video.ts monta sus PNG por WORKERFS con la misma instancia: el enum sale de
 // aquí para que el módulo de ffmpeg siga cargándose bajo demanda.
@@ -737,14 +738,7 @@ export function extractFramesFallback(
         console.info(
           `[ffmpeg] ${file.name}: ${probe.pix?.fmt}, matrix ${pix?.matrix ?? 'untagged'} (ffmpeg says ${probe.pix?.matrix ?? 'nothing'}), ${pix?.full ? 'full' : 'limited'} range`,
         );
-      // los fotogramas crudos de cada tanda (w×h×4 bytes cada uno: 33 MB en
-      // 4K) viven en el sistema de archivos de ffmpeg hasta que se leen:
-      // tandas cortas en 4K/6K. Cada tanda vuelve a buscar desde el fotograma
-      // clave anterior, así que tampoco conviene que sean minúsculas.
-      const BATCH = Math.max(
-        4,
-        Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * bpp))),
-      );
+      const BATCH = ffmpegBatchFrames(probe.width, probe.height, bpp);
       // PNG siempre, aunque `opts.lazy` lo pida: volver a decodificar por
       // aquí cuesta minutos, así que el fotograma se guarda (phase1 lo
       // manda a la caché de disco)

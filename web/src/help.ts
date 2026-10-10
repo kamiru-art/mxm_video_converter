@@ -92,7 +92,9 @@ the markers (even with several painted over), identifies each sheet by its
 marker IDs (or by its QRs, on projects that use them), corrects paper warped
 by water and crops every frame. 16-bit scans are preserved end to end.</p>
 <p>The app reads your machine's cores, memory and graphics card, and processes
-as many scans in parallel as fit safely in memory. The heavy straightening
+as many scans in parallel as fit safely in memory. On a phone it does less at
+a time: it is slower, and the quality is the same. Before a scan, a sheet or a
+video that is very heavy for a phone, it asks you first. The heavy straightening
 step runs on the <strong>graphics card (WebGPU)</strong> when the browser
 supports it; the badge at the top right of the page says which of the two
 your browser is using. In the report, click any thumbnail to see it at full

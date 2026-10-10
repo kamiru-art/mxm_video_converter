@@ -11,10 +11,16 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from './commands.ts';
+import { deviceRamGb, isMobile } from './device.ts';
 import { errMsg } from './errors.ts';
 
-const N = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
-const RECYCLE_BYTES = 700e6; // por worker; los escaneos grandes llegan a esto
+// En un teléfono, dos workers como mucho: cada uno es un módulo WASM con su
+// propia memoria, y la pestaña de un teléfono se cierra mucho antes que la
+// de un ordenador. Menos workers solo es más lento; el resultado es el mismo.
+const N = Math.max(1, Math.min(isMobile() ? 2 : 4, (navigator.hardwareConcurrency || 4) - 1));
+// Por worker; los escaneos grandes llegan a esto. Con poca RAM se recicla
+// antes: 300 MB con 2 GB, 600 MB con 4 GB, 700 MB desde 4,7 GB.
+const RECYCLE_BYTES = Math.min(700e6, Math.max(250e6, deviceRamGb() * 1e9 * 0.15));
 
 // Un worker que NO ha contestado nada en este tiempo teniendo trabajo
 // pendiente está atascado. El núcleo corre síncrono dentro del worker, así que

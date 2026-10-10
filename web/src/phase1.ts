@@ -1,5 +1,6 @@
 // Fase ① — Generar hojas de contacto.
 
+import { confirmHeavyOnPhone } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame, PackItem } from './gen.ts';
 import {
@@ -55,7 +56,8 @@ import {
   toast,
   uniquifyLabels,
 } from './ui.ts';
-import { extractFrames, probeVideo } from './video.ts';
+import type { ProbeResult } from './video.ts';
+import { extractFrames, ffmpegPeakBytes, probeVideo } from './video.ts';
 import { ZipSink } from './zip.ts';
 
 const PAPERS = ['A4', 'A3', 'A5', 'A6', 'B4', 'B5', 'Letter', 'Legal', 'Tabloid', 'Custom'];
@@ -248,6 +250,7 @@ export function mountPhase1(root: HTMLElement): void {
   });
 
   let pendingVideo: File | null = null;
+  let pendingProbe: ProbeResult | null = null; // el sondeo de pendingVideo
   const videoInfo = el('div', { class: 'hint' });
 
   const extractBtn = el('button', { class: 'btn blue small', disabled: '' }, 'Extract frames');
@@ -265,6 +268,19 @@ export function mountPhase1(root: HTMLElement): void {
   extractBtn.addEventListener('click', async () => {
     if (!pendingVideo) return;
     const video = pendingVideo;
+    // por el conversor (ffmpeg.wasm) los fotogramas pasan por su memoria;
+    // por WebCodecs los decodifica el navegador, uno a uno
+    const probe = pendingProbe;
+    const keepDeep = (probe?.depth ?? 8) > 8 && !fast8.input.checked;
+    if (
+      probe &&
+      (probe.fallback || (keepDeep && probe.deepNeedsFallback)) &&
+      !confirmHeavyOnPhone(
+        `Extracting this ${probe.width}×${probe.height} video with the built-in converter`,
+        ffmpegPeakBytes(probe.width, probe.height, keepDeep),
+      )
+    )
+      return;
     const ctl = new AbortController();
     extracting = ctl;
     extractBtn.disabled = true;
@@ -381,9 +397,11 @@ export function mountPhase1(root: HTMLElement): void {
       const images = fileList.filter((f) => !videos.includes(f));
       if (videos.length) {
         pendingVideo = videos[0];
+        pendingProbe = null;
         try {
           videoInfo.textContent = 'Reading the video…';
           const p = await probeVideo(pendingVideo);
+          pendingProbe = p;
           // el respaldo es software y un solo hilo: en 4K son minutos, y
           // conviene saberlo antes de elegir el rango y los fps
           const via = p.fallback
@@ -1032,6 +1050,7 @@ export function mountPhase1(root: HTMLElement): void {
         prefetch: (chunk) => prefetchVideoFrames(chunk.flatMap((g) => (g.video ? [g.video] : []))),
         sink,
         signal: ctl.signal,
+        confirmMemory: (b) => confirmHeavyOnPhone('One sheet', b),
         onProgress: (d, t, note) => genProg.set(d / t, `${note} · ${eta(d, t)}`),
       });
       project.layoutJson = out.layoutJson;

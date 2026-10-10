@@ -2,9 +2,10 @@
 // máster sin pérdida (export.ts, MOV o PNG en ZIP) o una copia MP4
 // comprimida para ver y compartir (lossy.ts), con pocas opciones.
 
+import { confirmHeavyOnPhone } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
 import type { AudioFrom, ExportKind, ExportStage, SequencePlan } from './export.ts';
-import { exportLossless, planSequence } from './export.ts';
+import { conformPeakBytes, exportLossless, planSequence } from './export.ts';
 import type { CompressedQuality, CompressedResult } from './lossy.ts';
 import { CODEC_NAMES, describeCompressed, exportCompressed, MAX_MBPS } from './lossy.ts';
 import { clearOutputs, type FramesHold, holdFrames } from './opfs.ts';
@@ -335,6 +336,15 @@ export function mountPhase4(root: HTMLElement): void {
       missing.length &&
       !confirm(
         `${missing.length} frames are missing; the video will skip those positions. Continue?`,
+      )
+    )
+      return;
+    // el plan llega solo (refreshPlan); si aún no está, no se avisa
+    if (
+      lastPlan &&
+      !confirmHeavyOnPhone(
+        `Each ${lastPlan.w}×${lastPlan.h} frame of this video`,
+        conformPeakBytes(lastPlan),
       )
     )
       return;

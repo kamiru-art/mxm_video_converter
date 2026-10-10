@@ -113,6 +113,10 @@ Between phase 1 and phase 2, you do the manual work:
   Thus there is a maximum size. If a scan is too large, the application tells
   you how much memory it needs. Then scan again at 8 bits for each channel, or
   at a lower resolution.
+- On a phone, the application does less work at the same time. Thus it is
+  slower, but the quality of the result does not change. Before a scan, a
+  sheet or a video that needs very much memory, the application asks you
+  first, because the phone can close the tab.
 - The application makes a report with thumbnails.
 - The application makes rescue sheets. A rescue sheet contains only the
   frames that failed, thus you print again only what is necessary.
