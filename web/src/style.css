@@ -94,7 +94,9 @@ body {
 .frame.active { background: var(--papel); color: var(--tinta); border-color: var(--papel); }
 .frame.active .fdesc { color: var(--tinta-suave); }
 .frame.active .fnum { color: var(--sol-oscuro); }
-.fnum { font-family: var(--font-mono); font-size: 13px; color: var(--sol); }
+/* ①②③ salen de otra fuente, con una línea más alta que + y ?: altura fija
+   para que nombre y descripción queden a la misma altura en todas */
+.fnum { font-family: var(--font-mono); font-size: 13px; line-height: 20px; height: 20px; color: var(--sol); }
 .fname { font-family: var(--font-display); font-weight: 700; font-size: 16px; letter-spacing: .02em; }
 .fdesc { font-size: 11.5px; color: var(--cian-300); }
 .frame.help { flex: 0 0 auto; min-width: 90px; }

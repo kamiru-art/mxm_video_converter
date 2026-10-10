@@ -1,5 +1,5 @@
 {
-  // The old address, mxm.sebastianlopez.me, on Sebastián's own Cloudflare
+  // The old address, mxm.sebastianlopez.me, on Sebastian's own Cloudflare
   // account (the site now lives on the MXM Studio account). Its name differs
   // from the site's on purpose: a deploy of either one against the wrong
   // account then creates a stray Worker whose domain fails to attach, instead

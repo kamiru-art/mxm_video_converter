@@ -29,7 +29,7 @@
 #                           "Workers Scripts: Edit", plus "Workers Routes:
 #                           Edit" and "Zone: Read" on mxmstudio.work (the
 #                           custom domain is re-asserted on every deploy)
-#   CLOUDFLARE_ACCOUNT_ID — the MXM Studio account id (not Sebastián's own:
+#   CLOUDFLARE_ACCOUNT_ID — the MXM Studio account id (not Sebastian's own:
 #                           that one only keeps the old address, deploy/old-domain)
 # Until the token secret exists, the deploy step reports itself as skipped
 # and the workflow stays green. That means a green run is NOT by itself proof
