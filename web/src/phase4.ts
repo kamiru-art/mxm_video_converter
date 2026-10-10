@@ -2,9 +2,10 @@
 // máster sin pérdida (export.ts, MOV o PNG en ZIP) o una copia MP4
 // comprimida para ver y compartir (lossy.ts), con pocas opciones.
 
+import { confirmHeavyOnPhone, isMobile } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
 import type { AudioFrom, ExportKind, ExportStage, SequencePlan } from './export.ts';
-import { exportLossless, planSequence } from './export.ts';
+import { conformPeakBytes, exportLossless, planSequence } from './export.ts';
 import type { CompressedQuality, CompressedResult } from './lossy.ts';
 import { CODEC_NAMES, describeCompressed, exportCompressed, MAX_MBPS } from './lossy.ts';
 import { clearOutputs, type FramesHold, holdFrames } from './opfs.ts';
@@ -253,6 +254,12 @@ export function mountPhase4(root: HTMLElement): void {
       showQuality();
       showPlan();
     });
+  /** El plan de `files` ahora mismo, o null si no se puede leer. */
+  function planOf(files: Available[]): Promise<SequencePlan | null> {
+    return planSequence(files.map((f) => f.data))
+      .then(({ plan }) => plan)
+      .catch(() => null);
+  }
   function refreshPlan(files: Blob[]): void {
     const seq = ++planSeq;
     lastPlan = null;
@@ -338,6 +345,25 @@ export function mountPhase4(root: HTMLElement): void {
       )
     )
       return;
+    // el plan llega solo (refreshPlan); en un teléfono, si aún no está, se
+    // espera: sin él no hay aviso. Lo pesado es conformar un fotograma: el
+    // máster sin pérdida solo lo hace con los que no encajan, el MP4 los
+    // lleva todos a 8 bits
+    buildBtn.disabled = true; // un segundo toque mientras se lee el plan
+    const plan = lastPlan ?? (isMobile() ? await planOf(files) : null);
+    buildBtn.disabled = false;
+    if (plan) {
+      const mp4 = kindIs() === 'mp4';
+      const peak = mp4
+        ? conformPeakBytes({ ...plan, sixteen: false })
+        : plan.conform
+          ? conformPeakBytes(plan)
+          : 0;
+      const what = mp4
+        ? `Compressing one ${plan.w}×${plan.h} frame`
+        : `Converting one frame to ${plan.w}×${plan.h}${plan.sixteen ? ' at 16 bits' : ''}`;
+      if (!confirmHeavyOnPhone(what, peak)) return;
+    }
     buildBtn.disabled = true;
     let release: FramesHold | undefined;
     const ctl = buildCancel.arm();

@@ -20,6 +20,7 @@
 
 import type { InputAudioTrack } from 'mediabunny';
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from 'mediabunny';
+import { deviceRamGb } from './device.ts';
 import { CancelledError, errMsg, isCancelled, throwIfCancelled } from './errors.ts';
 import type { FrameInfo } from './imageinfo.ts';
 import { imageInfo } from './imageinfo.ts';
@@ -148,15 +149,21 @@ export async function planSequence(
   };
 }
 
+/** Pico de conformar UN fotograma del plan: decodificado + lienzo + PNG,
+ *  unas tres copias del fotograma. */
+export function conformPeakBytes(plan: SequencePlan): number {
+  return plan.w * plan.h * (plan.sixteen ? 8 : 4) * 3;
+}
+
 /** Cuántos fotogramas conformar a la vez: tantos workers como haya, pero
- *  sin que sus picos (decodificado + lienzo + PNG, unas tres copias del
- *  fotograma) pasen de una cuarta parte de la RAM que el navegador dice
- *  tener. Sin ese dato (Safari, Firefox) se suponen 4 GB, como en la
- *  fase ②: en un teléfono es lo que evita que la pestaña se muera. */
+ *  sin que sus picos pasen de una cuarta parte de la RAM supuesta (ver
+ *  deviceRamGb): en un teléfono es lo que evita que la pestaña se muera. */
 function conformConcurrency(plan: SequencePlan): number {
-  const perJob = plan.w * plan.h * (plan.sixteen ? 8 : 4) * 3;
-  const budget = (navigator.deviceMemory || 4) * 1e9 * 0.25;
-  return Math.max(1, Math.min(poolSize(), Math.floor(budget / Math.max(1, perJob))));
+  const budget = deviceRamGb() * 1e9 * 0.25;
+  return Math.max(
+    1,
+    Math.min(poolSize(), Math.floor(budget / Math.max(1, conformPeakBytes(plan)))),
+  );
 }
 
 /** Qué fotogramas valen tal cual y a qué se conforman los demás. */

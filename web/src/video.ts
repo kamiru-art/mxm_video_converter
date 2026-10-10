@@ -75,6 +75,28 @@ export interface ProbeResult {
   deepNeedsFallback?: boolean;
 }
 
+/** Fotogramas por tanda de ffmpeg.wasm (ver extractFramesFallback): los
+ *  crudos de cada tanda (w×h×bpp bytes cada uno: 33 MB en 4K) viven en el
+ *  sistema de archivos de ffmpeg hasta que se leen, así que las tandas son
+ *  cortas en 4K/6K. Cada tanda vuelve a buscar desde el fotograma clave
+ *  anterior, así que tampoco conviene que sean minúsculas. */
+export function ffmpegBatchFrames(w: number, h: number, bpp: number): number {
+  return Math.max(4, Math.min(24, Math.floor(500e6 / Math.max(1, w * h * bpp))));
+}
+
+/** Hilos de ffmpeg.wasm en un teléfono (ver threadCount en avi.ts). */
+export const FFMPEG_PHONE_THREADS = 2;
+
+/** Pico estimado de ffmpeg.wasm en un teléfono al extraer un video de w×h:
+ *  una tanda de fotogramas crudos, y los fotogramas de referencia del
+ *  decodificador (hasta 16 en H.264 y HEVC) más uno por hilo, en 4:2:0 a 2
+ *  bytes por muestra con más de 8 bits. Para el aviso: no es una medida. */
+export function ffmpegPeakBytes(w: number, h: number, deep: boolean): number {
+  const bpp = deep ? 6 : 4;
+  const decoded = (16 + FFMPEG_PHONE_THREADS) * w * h * 1.5 * (deep ? 2 : 1);
+  return ffmpegBatchFrames(w, h, bpp) * w * h * bpp + decoded;
+}
+
 // ── Profundidad ───────────────────────────────────────────────
 //
 // El lienzo del navegador es de 8 bits. Para no perder los bits de más:

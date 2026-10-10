@@ -7,11 +7,13 @@
 import type { LogEvent } from '@ffmpeg/ffmpeg';
 import { FFFSType, FFmpeg } from '@ffmpeg/ffmpeg';
 import type { DeepFrame, DeepSpec } from './commands.ts';
+import { isMobile } from './device.ts';
 import { BadRangeError } from './errors.ts';
 import { FrameQueue } from './frames.ts';
 import { loadFlag, saveFlag } from './store.ts';
 import type { Bytes } from './types.ts';
 import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
+import { FFMPEG_PHONE_THREADS, ffmpegBatchFrames } from './video.ts';
 
 // video.ts monta sus PNG por WORKERFS con la misma instancia: el enum sale de
 // aquí para que el módulo de ffmpeg siga cargándose bajo demanda.
@@ -39,8 +41,11 @@ export function ffmpegThreads(): 'multi' | 'single' {
 }
 
 /** Hilos que se piden a ffmpeg con el núcleo multihilo: los de la máquina,
- *  con un tope; más no ayuda a un decodificador. */
+ *  con un tope; más no ayuda a un decodificador. En un teléfono, dos: cada
+ *  hilo guarda sus propios fotogramas en la memoria de ffmpeg (ver
+ *  FFMPEG_PHONE_THREADS en video.ts). */
 function threadCount(): number {
+  if (isMobile()) return FFMPEG_PHONE_THREADS;
   return Math.max(2, Math.min(8, navigator.hardwareConcurrency || 2));
 }
 
@@ -737,14 +742,7 @@ export function extractFramesFallback(
         console.info(
           `[ffmpeg] ${file.name}: ${probe.pix?.fmt}, matrix ${pix?.matrix ?? 'untagged'} (ffmpeg says ${probe.pix?.matrix ?? 'nothing'}), ${pix?.full ? 'full' : 'limited'} range`,
         );
-      // los fotogramas crudos de cada tanda (w×h×4 bytes cada uno: 33 MB en
-      // 4K) viven en el sistema de archivos de ffmpeg hasta que se leen:
-      // tandas cortas en 4K/6K. Cada tanda vuelve a buscar desde el fotograma
-      // clave anterior, así que tampoco conviene que sean minúsculas.
-      const BATCH = Math.max(
-        4,
-        Math.min(24, Math.floor(500e6 / Math.max(1, probe.width * probe.height * bpp))),
-      );
+      const BATCH = ffmpegBatchFrames(probe.width, probe.height, bpp);
       // PNG siempre, aunque `opts.lazy` lo pida: volver a decodificar por
       // aquí cuesta minutos, así que el fotograma se guarda (phase1 lo
       // manda a la caché de disco)
