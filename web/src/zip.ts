@@ -6,6 +6,7 @@
 // en Chrome depende del espacio libre del disco del sistema y se agotaba con
 // 0,7 GB en una máquina llena. El formato lo escribe zipwriter.ts (ZIP64).
 
+import { CancelledError } from './errors.ts';
 import { type OutputFile, openOutput } from './opfs.ts';
 import type { Bytes } from './types.ts';
 import { ZipWriter } from './zipwriter.ts';
@@ -17,6 +18,27 @@ export type ZipEntryData = Bytes | Blob | (() => Promise<Bytes | Blob>);
 
 /** Un Blob grande entra en el ZIP por rebanadas de este tamaño. */
 const SLICE = 32e6;
+
+/** El error de leer una entrada, con su nombre y lo que se puede hacer. El
+ *  del navegador a secas no dice qué archivo ni por qué: leer un Blob cuyo
+ *  archivo del disco privado ya no está da "NotFoundError" (Chrome, Opera,
+ *  Safari) o "AbortError" (Firefox, que además se confundiría con el botón
+ *  Cancel), y un Blob que el navegador ya no puede servir da
+ *  "NotReadableError". `blobRead`: el error salió de leer un Blob, no de la
+ *  función que produce la entrada (ahí un AbortError puede ser otra cosa;
+ *  un NotFoundError no). */
+function unreadable(name: string, e: unknown, blobRead: boolean): Error {
+  const kind = e instanceof DOMException ? e.name : '';
+  const msg = e instanceof Error ? e.message : String(e);
+  if (kind === 'NotFoundError' || (blobRead && kind === 'AbortError'))
+    return new Error(
+      `"${name}" can no longer be read (${msg}): its file is gone. The site data was cleared, the browser freed disk space, or the source file was moved: load or process the project again.`,
+    );
+  return new Error(
+    `Could not read "${name}" while packing the ZIP (${msg}). The browser ran out of room for the files of this project: ` +
+      'generate fewer sheets at a time, turn off TIFF or the frame files, or free disk space.',
+  );
+}
 
 /** Un ZIP que se escribe entrada a entrada, en el orden en que se añaden.
  *  Abrir, `add` por cada archivo, `finish` para obtener el Blob; `abort`
@@ -49,19 +71,26 @@ export class ZipSink {
     try {
       ready = typeof data === 'function' ? await data() : data;
     } catch (e) {
+      // una parada pedida (Cancel) sigue siendo una parada: envuelta, el
+      // usuario veía un error de espacio en disco en vez de "cancelado". Sólo
+      // la nuestra: un AbortError del navegador (un decodificador cerrado)
+      // es un fallo, no el botón Cancel
+      if (e instanceof CancelledError) throw e;
       // "NotReadableError" a secas no dice nada: el navegador se quedó sin
       // sitio para los Blobs (memoria y, detrás, disco libre del sistema) y
       // uno de los ya creados no se puede leer. Decir CUÁL y por qué.
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(
-        `Could not read "${name}" while packing the ZIP (${msg}). The browser ran out of room for the files of this project: ` +
-          'generate fewer sheets at a time, turn off TIFF or the frame files, or free disk space.',
-      );
+      throw unreadable(name, e, false);
     }
     await this.zip.begin(name);
     if (ready instanceof Blob) {
       for (let off = 0; off < ready.size; off += SLICE) {
-        await this.zip.write(new Uint8Array(await ready.slice(off, off + SLICE).arrayBuffer()));
+        let chunk: ArrayBuffer;
+        try {
+          chunk = await ready.slice(off, off + SLICE).arrayBuffer();
+        } catch (e) {
+          throw unreadable(name, e, true);
+        }
+        await this.zip.write(new Uint8Array(chunk));
       }
     } else {
       await this.zip.write(ready);

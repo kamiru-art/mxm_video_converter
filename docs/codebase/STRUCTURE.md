@@ -16,8 +16,7 @@
 | `web/public/icons/` | Every icon (app, maskable, Apple, link preview), generated from the SVG favicon in `web/index.html` by `make-icons.mts`, which also stamps their URLs with the favicon's hash; CI runs `make-icons.mts --check`. Never edited by hand. | `web/make-icons.mts` |
 | `.github/workflows/` | One workflow: test, then build, then deploy. | `.github/workflows/ci.yml` |
 | `deploy/` | What the old address serves, published by hand: `old-domain/` hands users and their `localStorage` over to `mxmstudio.work`. `deploy/www-redirect/` holds only an untracked `.wrangler/` cache: the `www` redirect became a zone rule (`563e94f`) and the directory can be deleted. | `deploy/old-domain/build.sh`, `git ls-files deploy` |
-| `artifacts/e2e/` | What the browser suites write on each run (git-ignored): the JSON reports with their `.sha256`, the files the verifier decoded, the screenshots. | `CLAUDE.md`, `.gitignore` |
-| `CLAUDE.md` | The testing policy and how to run the three browser suites. | `CLAUDE.md` |
+| `artifacts/e2e/` | What the browser suites write on each run (git-ignored): the JSON reports with their `.sha256`, the files the verifier decoded, the screenshots. | `docs/codebase/TESTING.md`, `.gitignore` |
 | `docs/codebase/` | These documents. | this file |
 
 ## 2) Entry Points
@@ -46,10 +45,11 @@
 | `rust-core/src/` domain modules (`sheet`, `photo`, `scanproc`, `conform`, `cyanotype`, `aruco`, `qr`, `calib`, `geometry`, `img`, `imgproc`, `codecs`, `dedup`, `pdf`, `text`, `layoutfile`, `yuv`) | Pure image and geometry work. Plain Rust types. | `wasm_bindgen`, browser types, input and output. |
 | `rust-core/src/api.rs` | The WebAssembly boundary: argument validation, JSON to typed values, `Result<_, JsValue>`. | Image algorithms. |
 | `web/src/pool.ts` | Worker lifetime, dispatch, memory recycling. | Anything about the interface. |
+| `web/src/device.ts` | What the page knows of the machine: phone or not (`isMobile`), the RAM to count on (`deviceRamGb`), and the question before a job too heavy for a phone (`confirmHeavyOnPhone`). | The memory estimate of each job (that stays next to the job). |
 | `web/src/worker.ts` | A command name to core function table. | Business rules. |
 | `web/src/phase*.ts` | The DOM of one phase and its event handling. | Direct WebAssembly calls; everything goes through `run()`. |
 | `web/src/project.ts` | The state shared between phases, in memory, and the on-demand decoding of frames that live in their video. | Persistence. |
-| `web/src/opfs.ts` | The only writer of the browser's private file system: the PNG cache of frames decoded by `ffmpeg.wasm`, and the output files (the ZIP and the PDF) written chunk by chunk. | Anything else. |
+| `web/src/opfs.ts` | The only writer of the browser's private file system: the PNG cache of frames decoded by `ffmpeg.wasm`, the scan crops, and the output files (the ZIP and the PDF) written chunk by chunk, each tab in its own folder, plus the sweep of closed tabs' folders. | Anything else. |
 | `web/src/export.ts` | The final video: plans the sequence, conforms what must be conformed in the pool, writes the MOV (`pngmov.ts`) or the PNG ZIP, decodes the original sound. | Any lossy codec (that is `lossy.ts`). |
 | `web/src/lossy.ts` | The compressed MP4: presets and fixed bitrate, codec choice, frame decoding ahead of the encoder, sound. | Planning the sequence (reuses `export.ts`). |
 | `web/src/zip.ts` | The streaming ZIP writer (`ZipSink`) and `makeZip` on top of it. | Deciding what goes in. |

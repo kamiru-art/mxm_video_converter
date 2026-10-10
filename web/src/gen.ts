@@ -2,7 +2,8 @@
 // Orquesta al núcleo WASM página a página para no cargar todos los
 // fotogramas a resolución completa a la vez.
 
-import { throwIfCancelled } from './errors.ts';
+import { deviceRamGb } from './device.ts';
+import { CancelledError, throwIfCancelled } from './errors.ts';
 import { openOutput } from './opfs.ts';
 import { poolSize, recycleIdle, run, run0 } from './pool.ts';
 import type { RgbaImage, VideoRef } from './project.ts';
@@ -229,6 +230,10 @@ export interface GenerateArgs {
    *  archivo y archivo; lo que corre en un worker termina solo. Sale como
    *  CancelledError, y el ZIP a medias lo descarta quien llama. */
   signal?: AbortSignal;
+  /** Antes de la primera hoja, con la memoria que necesita UNA hoja: `false`
+   *  no genera nada y sale como CancelledError (el aviso de un teléfono, ver
+   *  confirmHeavyOnPhone). */
+  confirmMemory?: (pageBytes: number) => boolean;
   onProgress?: (done: number, total: number, note: string) => void;
 }
 
@@ -245,17 +250,26 @@ export interface GenerateResult {
   layoutInfo: LayoutInfo;
 }
 
-/** Cuántas hojas renderizar a la vez. Cada una lleva en vuelo sus
- *  fotogramas a resolución completa (RGBA, una copia aquí y otra en el
- *  worker) y el lienzo de la hoja con su PNG; con tantos workers como haya,
- *  pero sin pasar de un tercio de la RAM que el navegador dice tener (sin
- *  ese dato, Safari y Firefox, se suponen 4 GB). */
-function pagesInFlight(frames: GenFrame[], perPage: number, geometry: LayoutInfo): number {
+/** Memoria de UNA hoja en vuelo: sus fotogramas a resolución completa
+ *  (RGBA, una copia aquí y otra en el worker) y el lienzo de la hoja con su
+ *  PNG. `frames` son los de las hojas que se renderizan; `deep`, si las
+ *  hojas salen en 16 bits (lo decide el proyecto entero). */
+function pagePeakBytes(
+  frames: GenFrame[],
+  perPage: number,
+  geometry: LayoutInfo,
+  deep: boolean,
+): number {
   const maxPx = frames.reduce((m, f) => Math.max(m, f.w * f.h), 1);
   const pagePx = Number(geometry.page_w ?? 0) * Number(geometry.page_h ?? 0);
-  const bpp = frames.some((f) => f.sixteen) ? 8 : 4;
-  const perPageBytes = maxPx * bpp * 2 * perPage + pagePx * 3 * 3 * (bpp / 4);
-  const budget = (navigator.deviceMemory || 4) * 1e9 * 0.33;
+  const bpp = deep ? 8 : 4;
+  return maxPx * bpp * 2 * perPage + pagePx * 3 * 3 * (bpp / 4);
+}
+
+/** Cuántas hojas renderizar a la vez: tantos workers como haya, pero sin
+ *  pasar de un tercio de la RAM supuesta (ver deviceRamGb). */
+function pagesInFlight(perPageBytes: number): number {
+  const budget = deviceRamGb() * 1e9 * 0.33;
   return Math.max(1, Math.min(poolSize(), Math.floor(budget / Math.max(1, perPageBytes))));
 }
 
@@ -295,6 +309,7 @@ async function generateSheetsInner({
   prefetch = async () => {},
   sink,
   signal,
+  confirmMemory = () => true,
   onProgress = () => {},
 }: GenerateArgs): Promise<GenerateResult> {
   const s: Settings = { ...settings };
@@ -348,6 +363,21 @@ async function generateSheetsInner({
   const maxPnum = Math.max(1, ...Array.from({ length: numPages }, (_, k) => pnumOf(k)));
   const fileDigits = Math.max(s.page_num_zeros ?? 1, String(maxPnum).length);
 
+  // la geometría ANTES del PDF: si el aviso dice que no, el worker 0 no se
+  // queda con un PDF empezado
+  const coreSettings = settingsForCore(s);
+  const geometry = JSON.parse(
+    await run('compute_layout', { settings: coreSettings, firstW, firstH }),
+  ) as LayoutInfo;
+  // solo cuentan las hojas que se van a renderizar: un fotograma enorme en
+  // una hoja no seleccionada no pesa en esta generación
+  const selectedFrames = frames.filter((_, i) => pagesSelected.has(Math.floor(i / perPage) + 1));
+  const pageBytes = pagePeakBytes(selectedFrames, perPage, geometry, !!s.deep);
+  // cancelada mientras esperaba su turno (genLock): sin pregunta
+  throwIfCancelled(signal, 'Sheet generation cancelled.');
+  if (!confirmMemory(pageBytes)) throw new CancelledError();
+  const window = pagesInFlight(pageBytes);
+
   if (s.fmt_pdf) await run0('pdf_new', { dpi: s.dpi });
   // el PDF llega por bloques (uno por página y el cierre) y se escribe a un
   // archivo de salida según llega: ni el núcleo ni la pestaña retienen páginas
@@ -360,11 +390,6 @@ async function generateSheetsInner({
   // la barra cuenta hojas Y archivos de fotogramas: con un sink, escribirlos
   // es la segunda mitad del trabajo, y antes la barra estaba al 100 % ahí
   const totalSel = Math.max(1, pagesSelected.size + (sink ? frameEntries.length : 0));
-  const coreSettings = settingsForCore(s);
-  const geometry = JSON.parse(
-    await run('compute_layout', { settings: coreSettings, firstW, firstH }),
-  ) as LayoutInfo;
-  const window = pagesInFlight(frames, perPage, geometry);
 
   /** Una hoja en camino: su render (y su TIFF) corren en un worker mientras
    *  se prepara la siguiente; lo demás se escribe en orden al recogerla. */

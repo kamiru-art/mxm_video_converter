@@ -4,6 +4,9 @@ interface Navigator {
   /** Memoria del equipo en GB, redondeada y con tope (Chrome la limita a 8).
    *  Safari y Firefox no la informan. */
   readonly deviceMemory?: number;
+  /** Client hints de Chromium: `mobile` dice si es un teléfono. Safari y
+   *  Firefox no lo tienen. */
+  readonly userAgentData?: { readonly mobile: boolean; readonly platform: string };
 }
 
 // lib.dom declara las interfaces de WebGPU pero no los espacios de nombres

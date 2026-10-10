@@ -87,7 +87,9 @@ frame. If your scanner has a 16-bit (or 48-bit colour) setting, the frames
 keep that extra colour detail.</p>
 <p>If the label at the top right says <strong>WebGPU</strong>, your graphics
 card is helping and scans go faster. If it says CPU, everything still works,
-just slower. In the report, click a thumbnail to see it large, and use
+just slower. On a phone the app does less at a time: it is slower, but the
+quality is the same. If a scan, a sheet or a video is very heavy for a phone,
+it asks you before starting. In the report, click a thumbnail to see it large, and use
 <strong>←</strong> and <strong>→</strong> to go through the rest
 (<strong>Esc</strong> closes it).</p>
 <p><strong>If the app can&rsquo;t tell which sheet a scan is.</strong> This

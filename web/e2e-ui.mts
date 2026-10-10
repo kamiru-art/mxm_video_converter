@@ -22,7 +22,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Driver, Viewport } from './e2e-browsers.mts';
@@ -83,6 +84,103 @@ function step(body: string): string {
   return `const ui = window.__ui; ${body}`;
 }
 
+/** Abre la aplicación en `view` y espera a que se monte. */
+async function openApp(driver: Driver, port: number, view: string): Promise<void> {
+  await driver.open(`http://127.0.0.1:${port}/#${view}`);
+  await driver.run(`
+    const t0 = Date.now();
+    while (!document.querySelector('#view-${view} .paper')) {
+      if (Date.now() - t0 > 30000) throw new Error('the page did not mount');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return true;`);
+  await driver.run(INSTRUMENT);
+}
+
+/** El botón de la fase ② que baja los recortes y el informe: devuelve el
+ *  ZIP en base64, o el aviso de error si la página no pudo armarlo. */
+const PROCESSED_ZIP = step(`
+    const before = ui.downloads.length;
+    const errs = ui.toasts.length;
+    ui.button(/Download frames \\+ report/).click();
+    const r = await ui.until(() => {
+      const err = ui.toasts.slice(errs).find((t) => /Could not build the ZIP/.test(t));
+      if (err) return { error: err };
+      const d = ui.downloads.slice(before).find((x) => x.name === 'processed_frames.zip');
+      return d && { blob: d.blob };
+    }, 120000, 'the processed frames ZIP');
+    if (r.error) return { error: r.error };
+    const b64 = await new Promise((res, rej) => {
+      const f = new FileReader();
+      f.onload = () => res(String(f.result).split(',')[1] ?? '');
+      f.onerror = () => rej(f.error);
+      f.readAsDataURL(r.blob);
+    });
+    return { b64 };`);
+
+/** Las carpetas de pestañas del disco privado (null si no hay). */
+const TAB_FOLDERS = `
+  try {
+    const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs');
+    const out = [];
+    for await (const [name] of t.entries()) out.push(name);
+    return out;
+  } catch { return null; }`;
+
+/** Espera a que termine el barrido de la página recién abierta (main.ts
+ *  marca <html data-storage-swept>), sin plazos fijos. */
+const UNTIL_SWEPT = `
+  const t0 = Date.now();
+  while (document.documentElement.dataset.storageSwept !== '1') {
+    if (Date.now() - t0 > 30000) throw new Error('the storage sweep did not finish');
+    await new Promise((r) => setTimeout(r, 100));
+  }`;
+
+/** Lo que hay dentro de la carpeta de la pestaña `id`, recursivo ([] si ya
+ *  no existe). */
+const FOLDER_OF = (id: string): string => `
+  const walk = async (d, pre) => { const o = []; for await (const [n, h] of d.entries()) { o.push(pre + n + (h.kind === 'directory' ? '/' : '')); if (h.kind === 'directory') o.push(...await walk(h, pre + n + '/')); } return o; };
+  try {
+    const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs');
+    return await walk(await t.getDirectoryHandle(${JSON.stringify(id)}), '');
+  } catch { return []; }`;
+
+/** Lo que trae un ZIP de recortes, leído con el `unzip` de la máquina (que
+ *  además comprueba el CRC de cada entrada): el SHA-256 y el tamaño de cada
+ *  PNG de frames/, y el informe. */
+interface ProcessedZip {
+  crcOk: boolean;
+  frames: Record<string, { sha256: string; width: number; height: number }>;
+  extracted: number;
+}
+
+async function readProcessedZip(b64: string): Promise<ProcessedZip> {
+  const dir = await mkdtemp(join(tmpdir(), 'mxm-zip-'));
+  try {
+    const zip = join(dir, 'p.zip');
+    await writeFile(zip, Buffer.from(b64, 'base64'));
+    const crcOk = spawnSync('unzip', ['-tq', zip]).status === 0;
+    spawnSync('unzip', ['-q', '-o', zip, '-d', join(dir, 'x')]);
+    const frames: ProcessedZip['frames'] = {};
+    const names = await readdir(join(dir, 'x', 'frames')).catch(() => [] as string[]);
+    for (const n of names.sort()) {
+      const png = await readFile(join(dir, 'x', 'frames', n));
+      // IHDR: ancho y alto, big-endian, justo después de la firma
+      frames[n] = {
+        sha256: createHash('sha256').update(png).digest('hex'),
+        width: png.readUInt32BE(16),
+        height: png.readUInt32BE(20),
+      };
+    }
+    const informe = JSON.parse(
+      await readFile(join(dir, 'x', 'informe.json'), 'utf8').catch(() => '{}'),
+    ) as { frames_extraidos?: number };
+    return { crcOk, frames, extracted: informe.frames_extraidos ?? -1 };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 interface Check {
   name: string;
   ok: boolean;
@@ -93,6 +191,7 @@ async function runFlow(
   driver: Driver,
   port: number,
   shots: string,
+  tabs: boolean,
 ): Promise<{ checks: Check[]; mov: Buffer | null; mp4: Buffer | null }> {
   const checks: Check[] = [];
   const check = (name: string, ok: boolean, detail: string): void => {
@@ -114,15 +213,7 @@ async function runFlow(
     await shot(view);
   };
 
-  await driver.open(`http://127.0.0.1:${port}/#sheets`);
-  await driver.run(`
-    const t0 = Date.now();
-    while (!document.querySelector('#view-sheets .paper')) {
-      if (Date.now() - t0 > 30000) throw new Error('the page did not mount');
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return true;`);
-  await driver.run(INSTRUMENT);
+  await openApp(driver, port, 'sheets');
   const width = await driver.run<number>('return window.innerWidth;');
   check('window', true, `${width} px wide`);
   await screen('sheets');
@@ -149,6 +240,202 @@ async function runFlow(
   );
   check('scans simulated and processed', /Processing finished/.test(scans), scans);
   await shot('scans-done');
+
+  // ②a sólo con el agente de un teléfono (Chrome emula Android): un escaneo
+  // demasiado pesado para un teléfono pregunta antes, y un "no" no borra
+  // nada. "Reprocess" vaciaba el informe ANTES de preguntar. El escaneo es
+  // sólo una cabecera PNG de 10000×14000 a 16 bits.
+  if (!tabs) {
+    const phone = await driver.run<{ skipped?: string; asked?: number; toasts?: string }>(
+      step(`
+      const uad = navigator.userAgentData;
+      if (!(uad?.mobile || /Android|iPhone|iPad/.test(navigator.userAgent)))
+        return { skipped: 'no phone user agent in this browser' };
+      const asked = [];
+      window.confirm = (m) => { asked.push(m); return false; };
+      try {
+        const png = new Uint8Array(64);
+        png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+        new DataView(png.buffer).setUint32(16, 10000);
+        new DataView(png.buffer).setUint32(20, 14000);
+        png[24] = 16;
+        png[25] = 2;
+        const input = document.querySelector('#view-scans input[type=file][accept^=".tif"]');
+        const dt = new DataTransfer();
+        dt.items.add(new File([png], 'too-heavy.png', { type: 'image/png' }));
+        input.files = dt.files;
+        const n = ui.toasts.length;
+        input.dispatchEvent(new Event('change'));
+        await ui.until(() => ui.toasts.slice(n).some((t) => /Not processed/.test(t)), 30000, 'the question on a new scan');
+        ui.button(/Reprocess the/).click();
+        await ui.until(() => ui.toasts.slice(n).some((t) => /Not reprocessed/.test(t)), 30000, 'the question on Reprocess');
+        return { asked: asked.length, toasts: ui.toasts.slice(n).join(' / ') };
+      } finally {
+        window.confirm = () => true;
+      }`),
+    );
+    if (phone.skipped) {
+      check('phone: heavy scan asks first', true, `skipped: ${phone.skipped}`);
+    } else {
+      const zip = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+      const kept = zip.b64 ? await readProcessedZip(zip.b64) : null;
+      const n = Object.keys(kept?.frames ?? {}).length;
+      check(
+        'phone: heavy scan asks first, and a "no" keeps the report',
+        phone.asked === 2 && n === 6,
+        zip.error ?? `${phone.asked} question(s), ${n} frames still in the report: ${phone.toasts}`,
+      );
+    }
+  }
+
+  // ②b la aplicación abierta en OTRA pestaña a la vez, que es como alguien
+  // trabaja (una para cada proyecto, o la misma recargada): el disco privado
+  // del navegador es del origen, y abrir la fase ② en otra pestaña, procesar
+  // ahí y vaciar su informe borraba los recortes de ésta. Su ZIP fallaba con
+  // "NotFoundError: A requested file or directory could not be found…"
+  // (Opera, Chrome), "The object cannot be found here." (Safari) o
+  // "AbortError" (Firefox). La otra pestaña hace su propio proyecto con otro
+  // margen, se cierra, se abre una tercera (que barre lo que dejó la cerrada),
+  // y esta pestaña tiene que seguir bajando EXACTAMENTE los mismos recortes.
+  if (tabs) {
+    const first = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+    const zipA1 = first.b64 ? await readProcessedZip(first.b64) : null;
+    const nA = Object.keys(zipA1?.frames ?? {}).length;
+    check(
+      'tab A: frames ZIP before another tab opens',
+      !!zipA1 && zipA1.crcOk && nA === 6 && zipA1.extracted === 6,
+      first.error ??
+        `${nA} frames, CRC ${zipA1?.crcOk ? 'ok' : 'BAD'}, report says ${zipA1?.extracted}`,
+    );
+    // las carpetas de pestañas que hay en el disco privado ahora: la que
+    // aparezca después es la de la pestaña B
+    const before = await driver.run<string[] | null>(TAB_FOLDERS);
+    const tabB = await driver.newTab();
+    await openApp(tabB, port, 'sheets');
+    const b = await tabB.run<string>(
+      step(`
+      ui.button(/example/).click();
+      await ui.until(() => ui.toasts.some((t) => /example frames ready/.test(t)), 60000, 'the example in tab B');
+      ui.button(/Generate sheets/).click();
+      await ui.until(() => ui.downloads.find((d) => /\\.zip$/.test(d.name)), 180000, 'the sheets ZIP in tab B');
+      location.hash = '#scans';
+      await ui.until(() => document.querySelector('#view-scans .paper'), 30000, 'phase 2 in tab B');
+      const bleed = [...document.querySelectorAll('#view-scans label.field')].find((l) => /Bleed/.test(l.textContent)).querySelector('input');
+      bleed.value = '4';
+      bleed.dispatchEvent(new Event('input'));
+      bleed.dispatchEvent(new Event('change'));
+      ui.button(/Simulate them/).click();
+      await ui.until(() => ui.toasts.some((t) => /Processing finished/.test(t)), 240000, 'processing in tab B');
+      return 'processed';`),
+    );
+    const second = await tabB.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+    const zipB = second.b64 ? await readProcessedZip(second.b64) : null;
+    const nB = Object.keys(zipB?.frames ?? {}).length;
+    // otro margen, otros recortes: si las dos pestañas compartieran archivos,
+    // aquí se vería
+    const sameAsA = Object.entries(zipB?.frames ?? {}).filter(
+      ([n, f]) => zipA1?.frames[n]?.sha256 === f.sha256,
+    ).length;
+    check(
+      'tab B: its own project, 4 % bleed, its own frames',
+      b === 'processed' && !!zipB && zipB.crcOk && nB === 6 && sameAsA === 0,
+      second.error ?? `${nB} frames, ${sameAsA} identical to tab A's`,
+    );
+    // B vacía su informe (en la versión anterior eso borraba los recortes de
+    // A) y procesa otra vez: se cierra con recortes en el disco
+    const again = await tabB.run<string>(
+      step(`
+      const n = ui.toasts.length;
+      ui.button(/Clear results/).click();
+      await new Promise((r) => setTimeout(r, 500));
+      (ui.button(/Simulate them/) ?? ui.button(/Reprocess the/)).click();
+      await ui.until(() => ui.toasts.slice(n).some((t) => /Processing finished/.test(t)), 240000, 'processing again in tab B');
+      return 'processed again';`),
+    );
+    const after = await driver.run<string[] | null>(TAB_FOLDERS);
+    const idB = (after ?? []).find((f) => !(before ?? []).includes(f)) ?? '';
+    await tabB.close();
+    // sin disco privado (Safari antiguo, modo privado) todo va a memoria y
+    // no hay carpetas que mirar; con él, tiene que haberlas
+    const opfs = await driver.run<boolean>(
+      `return !!navigator.storage?.getDirectory && typeof FileSystemFileHandle !== 'undefined' && 'createWritable' in FileSystemFileHandle.prototype && !!navigator.locks;`,
+    );
+    // una página en la caché de atrás/adelante, simulada: una carpeta con
+    // recortes y una señal de vida reciente, sin candado (Safari 26 lo
+    // suelta) y sin la marca de cierre que deja una pestaña que se cierra
+    if (opfs)
+      await driver.run(`
+        const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs');
+        const d = await t.getDirectoryHandle('cached-page', { create: true });
+        const write = async (dir, name) => { const w = await (await dir.getFileHandle(name, { create: true })).createWritable(); await w.write(new Uint8Array([1])); await w.close(); };
+        await write(await d.getDirectoryHandle('processed-0', { create: true }), '1-video_001.png');
+        await write(d, 'alive');
+        return true;`);
+    // C se abre y barre: B se cerró (dejó su marca) y se vacía en el acto;
+    // la página "en la caché" se queda
+    const tabC = await driver.newTab();
+    await openApp(tabC, port, 'scans');
+    const afterC = {
+      b: await tabC.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF(idB)}`),
+      cached: await tabC.run<string[]>(FOLDER_OF('cached-page')),
+    };
+    const outputs = (l: string[]): string => {
+      const other = l.filter((f) => !f.startsWith('out/'));
+      return other.length
+        ? `left: ${other.join(', ')}`
+        : `${l.filter((f) => f.startsWith('out/') && f !== 'out/').length} recent output(s) kept, nothing else`;
+    };
+    check(
+      'a closed tab leaves no frames on disk',
+      again === 'processed again' &&
+        (opfs ? !!idB && afterC.b.every((f) => f.startsWith('out/')) : !idB),
+      opfs
+        ? `tab B's folder: ${outputs(afterC.b)}`
+        : 'no private disk in this browser: frames stay in memory',
+    );
+    check(
+      'a page that may be in the back/forward cache (recent sign of life, no lock) is kept',
+      !opfs || afterC.cached.includes('processed-0/1-video_001.png'),
+      opfs ? `${afterC.cached.length} entries kept` : 'no private disk in this browser',
+    );
+    // una hora más tarde (se borra su señal de vida): la siguiente pestaña
+    // que se abre la vacía
+    let cachedLater: string[] = [];
+    if (opfs) {
+      await tabC.run(
+        `const t = await (await navigator.storage.getDirectory()).getDirectoryHandle('tabs'); await (await t.getDirectoryHandle('cached-page')).removeEntry('alive'); return true;`,
+      );
+      const tabD = await driver.newTab();
+      await openApp(tabD, port, 'sheets');
+      cachedLater = await tabD.run<string[]>(`${UNTIL_SWEPT} ${FOLDER_OF('cached-page')}`);
+      await tabD.close();
+    }
+    check(
+      'once its sign of life is an hour old, it is swept',
+      !opfs || cachedLater.length === 0,
+      opfs
+        ? cachedLater.length
+          ? `left: ${cachedLater.join(', ')}`
+          : 'gone'
+        : 'no private disk in this browser',
+    );
+    const third = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+    const zipA2 = third.b64 ? await readProcessedZip(third.b64) : null;
+    const changed = Object.keys(zipA1?.frames ?? {}).filter(
+      (n) => zipA2?.frames[n]?.sha256 !== zipA1?.frames[n]?.sha256,
+    );
+    check(
+      'tab A: same frames ZIP after tabs B and C',
+      !!zipA2 && zipA2.crcOk && changed.length === 0 && Object.keys(zipA2.frames).length === 6,
+      third.error ??
+        (changed.length ? `changed: ${changed.join(', ')}` : '6 frames, byte for byte the same'),
+    );
+    await writeFile(
+      join(shots, 'tabs.json'),
+      `${JSON.stringify({ tabA: zipA1?.frames, tabB: zipB?.frames, tabAAfter: zipA2?.frames }, null, 2)}\n`,
+    );
+    await tabC.close();
+  }
 
   // ③ el video sin pérdida: MOV, ZIP de PNG, y la vista previa
   await screen('video');
@@ -184,8 +471,9 @@ async function runFlow(
     const sel = [...document.querySelectorAll('#view-video select')].find((s) => [...s.options].some((o) => o.value === 'frames'));
     sel.value = 'frames';
     sel.dispatchEvent(new Event('change'));
+    const before = ui.downloads.length;
     ui.button(/Save the video/).click();
-    const d = await ui.until(() => ui.downloads.find((x) => /\\.zip$/.test(x.name) && x !== ui.downloads[0]), 180000, 'the frames ZIP');
+    const d = await ui.until(() => ui.downloads.slice(before).find((x) => /\\.zip$/.test(x.name)), 180000, 'the frames ZIP');
     return d.name + ' ' + d.blob.size + ' bytes';`),
   );
   check('PNG frames ZIP saved', /\.zip \d+ bytes$/.test(frames), frames);
@@ -270,7 +558,8 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
   version = driver.version;
   let checks: Check[] = [];
   try {
-    const out = await runFlow(driver, port, shots);
+    // las pestañas una vez, en la ventana de escritorio: el disco es el mismo
+    const out = await runFlow(driver, port, shots, name === 'desktop');
     checks = out.checks;
     if (out.mov) {
       // el MOV de la página, visto por el ffprobe de la máquina: PNG, del
