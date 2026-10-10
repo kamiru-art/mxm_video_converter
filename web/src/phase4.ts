@@ -226,7 +226,7 @@ export function mountPhase4(root: HTMLElement): void {
       p.conform === 0
         ? 'every drawing is copied as it is'
         : `${p.passthrough} of ${p.unique} drawings copied as they are, ${p.conform} brought to that size and depth` +
-          (p.resized ? ` (${p.resized} of a really different size, fitted with Lanczos)` : '');
+          (p.resized ? ` (${p.resized} of a very different size, scaled to fit)` : '');
     return `Lossless: ${p.w}×${p.h}, ${depth}${p.alpha ? ' with transparency' : ''}, ${p.frames} frames; ${touched}.`;
   }
 

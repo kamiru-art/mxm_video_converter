@@ -11,152 +11,150 @@ export function mountHelp(root: HTMLElement): void {
 <ol class="steps">
   <li><span class="step-num">01</span><strong>Video in</strong><span>a video or a folder of images</span></li>
   <li><span class="step-num">02</span><strong>Contact sheets</strong><span>printable, with registration markers</span></li>
-  <li><span class="step-num">03</span><strong>Make it physical</strong><span>paint on paper, or expose cyanotypes from film negatives</span></li>
+  <li><span class="step-num">03</span><strong>Paint or expose</strong><span>paint on paper, or expose cyanotypes from film negatives</span></li>
   <li><span class="step-num">04</span><strong>Scan</strong><span>any order, any orientation</span></li>
   <li><span class="step-num">05</span><strong>Auto-process</strong><span>the app straightens, identifies and crops every frame</span></li>
-  <li><span class="step-num">06</span><strong>Film out</strong><span>your animation, rebuilt</span></li>
+  <li><span class="step-num">06</span><strong>Video</strong><span>your frames back together as a video</span></li>
 </ol>
 
 <div class="cols">
 <div>
 
 <h3>① Sheets</h3>
-<p>In a hurry? <strong>&ldquo;Try it with a 6-frame example&rdquo;</strong>
-builds a small animation right there, so you can walk ① → ② → ③ without
-looking for files: generate the sheets, then in ② press <strong>&ldquo;Simulate
-them from this session&rsquo;s sheets&rdquo;</strong> and the app scans its own
-sheets back, crooked, exactly as a flatbed would hand them to you.</p>
-<p>Drop a video (MP4, MOV, WebM, MKV, and also AVI, MPG, WMV or FLV through the
-built-in converter) or a folder of images. Choose how many frames per second
-you want, or all of them for frame-by-frame animation. If you enable
-<strong>repeated-drawing detection</strong>, identical frames are printed only
-once and reused in all of their positions when the video is rebuilt.</p>
-<p>Keep the <strong>registration markers</strong> enabled. They are the little
-squares that let each scan align itself. Every sheet carries its own
-<strong>marker IDs</strong>, so the app knows which sheet a scan is even if
-you scan out of order, and a single surviving marker is often enough to
-identify it. With 8 markers you can paint over several of them without
-trouble; 3 healthy ones are enough for alignment.</p>
-<p>Marker identity distinguishes a limited number of sheets (144 with the
-default settings; the preview warns you if your project exceeds it). For very
-long projects, enable <strong>"Add a QR code per frame"</strong> in the
-Registration section: QRs identify any number of sheets and keep
-compatibility with the desktop app.</p>
-<p>Choose what to export: <strong>PNG</strong> per sheet, a <strong>print-ready
-PDF</strong>, <strong>TIFF</strong>, or any combination. The
-<code>layout.json</code> (the map used by phase ②) and a copy of the original
-frames (to reprint only what fails) are always included.
-<strong>Always print at 100&nbsp;%</strong>, never "fit to page".</p>
+<p>To try the app without your own files, press <strong>&ldquo;Try it with a
+6-frame example&rdquo;</strong>. It makes a short animation. Generate the
+sheets, then in ② press <strong>&ldquo;Simulate them from this session&rsquo;s
+sheets&rdquo;</strong> to get fake scans of them.</p>
+<p>Drop a video or a folder of images. Choose how many frames per second you
+want, or all of them for frame-by-frame animation. If you turn on
+<strong>Detect repeated drawings</strong>, identical frames are printed only
+once and used again wherever they appear in the video.</p>
+<p>Videos from some cameras carry extra colour detail. The app keeps it, but
+in some browsers that makes loading slow. If it is too slow, turn on
+<strong>Fast 8-bit decode</strong>: it is faster, with slightly less colour
+detail.</p>
+<p>Keep the <strong>registration markers</strong> on. They are the small
+squares around the edges of the sheet. The app uses them to straighten each
+scan and to know which sheet it is, so you can scan in any order. With 8
+markers you can paint over some of them: the app needs at least 3 clean ones
+to straighten the scan.</p>
+<p>The markers can tell apart up to 144 sheets with the default settings, and
+the preview warns you if you go over. For longer projects, turn on
+<strong>&ldquo;Add a QR code per frame&rdquo;</strong> in the Registration
+section.</p>
+<p>You can export the sheets as <strong>PNG</strong>, <strong>PDF</strong>
+(ready to print), <strong>TIFF</strong>, or several at once. The download
+always includes a file ending in <code>_layout.json</code>, which you will
+need in ②. Leave <strong>Include the frames as image files</strong> on: you
+need that copy of the frames to make rescue sheets later.
+<strong>Always print at 100&nbsp;%</strong>, never &ldquo;fit to page&rdquo;.</p>
 
 <h3>Cyanotype mode</h3>
-<p>Enable cyanotype mode to generate <strong>negatives for transparency
-film</strong>: the image is inverted (and mirrored, for emulsion-to-emulsion
-exposure), with your process's compensation curve and the ink color that
-blocks UV best. The <strong>INK-SAVING</strong> mode leaves the background
-transparent and only inks halos around the markers, so it uses a fraction of
-the ink. The preview can <strong>simulate the final blue print</strong>
-before you print anything.</p>
-<p>The triangle next to the top-left marker is the orientation witness: on a
-correct blue print it points <strong>right</strong>. If it points left, you
-exposed the film flipped. The app still corrects it when scanning.</p>
+<p>Cyanotype mode makes <strong>negatives to print on transparency
+film</strong>. The image is inverted and mirrored. If you calibrated (see
+Calibration), it is printed in your best UV-blocking ink and adjusted with
+your cyanotype curve. <strong>INK-SAVING</strong> mode leaves the background
+clear and only prints a border of ink around each marker, so it uses much
+less ink. Turn on <strong>Simulate final blue print</strong> to see in the
+preview what the blue print will look like.</p>
+<p>The small triangle next to the top-left marker tells you which way the
+print came out. On a correct blue print it points <strong>right</strong>. If
+it points left, the film was flipped when you exposed it. The app fixes this
+on its own when it reads the scan.</p>
 
-<h3>Privacy &amp; philosophy</h3>
-<p>All processing happens <strong>in your browser</strong> (Rust compiled to
-WebAssembly, plus WebGPU where it helps): your videos and scans never leave
-your machine, there are no accounts or limits, and once loaded the page works
-offline. You can also <strong>install it</strong> as a desktop or phone app
-(in Chrome and Edge, the install icon in the address bar; on iPhone and iPad,
-Share → Add to Home Screen) and it opens in its own window, with or without
-a connection. Frames are extracted <strong>losslessly</strong> (PNG) with no color
-filtering, and with every bit the video has: a 10-bit video gives 16-bit frames
-and 16-bit sheets. Where the browser decodes such a video fast only at 8 bits
-(Chrome with 10-bit HEVC, for instance), the built-in converter keeps the 10 bits, much more
-slowly; <em>Fast 8-bit decode</em> trades them for speed. Projects from the original desktop app (<code>layout.json</code>
-v1 and v2, QRs included) are processed unchanged.</p>
-<p>This tool was born from a real artist's workflow and is released free,
-forever, for everyone. The
+<h3>Privacy</h3>
+<p>Everything happens <strong>in your browser</strong>. Your videos and scans
+never leave your computer. There are no accounts and no limits, and once the
+page has loaded it also works offline. You can <strong>install it</strong> as
+an app: in Chrome and Edge, use the install icon in the address bar; on iPhone
+and iPad, Share → Add to Home Screen.</p>
+<p>This tool is free for everyone. The
 <a href="https://github.com/kamiru-art/mxm_video_converter" rel="noopener">source code</a>
 is available under the
 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener">CC BY-NC-SA 4.0</a>
-license: use it and build on it, but never sell it, and whatever you make
-with it must stay free under the same license.</p>
+license: you can use it and change it, but you cannot sell it. If you share a
+changed version of the tool, it must use the same license.</p>
 
 </div>
 <div>
 
 <h3>② Scans</h3>
-<p>Scan your painted sheets (or your dried cyanotypes) however you like: any
-resolution, rotated, upside down, even mirrored. Drop the files along with
-the <code>layout.json</code> and the app does the rest: it straightens using
-the markers (even with several painted over), identifies each sheet by its
-marker IDs (or by its QRs, on projects that use them), corrects paper warped
-by water and crops every frame. 16-bit scans are preserved end to end.</p>
-<p>The app reads your machine's cores, memory and graphics card, and processes
-as many scans in parallel as fit safely in memory. The heavy straightening
-step runs on the <strong>graphics card (WebGPU)</strong> when the browser
-supports it; the badge at the top right of the page says which of the two
-your browser is using. In the report, click any thumbnail to see it at full
-size, and move through the whole batch with <strong>←</strong> and
-<strong>→</strong> without closing it (<strong>Esc</strong> closes).</p>
-<p><strong>When the sheet cannot be named.</strong> Sometimes the markers do
-their job — the sheet straightens perfectly — but nothing says <em>which</em>
-sheet it is: the QR is under a brushstroke, the exposure ate it, or the
-project identifies sheets by QR only. Those scans appear at the top of the
-report with a selector: read the <strong>sheet number printed on the page</strong>
-(bottom right, unless you moved it), or recognise the drawings in the
-thumbnails, pick the sheet and the app reprocesses that scan on the spot and
-crops its frames with their real labels. The same selector sits in the
-<em>Sheet</em> column of every row, so you can also correct a sheet the app
-got wrong.</p>
-<p>The report tells you what was recovered and what is missing. One click
-generates <strong>rescue sheets</strong> containing only the failed frames.</p>
+<p>Scan your painted sheets (or your dry cyanotypes) any way you like: any
+resolution, rotated, upside down, even mirrored. Drop the scans together with
+the <code>_layout.json</code> file. The app straightens each scan, works out
+which sheet it is, flattens paper that warped from water, and cuts out every
+frame. If your scanner has a 16-bit (or 48-bit colour) setting, the frames
+keep that extra colour detail.</p>
+<p>If the label at the top right says <strong>WebGPU</strong>, your graphics
+card is helping and scans go faster. If it says CPU, everything still works,
+just slower. In the report, click a thumbnail to see it large, and use
+<strong>←</strong> and <strong>→</strong> to go through the rest
+(<strong>Esc</strong> closes it).</p>
+<p><strong>If the app can&rsquo;t tell which sheet a scan is.</strong> This
+happens when paint or the exposure covered the markers or the QR code. Those
+scans appear at the top of the report with a menu. Look at the <strong>sheet
+number printed on the page</strong> (bottom right, unless you moved it), or
+at the drawings, and pick the sheet. The app then cuts out its frames right
+away. Every row of the report has the same menu in the <em>Assign</em>
+column, so you can also fix a sheet the app got wrong.</p>
+<p>The report shows which frames were recovered and which are missing. To
+paint the missing ones again, drop the frames folder that came with your
+sheets download under <strong>Rescue sheets</strong> and press
+<strong>Generate rescue sheets</strong>. You get new sheets with only those
+frames.</p>
 
 <h3>③ Video</h3>
-<p>With the processed frames, the app rebuilds the video in its original
-order, reusing the deduplicated drawings, with the sound of the original clip
-in sync. Pick where it goes:</p>
+<p>The app puts the frames back in their original order, with repeated
+drawings in all their places. For the sound it uses the original video. If
+you reloaded the page since making the sheets, drop the video again into
+<strong>Original video (for its audio)</strong>. Then choose how to save
+it:</p>
 <ul>
-<li><strong>Lossless MOV</strong>: every frame as PNG inside a MOV,
-pixel-identical to the processed frames and at full depth (16 bits when a
-scan or a TIFF has them). It opens in DaVinci Resolve, Premiere, After Effects,
-VLC and IINA. QuickTime Player, phones and browsers do not play PNG video, so
-watch it in the preview on the right.</li>
-<li><strong>Lossless PNG frames</strong>: the same frames as a numbered
-sequence in a ZIP, with the sound as a WAV. Any editor imports it, Final Cut
-included.</li>
-<li><strong>MP4, compressed</strong>: a light copy that plays anywhere, to
-watch and share. <em>Best</em>, <em>High</em> and <em>Compact</em> let the
-bitrate follow the picture (still drawings take little, busy ones more);
-<em>Fixed bitrate</em> holds the Mbps you type, for when you need a known
-size (a browser that cannot hold it constant keeps it as the average, and
-says so). It uses H.264 when the browser has it, and it loses detail on purpose:
-keep a lossless file as the master.</li>
+<li><strong>Lossless MOV</strong>: full quality, exactly like the cut-out
+frames. It opens in DaVinci Resolve, Premiere, After Effects, VLC and IINA.
+QuickTime Player, phones and browsers can&rsquo;t play it, so use the preview
+on the right to watch it.</li>
+<li><strong>Lossless PNG frames</strong>: the same frames as numbered images
+in a ZIP, with the sound as a separate file. Any editor can import it,
+including Final Cut.</li>
+<li><strong>MP4, compressed</strong>: a small file that plays anywhere, for
+watching and sharing. <em>Best</em>, <em>High</em> and <em>Compact</em> go
+from larger and sharper to smaller. <em>Fixed bitrate</em> lets you set the
+size yourself: a higher number gives a bigger, sharper file. MP4 loses some
+quality, so keep a lossless copy too.</li>
 </ul>
-<p>The size is the one most frames have; a frame of another size is fitted
-with Lanczos. Nothing has a size limit: the files are written to disk as they
-are made, so a long 4K or 8K video of several gigabytes works.</p>
+<p>If a few frames come out a different size, the app fits them to the rest
+without stretching them.</p>
 
 <h3>Calibration (when you need precision)</h3>
-<p><strong>Printer</strong>: print the test page, scan it, and the app
-measures whether your printer shrinks the page (and compensates for it), plus
-the minimum reliable marker and QR sizes.</p>
-<p><strong>Cyanotype curve</strong>: print the chart on film, expose, develop,
-dry and scan the blue print. The app measures the real response of your
-process and builds the curve that linearizes the tones, using the
+<p>Each of these tools gives you a result. Give it a name, press <strong>Save
+profile</strong>, and then pick it in ① Sheets.</p>
+<p><strong>Printer</strong>: print the test page at 100&nbsp;% and scan it.
+The app measures whether your printer prints a little bigger or smaller than
+it should, and the smallest markers and QR codes that still read well. Pick
+the result in ① under <strong>Printer profile</strong>.</p>
+<p><strong>Cyanotype curve</strong>: print the chart on film, expose it,
+develop it, let it dry and scan the blue print. The app measures how your
+paper and chemistry respond and makes a correction so the tones come out
+even. It follows the
 <a href="https://www.easydigitalnegatives.com/" rel="noopener">Easy Digital
-Negatives</a> method with a 21-patch strip or a 256-tone chart. If you
-scanned the film by mistake or the chart came out flat, the app tells you
-instead of saving a curve that would ruin the project.</p>
-<p><strong>ColorBlocker</strong>: find out which ink color blocks UV best on
-your printer (it is not always black) and build a 3-stop gradient you can
-apply with one click.</p>
+Negatives</a> method, with a 21-patch strip or a 256-tone chart. If you
+scanned the film instead of the print, or the chart came out with almost no
+difference between light and dark, the app tells you instead of saving a bad
+curve. Pick the result in ① under <strong>Compensation curve</strong>.</p>
+<p><strong>ColorBlocker</strong>: finds which ink colour blocks UV light best
+on your printer (it is not always black) and makes a gradient from it. Pick
+the result in ① under <strong>Ink color profile</strong>, so your negatives
+print in that colour.</p>
 
-<h3>Cyanotype tips (from real-world testing)</h3>
+<h3>Cyanotype tips</h3>
 <ul>
-<li>Markers of 10 mm or more: the chemistry degrades small things.</li>
-<li>Marker margin of 6 mm or more: paper edges collect brush stains.</li>
-<li>Ink-saving halos of 4 mm or more, so markers stay on guaranteed white.</li>
-<li>Scan the blue print DRY and flat; never the film itself.</li>
+<li>Use markers of 10 mm or more. The chemistry wears away small details.</li>
+<li>Leave a margin of 6 mm or more around the markers. Paper edges collect
+brush stains.</li>
+<li>With INK-SAVING, set <strong>Inked halo</strong> to 4 mm or more, so the
+markers sit on clean white.</li>
+<li>Scan the blue print when it is DRY and flat. Never scan the film.</li>
 </ul>
 
 </div>

@@ -3,7 +3,7 @@
 # lives at mxmstudio.work.
 #
 #   deploy/old-domain/build.sh <dist of the last build published there>
-#   CLOUDFLARE_ACCOUNT_ID=<Sebastián's account> npx wrangler@4 deploy   (from this directory)
+#   CLOUDFLARE_ACCOUNT_ID=<Sebastian's account> npx wrangler@4 deploy   (from this directory)
 #
 # The input is a full site build, not an empty folder: a tab left open on
 # the old address keeps asking for its hashed scripts, workers and ffmpeg
