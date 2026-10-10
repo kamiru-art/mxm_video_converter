@@ -11,14 +11,19 @@
 import { fmtBytes } from './ui.ts';
 
 function detectMobile(): boolean {
-  // Chromium lo dice; una tableta Android dice `false`, y la mira la
-  // expresión de abajo
-  if (navigator.userAgentData?.mobile) return true;
+  // Chromium lo dice; una tableta Android dice `false`, y la miran las
+  // líneas de abajo
+  const uad = navigator.userAgentData;
+  if (uad?.mobile || uad?.platform === 'Android') return true;
   const ua = navigator.userAgent;
   if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) return true;
-  // un iPad se presenta como un Mac de escritorio; ningún Mac tiene
-  // pantalla táctil
-  return /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  // las versiones de escritorio que piden un iPad (un Mac) y Chrome en
+  // Android con "Sitio de escritorio" (Linux, lo normal en una tableta
+  // grande) se delatan por la pantalla táctil: ningún Mac la tiene, y un
+  // Linux de escritorio táctil, raro, solo trabajaría más despacio. Un
+  // Chromebook (CrOS) es un ordenador.
+  if (navigator.maxTouchPoints <= 1) return false;
+  return /Macintosh/.test(ua) || (/Linux/.test(ua) && !/CrOS/.test(ua));
 }
 
 const MOBILE = detectMobile();

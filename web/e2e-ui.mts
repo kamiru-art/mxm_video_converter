@@ -241,6 +241,53 @@ async function runFlow(
   check('scans simulated and processed', /Processing finished/.test(scans), scans);
   await shot('scans-done');
 
+  // ②a sólo con el agente de un teléfono (Chrome emula Android): un escaneo
+  // demasiado pesado para un teléfono pregunta antes, y un "no" no borra
+  // nada. "Reprocess" vaciaba el informe ANTES de preguntar. El escaneo es
+  // sólo una cabecera PNG de 10000×14000 a 16 bits.
+  if (!tabs) {
+    const phone = await driver.run<{ skipped?: string; asked?: number; toasts?: string }>(
+      step(`
+      const uad = navigator.userAgentData;
+      if (!(uad?.mobile || /Android|iPhone|iPad/.test(navigator.userAgent)))
+        return { skipped: 'no phone user agent in this browser' };
+      const asked = [];
+      window.confirm = (m) => { asked.push(m); return false; };
+      try {
+        const png = new Uint8Array(64);
+        png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+        new DataView(png.buffer).setUint32(16, 10000);
+        new DataView(png.buffer).setUint32(20, 14000);
+        png[24] = 16;
+        png[25] = 2;
+        const input = document.querySelector('#view-scans input[type=file][accept^=".tif"]');
+        const dt = new DataTransfer();
+        dt.items.add(new File([png], 'too-heavy.png', { type: 'image/png' }));
+        input.files = dt.files;
+        const n = ui.toasts.length;
+        input.dispatchEvent(new Event('change'));
+        await ui.until(() => ui.toasts.slice(n).some((t) => /Not processed/.test(t)), 30000, 'the question on a new scan');
+        ui.button(/Reprocess the/).click();
+        await ui.until(() => ui.toasts.slice(n).some((t) => /Not reprocessed/.test(t)), 30000, 'the question on Reprocess');
+        return { asked: asked.length, toasts: ui.toasts.slice(n).join(' / ') };
+      } finally {
+        window.confirm = () => true;
+      }`),
+    );
+    if (phone.skipped) {
+      check('phone: heavy scan asks first', true, `skipped: ${phone.skipped}`);
+    } else {
+      const zip = await driver.run<{ b64?: string; error?: string }>(PROCESSED_ZIP);
+      const kept = zip.b64 ? await readProcessedZip(zip.b64) : null;
+      const n = Object.keys(kept?.frames ?? {}).length;
+      check(
+        'phone: heavy scan asks first, and a "no" keeps the report',
+        phone.asked === 2 && n === 6,
+        zip.error ?? `${phone.asked} question(s), ${n} frames still in the report: ${phone.toasts}`,
+      );
+    }
+  }
+
   // ②b la aplicación abierta en OTRA pestaña a la vez, que es como alguien
   // trabaja (una para cada proyecto, o la misma recargada): el disco privado
   // del navegador es del origen, y abrir la fase ② en otra pestaña, procesar

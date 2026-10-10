@@ -396,11 +396,17 @@ export function mountPhase1(root: HTMLElement): void {
       );
       const images = fileList.filter((f) => !videos.includes(f));
       if (videos.length) {
-        pendingVideo = videos[0];
+        const file = videos[0];
+        pendingVideo = file;
         pendingProbe = null;
+        // sin sondeo no hay extracción: el aviso del teléfono lo necesita, y
+        // el botón seguía activo con el video anterior
+        extractBtn.disabled = true;
         try {
           videoInfo.textContent = 'Reading the video…';
-          const p = await probeVideo(pendingVideo);
+          const p = await probeVideo(file);
+          // mientras tanto se soltó otro video: este sondeo ya no vale
+          if (pendingVideo !== file) return;
           pendingProbe = p;
           // el respaldo es software y un solo hilo: en 4K son minutos, y
           // conviene saberlo antes de elegir el rango y los fps
@@ -423,6 +429,7 @@ export function mountPhase1(root: HTMLElement): void {
           endIn.value = p.duration.toFixed(1);
           extractBtn.disabled = false;
         } catch (e) {
+          if (pendingVideo !== file) return;
           videoInfo.textContent = '';
           toast(errMsg(e), 'err');
         }

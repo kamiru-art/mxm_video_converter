@@ -182,7 +182,10 @@ export function mountPhase2(root: HTMLElement): void {
   });
   function machineRam(): { gb: number; manual: boolean } {
     const manual = parseFloat(ramIn.value);
-    if (Number.isFinite(manual) && manual > 0) return { gb: manual, manual: true };
+    // en un teléfono, la pestaña no recibe la RAM del aparato: la escrita a
+    // mano tampoco pasa del tope de deviceRamGb
+    if (Number.isFinite(manual) && manual > 0)
+      return { gb: isMobile() ? Math.min(manual, 4) : manual, manual: true };
     return { gb: deviceRamGb(), manual: false };
   }
   const resizeCheck = check('Resize each frame to its original digital size', false);
@@ -207,10 +210,20 @@ export function mountPhase2(root: HTMLElement): void {
     reprocessBtn.style.display = loadedScans.size ? '' : 'none';
     reprocessBtn.textContent = `Reprocess the ${loadedScans.size} loaded scan(s) with the current options`;
   }
-  reprocessBtn.addEventListener('click', () => {
+  reprocessBtn.addEventListener('click', async () => {
     if (!loadedScans.size) return;
+    const files = [...loadedScans.values()];
+    // la pregunta del teléfono ANTES de borrar: un "no" deja el informe
+    // como estaba (processScans ya no vuelve a preguntar por estos)
+    reprocessBtn.disabled = true;
+    const go = await confirmHeavyScans(files);
+    reprocessBtn.disabled = false;
+    if (!go) {
+      toast('Not reprocessed. The report stays as it was.');
+      return;
+    }
     clearReport(true); // borra resultados y frames; conserva las hojas puestas a mano
-    void processScans([...loadedScans.values()]);
+    void processScans(files);
   });
 
   const scansDz = dropzone({
@@ -319,9 +332,13 @@ export function mountPhase2(root: HTMLElement): void {
 
   /** Pico de enderezar un escaneo, según su cabecera: dos copias (entrada y
    *  salida), como `rectify_bytes` del núcleo, y una cuarta parte más por lo
-   *  que las rodea. Sin cabecera legible, la estimación por tamaño. */
+   *  que las rodea. Sin cabecera legible en el primer mega, la estimación por
+   *  tamaño: imageInfo leería si no el archivo entero (un TIFF con su
+   *  directorio al final), y en un teléfono esa lectura ya es el pico del que
+   *  se quiere avisar. */
   async function scanPeakBytes(f: File): Promise<number> {
-    const info = await imageInfo(f).catch(() => null);
+    const head = f.size > 1 << 20 ? f.slice(0, 1 << 20) : f;
+    const info = await imageInfo(head).catch(() => null);
     if (!info) return estimatePeakBytes(f, false);
     return info.w * info.h * (info.sixteen ? 6 : 3) * 2 * 1.25;
   }
@@ -332,7 +349,7 @@ export function mountPhase2(root: HTMLElement): void {
 
   /** En un teléfono, avisa del escaneo más pesado del lote si pasa del
    *  umbral (ver confirmHeavyOnPhone). En un ordenador no lee nada. */
-  async function confirmHeavyScans(files: File[]): Promise<boolean> {
+  async function confirmHeavyScans(files: File[], signal?: AbortSignal): Promise<boolean> {
     if (!isMobile()) return true;
     let worst = 0;
     let worstName = '';
@@ -344,6 +361,9 @@ export function mountPhase2(root: HTMLElement): void {
         worstName = f.name;
       }
     }
+    // cancelado mientras se leían las cabeceras: no se pregunta, y el lote
+    // sale como cualquier lote cancelado
+    if (signal?.aborted) return true;
     if (!confirmHeavyOnPhone(`The scan “${worstName}”`, worst)) return false;
     for (const f of files) heavyAccepted.add(f);
     return true;
@@ -502,12 +522,14 @@ export function mountPhase2(root: HTMLElement): void {
     const ram = machineRam();
     const reported = navigator.deviceMemory;
     const ramTxt = ram.manual
-      ? `${ram.gb} GB RAM (set by you)`
+      ? `${ram.gb} GB RAM (set by you${isMobile() ? '; a phone tab counts 4 GB at most' : ''})`
       : reported && reported !== ram.gb
         ? `${reported}+ GB RAM (browser estimate; counting ${ram.gb} GB, because a phone tab gets less)`
         : reported
           ? `${reported}+ GB RAM (browser estimate)`
-          : `RAM not reported (assuming ${ram.gb} GB; set yours in Options)`;
+          : isMobile()
+            ? `RAM not reported (assuming ${ram.gb} GB, because a phone tab gets little)`
+            : `RAM not reported (assuming ${ram.gb} GB; set yours in Options)`;
     specsInfo.textContent = `This machine: ${navigator.hardwareConcurrency || '?'} cores, ${ramTxt}, GPU straightening ${gpu ? 'on' : 'off'}. Processing ${width} scan${width > 1 ? 's' : ''} at a time to stay inside memory.`;
   }
 
@@ -527,7 +549,7 @@ export function mountPhase2(root: HTMLElement): void {
     prog.show();
     try {
       // un "no" no es un error: el finally deja el panel como estaba
-      if (!(await confirmHeavyScans(files))) {
+      if (!(await confirmHeavyScans(files, ctl.signal))) {
         toast('Not processed. The scans stay loaded for Reprocess.');
         return;
       }
@@ -605,6 +627,8 @@ export function mountPhase2(root: HTMLElement): void {
       toast('Wait for the current batch to finish.', 'err');
       return false;
     }
+    // un archivo con el mismo nombre soltado después no pasó por la pregunta
+    if (!(await confirmHeavyScans([f]))) return false;
     processing = true;
     reprocessBtn.disabled = true;
     // un solo escaneo: segundos, sin cancelar (el núcleo no se interrumpe)

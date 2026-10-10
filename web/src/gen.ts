@@ -252,11 +252,17 @@ export interface GenerateResult {
 
 /** Memoria de UNA hoja en vuelo: sus fotogramas a resolución completa
  *  (RGBA, una copia aquí y otra en el worker) y el lienzo de la hoja con su
- *  PNG. */
-function pagePeakBytes(frames: GenFrame[], perPage: number, geometry: LayoutInfo): number {
+ *  PNG. `frames` son los de las hojas que se renderizan; `deep`, si las
+ *  hojas salen en 16 bits (lo decide el proyecto entero). */
+function pagePeakBytes(
+  frames: GenFrame[],
+  perPage: number,
+  geometry: LayoutInfo,
+  deep: boolean,
+): number {
   const maxPx = frames.reduce((m, f) => Math.max(m, f.w * f.h), 1);
   const pagePx = Number(geometry.page_w ?? 0) * Number(geometry.page_h ?? 0);
-  const bpp = frames.some((f) => f.sixteen) ? 8 : 4;
+  const bpp = deep ? 8 : 4;
   return maxPx * bpp * 2 * perPage + pagePx * 3 * 3 * (bpp / 4);
 }
 
@@ -363,7 +369,12 @@ async function generateSheetsInner({
   const geometry = JSON.parse(
     await run('compute_layout', { settings: coreSettings, firstW, firstH }),
   ) as LayoutInfo;
-  const pageBytes = pagePeakBytes(frames, perPage, geometry);
+  // solo cuentan las hojas que se van a renderizar: un fotograma enorme en
+  // una hoja no seleccionada no pesa en esta generación
+  const selectedFrames = frames.filter((_, i) => pagesSelected.has(Math.floor(i / perPage) + 1));
+  const pageBytes = pagePeakBytes(selectedFrames, perPage, geometry, !!s.deep);
+  // cancelada mientras esperaba su turno (genLock): sin pregunta
+  throwIfCancelled(signal, 'Sheet generation cancelled.');
   if (!confirmMemory(pageBytes)) throw new CancelledError();
   const window = pagesInFlight(pageBytes);
 

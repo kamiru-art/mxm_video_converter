@@ -7,12 +7,13 @@
 import type { LogEvent } from '@ffmpeg/ffmpeg';
 import { FFFSType, FFmpeg } from '@ffmpeg/ffmpeg';
 import type { DeepFrame, DeepSpec } from './commands.ts';
+import { isMobile } from './device.ts';
 import { BadRangeError } from './errors.ts';
 import { FrameQueue } from './frames.ts';
 import { loadFlag, saveFlag } from './store.ts';
 import type { Bytes } from './types.ts';
 import type { ExtractOptions, ExtractResult, ProbeResult } from './video.ts';
-import { ffmpegBatchFrames } from './video.ts';
+import { FFMPEG_PHONE_THREADS, ffmpegBatchFrames } from './video.ts';
 
 // video.ts monta sus PNG por WORKERFS con la misma instancia: el enum sale de
 // aquí para que el módulo de ffmpeg siga cargándose bajo demanda.
@@ -40,8 +41,11 @@ export function ffmpegThreads(): 'multi' | 'single' {
 }
 
 /** Hilos que se piden a ffmpeg con el núcleo multihilo: los de la máquina,
- *  con un tope; más no ayuda a un decodificador. */
+ *  con un tope; más no ayuda a un decodificador. En un teléfono, dos: cada
+ *  hilo guarda sus propios fotogramas en la memoria de ffmpeg (ver
+ *  FFMPEG_PHONE_THREADS en video.ts). */
 function threadCount(): number {
+  if (isMobile()) return FFMPEG_PHONE_THREADS;
   return Math.max(2, Math.min(8, navigator.hardwareConcurrency || 2));
 }
 

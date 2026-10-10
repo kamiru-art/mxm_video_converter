@@ -18,9 +18,10 @@ import { errMsg } from './errors.ts';
 // propia memoria, y la pestaña de un teléfono se cierra mucho antes que la
 // de un ordenador. Menos workers solo es más lento; el resultado es el mismo.
 const N = Math.max(1, Math.min(isMobile() ? 2 : 4, (navigator.hardwareConcurrency || 4) - 1));
-// Por worker; los escaneos grandes llegan a esto. Con poca RAM se recicla
-// antes: 300 MB con 2 GB, 600 MB con 4 GB, 700 MB desde 4,7 GB.
-const RECYCLE_BYTES = Math.min(700e6, Math.max(250e6, deviceRamGb() * 1e9 * 0.15));
+// Por worker; los escaneos grandes llegan a esto. Con menos de 4 GB se
+// recicla antes (350 MB con 2 GB); desde 4 GB, los 700 MB de siempre, y así
+// Safari y Firefox de escritorio, que no informan la RAM, no cambian.
+const RECYCLE_BYTES = Math.min(700e6, Math.max(250e6, deviceRamGb() * 1e9 * 0.175));
 
 // Un worker que NO ha contestado nada en este tiempo teniendo trabajo
 // pendiente está atascado. El núcleo corre síncrono dentro del worker, así que

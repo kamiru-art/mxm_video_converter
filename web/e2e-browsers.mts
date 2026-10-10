@@ -179,6 +179,20 @@ async function puppeteerDriver(kind: 'chrome' | 'zen', viewport?: Viewport): Pro
           ? { isMobile: true, hasTouch: true, deviceScaleFactor: 3 }
           : {}),
       });
+    // y en Chrome, el agente de un teléfono Android con sus client hints: sin
+    // él la página tiene tamaño de teléfono, pero device.ts la toma por un
+    // ordenador y el camino del teléfono no se prueba nunca
+    if (viewport?.mobile && kind === 'chrome')
+      await page.setUserAgent({
+        userAgent: `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version.replace(/^.*?\//, '')} Mobile Safari/537.36`,
+        userAgentMetadata: {
+          platform: 'Android',
+          platformVersion: '14',
+          architecture: '',
+          model: 'Pixel 8',
+          mobile: true,
+        },
+      });
     page.on('console', (m) => {
       const t = m.text();
       if (t.startsWith('[E2E]') || t.startsWith('[ffmpeg]')) console.log(t);
