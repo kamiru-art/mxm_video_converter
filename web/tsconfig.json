@@ -20,5 +20,5 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/worker.ts", "src/sw.ts"]
+  "exclude": ["src/worker.ts", "src/sw.ts", "src/opfs-worker.ts"]
 }

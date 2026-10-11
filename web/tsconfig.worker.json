@@ -1,6 +1,7 @@
 {
-  // El worker de procesamiento y el service worker: mismo rigor que la
-  // página, pero con la biblioteca WebWorker en vez de DOM.
+  // El worker de procesamiento, el escritor de OPFS y el service worker:
+  // mismo rigor que la página, pero con la biblioteca WebWorker en vez de
+  // DOM.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -17,5 +18,5 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["src/worker.ts", "src/sw.ts", "src/wasm/*.d.ts"]
+  "include": ["src/worker.ts", "src/sw.ts", "src/opfs-worker.ts", "src/wasm/*.d.ts"]
 }

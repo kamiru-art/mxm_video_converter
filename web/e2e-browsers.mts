@@ -257,8 +257,9 @@ async function safariDriver(viewport?: Viewport): Promise<Driver> {
   // WebDriver clásico manda a UNA ventana a la vez: cada pestaña se pone
   // delante antes de cada orden suya
   let current = String(await call('GET', `${s}/window`));
-  const tab = (handle: string, closeIt: () => Promise<void>): Driver => {
-    const on = async <T,>(f: () => Promise<T>): Promise<T> => {
+  type On = <T>(f: () => Promise<T>) => Promise<T>;
+  const tab = (handle: string, closeIt: (on: On) => Promise<void>): Driver => {
+    const on: On = async (f) => {
       if (current !== handle) {
         await call('POST', `${s}/window`, { handle });
         current = handle;
@@ -286,14 +287,16 @@ async function safariDriver(viewport?: Viewport): Promise<Driver> {
         const w = (await on(() => call('POST', `${s}/window/new`, { type: 'tab' }))) as {
           handle: string;
         };
-        return tab(w.handle, () =>
-          on(async () => {
+        // se cierra con el `on` de la pestaña nueva: con el de ésta, que
+        // la abrió, se cerraba ésta (en Safari, cerrar B cerraba A)
+        return tab(w.handle, (onSelf) =>
+          onSelf(async () => {
             await call('DELETE', `${s}/window`);
             current = '';
           }),
         );
       },
-      close: closeIt,
+      close: () => closeIt(on),
     };
   };
   return tab(current, async () => {
