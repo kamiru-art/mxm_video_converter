@@ -1321,7 +1321,7 @@ export function mountPhase2(root: HTMLElement): void {
     el(
       'div',
       { class: 'hint' },
-      'Straightens each sheet with its markers, identifies it by marker IDs (or QRs on older projects) and crops every frame. A sheet nothing identifies can be assigned by hand in the report.',
+      'Straightens each sheet with its markers, identifies it by marker IDs and crops every frame. A sheet nothing identifies can be assigned by hand in the report.',
     ),
     layoutDz,
     useCurrentBtn,

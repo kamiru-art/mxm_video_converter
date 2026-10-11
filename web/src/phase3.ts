@@ -1,6 +1,7 @@
 // Fase ③ — Calibración: perfil de impresora, curva de cianotipia, ColorBlocker.
 
 import { errMsg } from './errors.ts';
+import { tr } from './i18n.ts';
 import { run } from './pool.ts';
 import type { ProfileKind, ProfileMap } from './store.ts';
 import * as store from './store.ts';
@@ -115,7 +116,7 @@ function drawCurve(
   }
   ctx.fillStyle = '#57503F';
   ctx.font = '11px IBM Plex Mono, monospace';
-  ctx.fillText('red: measured response · blue: compensation curve', 8, 14);
+  ctx.fillText(tr('red: measured response · blue: compensation curve'), 8, 14);
 }
 
 export function mountPhase3(root: HTMLElement): void {
@@ -239,6 +240,10 @@ export function mountPhase3(root: HTMLElement): void {
     style: 'width:100%; max-width:380px; margin-top:8px',
   });
   bCanvas.style.display = 'none';
+  // la leyenda va dibujada: al cambiar de idioma se vuelve a dibujar
+  document.addEventListener('mxm:lang', () => {
+    if (bResult) drawCurve(bCanvas, { respuesta: bResult.respuesta, lut: bResult.lut });
+  });
   const cardB = calibCard(
     'Cyanotype curve',
     'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve ' +

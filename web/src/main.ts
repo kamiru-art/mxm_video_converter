@@ -3,6 +3,7 @@
 import './style.css';
 import { errMsg } from './errors.ts';
 import { mountHelp } from './help.ts';
+import { loadSpanish, startI18n } from './i18n.ts';
 import { runMigration } from './migrate.ts';
 import { sweepStorage } from './opfs.ts';
 import { mountPhase1 } from './phase1.ts';
@@ -73,11 +74,14 @@ window.addEventListener('hashchange', () => {
   if (mounters[v]) show(v);
 });
 
+// el idioma antes de montar la primera vista: en español no se ve el inglés
+startI18n();
+
 const initial = resolveRoute(location.hash.replace('#', ''));
 show(mounters[initial] ? initial : 'sheets');
 if (migrationProblem) toast(migrationProblem, 'err', true);
 
-// Los módulos que se cargan tarde (guardar el MOV, abrir un AVI), traídos ya
+// Los módulos que se cargan tarde (guardar el MOV, abrir un AVI, el español), traídos ya
 // en segundo plano: una vez importados viven en la pestaña, y un despliegue
 // posterior que retire sus archivos no la deja a mitad de un proyecto con
 // "Failed to fetch dynamically imported module" (carry-assets.mts guarda
@@ -86,6 +90,7 @@ if (migrationProblem) toast(migrationProblem, 'err', true);
 const preload = () => {
   void import('./pngmov.ts').catch(() => {});
   void import('./avi.ts').catch(() => {});
+  void loadSpanish().catch(() => {});
 };
 if ('requestIdleCallback' in window) requestIdleCallback(preload, { timeout: 10_000 });
 else setTimeout(preload, 3000);

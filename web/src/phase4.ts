@@ -6,6 +6,7 @@ import { confirmHeavyOnPhone, isMobile } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
 import type { AudioFrom, ExportKind, ExportStage, SequencePlan } from './export.ts';
 import { conformPeakBytes, exportLossless, planSequence } from './export.ts';
+import { tr } from './i18n.ts';
 import type { CompressedQuality, CompressedResult } from './lossy.ts';
 import { CODEC_NAMES, describeCompressed, exportCompressed, MAX_MBPS } from './lossy.ts';
 import { clearOutputs, type FramesHold, holdFrames } from './opfs.ts';
@@ -341,7 +342,7 @@ export function mountPhase4(root: HTMLElement): void {
     if (
       missing.length &&
       !confirm(
-        `${missing.length} frames are missing; the video will skip those positions. Continue?`,
+        tr(`${missing.length} frames are missing; the video will skip those positions. Continue?`),
       )
     )
       return;
