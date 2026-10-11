@@ -241,6 +241,44 @@ async function runFlow(
   check('scans simulated and processed', /Processing finished/.test(scans), scans);
   await shot('scans-done');
 
+  // ②b las miniaturas del informe son pequeñas (el núcleo las hace aparte):
+  // con los recortes enteros detrás, cientos de MB, Safari se congelaba al
+  // desplazar el informe. Un clic sigue abriendo el recorte a tamaño real.
+  const thumbs = await driver.run<{
+    n: number;
+    maxSide: number;
+    blank: number;
+    full: number;
+    closed: boolean;
+  }>(
+    step(`
+    const imgs = [...document.querySelectorAll('#view-scans .report-thumbs img')];
+    await Promise.all(imgs.map((i) => i.decode().catch(() => {})));
+    const maxSide = Math.max(0, ...imgs.map((i) => Math.max(i.naturalWidth, i.naturalHeight)));
+    const blank = imgs.filter((i) => !i.naturalWidth).length;
+    const frame = [...document.querySelectorAll('#view-scans .report-thumbs .thumb')]
+      .find((t) => t.querySelector('.tag')?.textContent !== 'alignment');
+    frame.click();
+    const big = await ui.until(() => {
+      const i = document.querySelector('.lightbox img');
+      return i?.complete && i.naturalWidth ? i : null;
+    }, 15000, 'the full-size frame');
+    const full = big.naturalWidth;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await ui.until(() => !document.querySelector('.lightbox'), 5000, 'the lightbox closing');
+    return { n: imgs.length, maxSide, blank, full, closed: true };`),
+  );
+  check(
+    'report thumbnails are small and the click opens the full frame',
+    thumbs.n > 0 &&
+      thumbs.blank === 0 &&
+      thumbs.maxSide > 0 &&
+      thumbs.maxSide <= 240 &&
+      thumbs.full > 240 &&
+      thumbs.closed,
+    `${thumbs.n} thumbnails, largest side ${thumbs.maxSide} px, ${thumbs.blank} without pixels; full frame ${thumbs.full} px wide`,
+  );
+
   // ②a sólo con el agente de un teléfono (Chrome emula Android): un escaneo
   // demasiado pesado para un teléfono pregunta antes, y un "no" no borra
   // nada. "Reprocess" vaciaba el informe ANTES de preguntar. El escaneo es

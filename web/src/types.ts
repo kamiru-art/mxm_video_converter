@@ -163,6 +163,8 @@ export interface ScanResult {
 export interface CoreFrame {
   label: string;
   png: Bytes;
+  /** JPEG pequeño para la miniatura del informe (si se pidió `thumbs`). */
+  thumb?: Bytes;
 }
 
 /** Salida de scan_process y scan_finish. `result` es ScanResult en JSON. */
@@ -171,6 +173,7 @@ export interface ScanOutput {
   frames: CoreFrame[];
   sin_identificar: CoreFrame[];
   overlay: Bytes | null;
+  overlay_thumb?: Bytes;
 }
 
 /** Salida (JSON) de scan_detect: la homografía para el warp en la GPU y el
