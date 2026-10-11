@@ -263,6 +263,26 @@ async function runFlow(
   check('es: sheets generated and downloaded', /\.zip \d+ bytes$/.test(sheets), sheets);
   await shot('sheets-done');
 
+  // un nombre que puso el usuario no se traduce, aunque coincida con un
+  // texto de la interfaz: un preajuste llamado «Portrait» (que en un menú
+  // de orientación es «Vertical»)
+  const preset = await driver.run<{ option: string; toast: string }>(
+    step(`
+    const name = document.querySelector('#view-sheets input[placeholder=${JSON.stringify(es('preset name'))}]');
+    name.value = 'Portrait';
+    name.dispatchEvent(new Event('input'));
+    const n = ui.toasts.length;
+    [...name.closest('.row').querySelectorAll('button')].find((b) => b.textContent === ${JSON.stringify(es('Save'))}).click();
+    await ui.until(() => ui.toasts.length > n, 10000, 'the preset saved notice');
+    const sel = [...document.querySelectorAll('#view-sheets select')].find((s) => [...s.options].some((o) => o.value === 'Portrait'));
+    return { option: sel.querySelector('option[value="Portrait"]').textContent, toast: ui.toasts.slice(n).join(' / ') };`),
+  );
+  check(
+    'es: a name the user chose stays as it is',
+    preset.option === 'Portrait' && preset.toast.includes('“Portrait”'),
+    `option "${preset.option}"; ${preset.toast}`,
+  );
+
   await screen('scans');
   const scans = await driver.run<{ toasts: string; rows: number; tags: string[] }>(
     step(`

@@ -23,9 +23,12 @@ export type Lang = 'en' | 'es';
 
 const KEY = 'mxm.lang';
 const ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
-/** Lo que no se traduce: código, lo que escribe el usuario, y lo que lleva
- *  `data-i18n="skip"` (la ayuda, que tiene su propia versión). */
-const SKIP = 'script, style, textarea, [contenteditable], [data-i18n="skip"]';
+/** Lo que no se traduce: código, lo que escribe el usuario, lo que lleva
+ *  `data-i18n="skip"` (la ayuda, que tiene su propia versión), y en una
+ *  lista de nombres guardados (`data-i18n="names"`) los nombres, que puso el
+ *  usuario: sólo se traduce la opción fija, la de valor vacío. */
+const SKIP =
+  'script, style, textarea, [contenteditable], [data-i18n="skip"], select[data-i18n="names"] option:not([value=""])';
 
 let current: Lang = 'en';
 let dict: typeof Dict | null = null;

@@ -704,6 +704,8 @@ export function mountPhase1(root: HTMLElement): void {
     ...store.listProfiles('cianotipia').map((n): SelectOption => [n, n]),
   ];
   const curveSel = select(curveProfiles(), '');
+  // los nombres los puso el usuario: el traductor (i18n.ts) no los toca
+  curveSel.dataset.i18n = 'names';
   curveSel.addEventListener('change', () => {
     const p = curveSel.value ? store.loadProfile('cianotipia', curveSel.value) : null;
     s.cyan_curve = p?.lut ?? null;
@@ -721,6 +723,7 @@ export function mountPhase1(root: HTMLElement): void {
     ...store.listProfiles('cianotipia_color').map((n): SelectOption => [n, n]),
   ];
   const inkProfSel = select(inkProfiles(), '');
+  inkProfSel.dataset.i18n = 'names';
   inkProfSel.addEventListener('change', () => {
     const p = inkProfSel.value ? store.loadProfile('cianotipia_color', inkProfSel.value) : null;
     if (p) {
@@ -802,6 +805,7 @@ export function mountPhase1(root: HTMLElement): void {
     ...store.listProfiles('impresora').map((n): SelectOption => [n, n]),
   ];
   const printerSel = select(printerProfiles(), '');
+  printerSel.dataset.i18n = 'names';
   printerSel.addEventListener('change', () => {
     const p = printerSel.value ? store.loadProfile('impresora', printerSel.value) : null;
     s.print_scale_x = p?.scale_x ?? 1;
@@ -825,6 +829,7 @@ export function mountPhase1(root: HTMLElement): void {
     ...store.listProfiles('presets').map((n): SelectOption => [n, n]),
   ];
   const presetSel = select(presetOptions(), '');
+  presetSel.dataset.i18n = 'names';
   const presetName = el('input', { type: 'text', placeholder: 'preset name' });
   const refreshPresetList = (): void => {
     setOptions(presetSel, presetOptions());
