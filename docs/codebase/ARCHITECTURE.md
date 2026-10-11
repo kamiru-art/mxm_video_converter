@@ -112,6 +112,7 @@ does Safari if the worker does not start.
 | Layer or module | Owns | Must not own | Evidence |
 |-----------------|------|--------------|----------|
 | `main.ts` | Routing, mounting, the capability badge. | Domain work. | `web/src/main.ts` |
+| `i18n.ts` | The interface language. The phases write English; in Spanish a `MutationObserver` replaces each text node and each `title`, `placeholder`, `aria-label` and `alt` as it arrives or changes, by the dictionary in `i18n-es.ts` (exact strings, then templates with `{0}` text and `{#0}` number holes, then pieces split on ` · ` and on sentences), and keeps the English of each one to give it back on EN. So the language changes at once without a reload, which would lose the project in progress, and nothing outside the page (file names, `informe.json`, printed sheets) changes. The observer exists only once Spanish has been used, and the dictionary and the Spanish help are separate chunks loaded on first use (and fetched in the background later, like the MOV and AVI modules). | Text of its own; a phase's English. | `web/src/i18n.ts` |
 | `phase1..4.ts`, `help.ts` | The DOM of one phase, its events, its progress reporting. | WebAssembly calls, persistence format. | `web/src/phase2.ts` |
 | `pool.ts` | How many workers exist, which one runs what, when one is recycled. | The meaning of a command. | `web/src/pool.ts` |
 | `worker.ts` | The command table and the transfer lists. | Validation, algorithms. | `web/src/worker.ts` |

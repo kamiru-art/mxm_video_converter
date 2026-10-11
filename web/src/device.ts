@@ -8,6 +8,7 @@
 // memoria. Por eso aquí se trabaja más despacio (menos a la vez), y se
 // pregunta antes de un trabajo que, aun solo, ya es demasiado grande.
 
+import { tr } from './i18n.ts';
 import { fmtBytes } from './ui.ts';
 
 function detectMobile(): boolean {
@@ -55,6 +56,8 @@ const PHONE_HEAVY_BYTES = 600e6;
 export function confirmHeavyOnPhone(what: string, peakBytes: number): boolean {
   if (!MOBILE || !(peakBytes >= PHONE_HEAVY_BYTES)) return true;
   return confirm(
-    `${what} needs about ${fmtBytes(peakBytes)} of memory at one time. That is a lot for a phone: the browser can close this tab before the end, and then the work in progress is lost. If it finishes, the result has the full quality. A computer does it safely.\n\nContinue on this phone?`,
+    tr(
+      `${what} needs about ${fmtBytes(peakBytes)} of memory at one time. That is a lot for a phone: the browser can close this tab before the end, and then the work in progress is lost. If it finishes, the result has the full quality. A computer does it safely.\n\nContinue on this phone?`,
+    ),
   );
 }

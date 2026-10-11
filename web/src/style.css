@@ -117,6 +117,29 @@ body {
 .capdot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--cian-300); }
 .capbadge.gpu .capdot { background: var(--sol); }
 
+/* ── Columna derecha de la cabecera: estado del equipo e idioma ── */
+.side { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.lang-switch {
+  display: inline-flex; padding: 2px; border-radius: 999px;
+  background: var(--prusia-950); border: 1px solid var(--prusia-700);
+}
+.lang-switch button {
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1;
+  padding: 6px 12px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--cian-300); cursor: pointer;
+}
+.lang-switch button:hover { color: var(--papel); }
+.lang-switch button:focus-visible { outline: 2px solid var(--sol); outline-offset: 1px; }
+.lang-switch button[aria-pressed="true"] { background: var(--papel); color: var(--tinta); cursor: default; }
+/* en una pantalla estrecha la columna baja a su propia fila: ahí, en línea */
+@media (max-width: 700px) { .side { flex-direction: row; align-items: center; gap: 8px; } }
+/* el lema en español es más largo: en dos líneas, para que las pestañas
+   quepan donde caben en inglés */
+:root:lang(es) .tagline { max-width: 42ch; }
+:root:lang(es) .thumb.dup::after { content: "reusado"; }
+/* abriendo en español: el inglés no se ve mientras llega el diccionario */
+.i18n-wait #app { visibility: hidden; }
+
 /* ── Vistas ───────────────────────────────────────────────── */
 .view { display: none; }
 .view.active { display: block; }

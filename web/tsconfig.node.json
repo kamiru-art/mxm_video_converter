@@ -22,6 +22,7 @@
   "include": [
     "carry-assets.mts",
     "e2e-browsers.mts",
+    "e2e-i18n.mts",
     "e2e-migration.mts",
     "make-icons.mts",
     "e2e-run.mts",

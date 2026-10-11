@@ -16,7 +16,8 @@
     "preview": "vite preview",
     "test:e2e": "node prepare-ffmpeg.mts && MXM_E2E=1 vite build && node e2e-run.mts",
     "test:migration": "node e2e-migration.mts",
-    "test:ui": "node prepare-ffmpeg.mts && vite build && node e2e-ui.mts"
+    "test:ui": "node prepare-ffmpeg.mts && vite build && node e2e-ui.mts",
+    "test:i18n": "node prepare-ffmpeg.mts && vite build && node e2e-i18n.mts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

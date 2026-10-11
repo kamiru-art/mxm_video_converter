@@ -1,12 +1,21 @@
 // Help: the complete workflow, written to be used without technical knowledge.
+// Tiene su propia versión en español (help-es.ts, la carga i18n.ts), que se
+// pone al cambiar de idioma; el traductor de i18n.ts se la salta.
 
+import { helpEs, lang } from './i18n.ts';
 import { el } from './ui.ts';
 
 export function mountHelp(root: HTMLElement): void {
-  root.append(
-    el('div', {
-      class: 'prose',
-      html: `
+  const prose = el('div', { class: 'prose', 'data-i18n': 'skip' });
+  const render = (): void => {
+    prose.innerHTML = lang() === 'es' ? helpEs() : HELP_EN;
+  };
+  render();
+  document.addEventListener('mxm:lang', render);
+  root.append(prose);
+}
+
+const HELP_EN = `
 <h2>How it works</h2>
 <ol class="steps">
   <li><span class="step-num">01</span><strong>Video in</strong><span>a video or a folder of images</span></li>
@@ -161,7 +170,4 @@ markers sit on clean white.</li>
 
 </div>
 </div>
-`,
-    }),
-  );
-}
+`;
