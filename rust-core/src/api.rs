@@ -360,7 +360,27 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     opts
 }
 
-fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
+/// Lado mayor de las miniaturas del informe: la caja mide ~84 px CSS, así
+/// que 240 px cubre pantallas de densidad 3 sin pasar de unos pocos KB.
+const THUMB_SIDE: usize = 240;
+
+/// JPEG pequeño de un recorte, para las miniaturas del informe: el
+/// navegador no tiene que leer ni decodificar el recorte entero (a tamaño de
+/// escaneo y a veces a 16 bits) para pintar una caja de 84 px.
+fn thumb_jpeg(img: &DynImg) -> Vec<u8> {
+    let (mini, _f) = img.proxy_rgb8(THUMB_SIDE);
+    codecs::encode_jpeg_rgb(&mini, 80)
+}
+
+/// `thumbs` en las opciones del escaneo: si se piden miniaturas.
+fn wants_thumbs(opts_json: &str) -> bool {
+    serde_json::from_str::<Value>(opts_json)
+        .ok()
+        .and_then(|v| v.get("thumbs").and_then(|b| b.as_bool()))
+        .unwrap_or(false)
+}
+
+fn scan_output_to_js(out: crate::scanproc::ScanOutput, thumbs: bool) -> JsValue {
     let obj = Object::new();
     Reflect::set(
         &obj,
@@ -374,6 +394,10 @@ fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
         Reflect::set(&f, &"label".into(), &JsValue::from_str(label)).ok();
         let png = codecs::encode_png_dyn(crop);
         Reflect::set(&f, &"png".into(), &Uint8Array::from(png.as_slice())).ok();
+        if thumbs {
+            let jpg = thumb_jpeg(crop);
+            Reflect::set(&f, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
+        }
         frames.push(&f);
     }
     Reflect::set(&obj, &"frames".into(), &frames).ok();
@@ -383,12 +407,25 @@ fn scan_output_to_js(out: crate::scanproc::ScanOutput) -> JsValue {
         Reflect::set(&f, &"label".into(), &JsValue::from_str(name)).ok();
         let png = codecs::encode_png_dyn(crop);
         Reflect::set(&f, &"png".into(), &Uint8Array::from(png.as_slice())).ok();
+        if thumbs {
+            let jpg = thumb_jpeg(crop);
+            Reflect::set(&f, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
+        }
         unid.push(&f);
     }
     Reflect::set(&obj, &"sin_identificar".into(), &unid).ok();
-    if let Some(ov) = &out.overlay {
-        let jpg = codecs::encode_jpeg_rgb(ov, 82);
+    if let Some(ov) = out.overlay {
+        let jpg = codecs::encode_jpeg_rgb(&ov, 82);
         Reflect::set(&obj, &"overlay".into(), &Uint8Array::from(jpg.as_slice())).ok();
+        if thumbs {
+            let mini = thumb_jpeg(&DynImg::U8(ov));
+            Reflect::set(
+                &obj,
+                &"overlay_thumb".into(),
+                &Uint8Array::from(mini.as_slice()),
+            )
+            .ok();
+        }
     }
     obj.into()
 }
@@ -430,7 +467,7 @@ pub fn scan_process(
 
     let (img, _alpha) = codecs::decode(scan_bytes).map_err(err)?;
     let out = process_scan(img, scan_name, &layout, &opts, &claims_map);
-    Ok(scan_output_to_js(out))
+    Ok(scan_output_to_js(out, wants_thumbs(opts_json)))
 }
 
 /// Fase de detección para el camino con warp por WebGPU: recibe el RGBA de
@@ -532,7 +569,7 @@ pub fn scan_finish(
         fin,
         res,
     );
-    Ok(scan_output_to_js(out))
+    Ok(scan_output_to_js(out, wants_thumbs(opts_json)))
 }
 
 /// Codifica un buffer RGBA de 8 bits como PNG (sin pérdida). La fase de video

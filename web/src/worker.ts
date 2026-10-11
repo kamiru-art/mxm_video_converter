@@ -56,9 +56,12 @@ let pdfInstance: core.Pdf | null = null;
 
 function scanTransfer(r: ScanOutput): Transferable[] {
   const transfer: Transferable[] = [];
-  for (const f of r.frames) transfer.push(f.png.buffer);
-  for (const f of r.sin_identificar) transfer.push(f.png.buffer);
+  for (const f of [...r.frames, ...r.sin_identificar]) {
+    transfer.push(f.png.buffer);
+    if (f.thumb) transfer.push(f.thumb.buffer);
+  }
   if (r.overlay) transfer.push(r.overlay.buffer);
+  if (r.overlay_thumb) transfer.push(r.overlay_thumb.buffer);
   return transfer;
 }
 

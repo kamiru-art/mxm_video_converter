@@ -37,6 +37,8 @@ import { makeZip } from './zip.ts';
 export interface LabeledPng {
   label: string;
   png: Blob;
+  /** miniatura JPEG para el informe; sin ella se muestra `png` */
+  thumb?: Blob;
 }
 
 export interface ResultEntry {
@@ -44,6 +46,7 @@ export interface ResultEntry {
   frames: LabeledPng[];
   sinIdentificar: LabeledPng[];
   overlay: Blob | null;
+  overlayThumb?: Blob;
   /** filas del informe y URLs de miniaturas de ESTA entrada (ver buildResultRows) */
   rows?: HTMLTableRowElement[] | null;
   urls?: string[];
@@ -78,6 +81,7 @@ interface ScanOpts {
   resize_to_original: boolean;
   normalize_patches: boolean;
   fine_align: boolean;
+  thumbs: boolean;
   forced_sheet?: number;
 }
 
@@ -413,6 +417,9 @@ export function mountPhase2(root: HTMLElement): void {
       resize_to_original: resizeCheck.input.checked,
       normalize_patches: patchesCheck.input.checked,
       fine_align: fineCheck.input.checked,
+      // miniaturas pequeñas del núcleo para el informe: con los recortes
+      // enteros (cientos de MB) Safari se congelaba al desplazarlo
+      thumbs: true,
     };
   }
 
@@ -471,6 +478,7 @@ export function mountPhase2(root: HTMLElement): void {
       (r.frames ?? []).map(async (fr) => ({
         label: fr.label,
         png: await storeProcessedFrame(fr.label, fr.png),
+        thumb: fr.thumb ? asBlob(fr.thumb, 'image/jpeg') : undefined,
       })),
     );
     return {
@@ -479,8 +487,10 @@ export function mountPhase2(root: HTMLElement): void {
       sinIdentificar: (r.sin_identificar ?? []).map((fr) => ({
         label: fr.label,
         png: asBlob(fr.png, 'image/png'),
+        thumb: fr.thumb ? asBlob(fr.thumb, 'image/jpeg') : undefined,
       })),
       overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
+      overlayThumb: r.overlay_thumb ? asBlob(r.overlay_thumb, 'image/jpeg') : undefined,
     };
   }
 
@@ -763,7 +773,7 @@ export function mountPhase2(root: HTMLElement): void {
   }
 
   function buildResultRows(entry: ResultEntry): HTMLTableRowElement[] {
-    const { result: r, frames, sinIdentificar, overlay } = entry;
+    const { result: r, frames, sinIdentificar, overlay, overlayThumb } = entry;
     const urls: string[] = [];
     entry.urls = urls;
     const trackUrl = (u: string): string => {
@@ -778,7 +788,10 @@ export function mountPhase2(root: HTMLElement): void {
       const t = el(
         'div',
         { class: 'thumb clickable', title: 'View the alignment overlay' },
-        el('img', { src: trackUrl(URL.createObjectURL(overlay)), alt: 'alignment' }),
+        el('img', {
+          src: trackUrl(URL.createObjectURL(overlayThumb ?? overlay)),
+          alt: 'alignment',
+        }),
         el('div', { class: 'tag' }, 'alignment'),
       );
       t.addEventListener('click', () => openInGallery(overlay, r.scan));
@@ -791,7 +804,7 @@ export function mountPhase2(root: HTMLElement): void {
           class: 'thumb clickable',
           title: 'View at full size (← → to move between frames, Esc to close)',
         },
-        el('img', { src: trackUrl(pngUrl(f.png)) }),
+        el('img', { src: trackUrl(pngUrl(f.thumb ?? f.png)) }),
         el('div', { class: 'tag' }, f.label),
       );
       t.addEventListener('click', () => openInGallery(f.png, f.label));
