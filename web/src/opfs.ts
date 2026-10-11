@@ -126,6 +126,10 @@ class SyncWriter {
   constructor() {
     this.worker = new Worker(new URL('./opfs-worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<OpfsReply>) => {
+      if (e.data.id === 0) {
+        this.stop(new Error(`OPFS writer stopped: ${e.data.error?.message}`));
+        return;
+      }
       const p = this.pending.get(e.data.id);
       if (!p) return;
       this.pending.delete(e.data.id);
@@ -135,12 +139,20 @@ class SyncWriter {
       else p.resolve(e.data.value);
     };
     // el script no cargó (una pestaña vieja tras publicar otra versión) o
-    // el worker se cayó
+    // el worker se cayó; o una respuesta no se pudo leer, y lo que la
+    // esperaba esperaría para siempre
     this.worker.onerror = (e) => this.stop(new Error(`OPFS writer stopped: ${e.message}`));
+    this.worker.onmessageerror = () =>
+      this.stop(new Error('OPFS writer stopped: unreadable reply'));
   }
 
-  stop(err = new Error('OPFS writer stopped')): void {
+  /** Lo para y rechaza lo pendiente. Con `err`, se cayó trabajando: desde
+   *  aquí se escribe con createWritable, y Safari vuelve a dejar copias. */
+  stop(err?: Error): void {
+    if (this.dead) return;
     this.dead = true;
+    if (err) console.warn('[opfs] sync writer stopped, back to createWritable:', err.message);
+    err ??= new Error('OPFS writer stopped');
     this.worker.terminate();
     for (const p of this.pending.values()) p.reject(err);
     this.pending.clear();
@@ -583,11 +595,10 @@ export async function storeFrame(
   if (!folder) return asBlob();
   const { dir } = folder;
   let w: FileSystemWritableFileStream | null = null;
-  let started = false;
   try {
     const sync = await syncWriter();
     if (sync) {
-      started = true;
+      // si falla, el escritor ya borró lo que dejó a medias
       await sync.put([...folder.path, name], data);
       return await (await dir.getFileHandle(name)).getFile();
     }
@@ -599,11 +610,10 @@ export async function storeFrame(
     return await handle.getFile();
   } catch (e) {
     // la escritura a medias se cierra: si no, el navegador se queda con su
-    // archivo temporal y con el bloqueo de la entrada hasta recargar (el
-    // escritor de Safari ya cerró el suyo al fallar)
-    if (w || started) {
+    // archivo temporal y con el bloqueo de la entrada hasta recargar
+    if (w) {
       try {
-        await w?.abort();
+        await w.abort();
       } catch {
         /* ya cerrada */
       }

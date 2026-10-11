@@ -12,7 +12,6 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { browserFromArgs, HEADERS_FILE, launch, serveDist } from './e2e-browsers.mts';
@@ -232,26 +231,32 @@ const files = (await driver
 await driver.close();
 closeServer();
 
-// Safari (26.5) deja en la carpeta temporal del sistema una copia entera de
+// Safari (26.5) deja en la carpeta temporal del usuario una copia entera de
 // cada archivo que la página escribe en OPFS con createWritable, y no la
 // borra nunca (ver SyncWriter en src/opfs.ts). Esta corrida escribe
 // fotogramas, el MOV y el ZIP: ninguno debe dejar copia. Se cuentan las de
-// después de arrancar; otra página abierta en Safari durante la corrida
-// también contaría.
+// después de arrancar, y se borran: si no, cada corrida fallida se quedaría
+// con el disco de la máquina. Otra página abierta en Safari durante la
+// corrida también contaría. La carpeta es la de macOS para el usuario, no
+// $TMPDIR, que quien lanza la prueba puede haber cambiado.
 let leftovers: { files: number; bytes: number } | null = null;
 if (which === 'safari') {
   leftovers = { files: 0, bytes: 0 };
-  for (const f of await readdir(tmpdir())) {
+  const tmp = spawnSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout.trim();
+  if (!tmp) throw new Error('getconf DARWIN_USER_TEMP_DIR gave nothing');
+  for (const f of await readdir(tmp)) {
     if (!f.startsWith('FileSystemWritableStream')) continue;
-    const st = await stat(join(tmpdir(), f)).catch(() => null);
+    const path = join(tmp, f);
+    const st = await stat(path).catch(() => null);
     if (st && st.mtimeMs >= startedAt - 1000) {
       leftovers.files++;
       leftovers.bytes += st.size;
+      await rm(path, { force: true });
     }
   }
   console.log(
     leftovers.files
-      ? `Safari left ${leftovers.files} temporary copies (${(leftovers.bytes / 1e6).toFixed(1)} MB) in ${tmpdir()}`
+      ? `Safari left ${leftovers.files} temporary copies (${(leftovers.bytes / 1e6).toFixed(1)} MB) in ${tmp}; deleted`
       : 'Safari left no temporary copies of what it wrote.',
   );
 }

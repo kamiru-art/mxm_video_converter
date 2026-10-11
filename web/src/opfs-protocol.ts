@@ -16,7 +16,9 @@ export type OpfsOp =
 export type OpfsRequest = OpfsOp & { id: number };
 
 /** La respuesta: el resultado de `probe`, o el error con su nombre
- *  (QuotaExceededError se reconoce por él). */
+ *  (QuotaExceededError se reconoce por él). Con `id` 0, un error que no es
+ *  de ninguna petición (un mensaje ilegible): la página deja de usar el
+ *  escritor. */
 export interface OpfsReply {
   id: number;
   value?: boolean;
