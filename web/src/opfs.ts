@@ -21,6 +21,7 @@
 // ZIP fallaba con "NotFoundError: A requested file or directory could not
 // be found…" (medido en Opera y Chrome).
 
+import type { OpfsOp, OpfsReply } from './opfs-protocol.ts';
 import type { Bytes } from './types.ts';
 import { sanitizeLabel } from './ui.ts';
 
@@ -81,7 +82,153 @@ function exact(chunk: Bytes | Blob): Bytes | Blob {
     : chunk.slice();
 }
 
-const dirPromises = new Map<string, Promise<FileSystemDirectoryHandle | null>>();
+/** Una carpeta de esta pestaña y su ruta desde la raíz de OPFS: el escritor
+ *  de Safari (SyncWriter) trabaja en otro hilo y sólo recibe nombres. */
+interface Folder {
+  dir: FileSystemDirectoryHandle;
+  path: string[];
+}
+
+/** Lo que se le pasa al escritor: los bytes copiados una vez y transferidos
+ *  (quien llama conserva los suyos, y una vista no arrastra su búfer entero
+ *  al otro hilo); un Blob tal cual, sin copiarlo. */
+function payload(data: Bytes | Blob): { data: ArrayBuffer | Blob; transfer: Transferable[] } {
+  if (data instanceof Blob) return { data, transfer: [] };
+  const copy = data.slice();
+  return { data: copy.buffer, transfer: [copy.buffer] };
+}
+
+/** Si el escritor no contesta a la primera en este tiempo, no se usa. */
+const PROBE_MS = 10e3;
+
+/** El escritor de OPFS de Safari, en un worker (opfs-worker.ts). Safari
+ *  (26.5) deja en la carpeta temporal del sistema una copia ENTERA de cada
+ *  archivo escrito con createWritable, y no la borra al cerrarlo, al
+ *  terminar la sesión ni al salir: una sesión de 31 escaneos dejó 2,8 GB
+ *  allí, y unas pruebas llegaron a llenar el disco (medido 2026-10-10, Safari
+ *  26.5.2). Con un FileSystemSyncAccessHandle no queda nada, pero sólo
+ *  existe en un worker.
+ *
+ *  Sólo en WebKit (Safari, y cualquier navegador de iOS): Chrome, Firefox y
+ *  los demás siguen con createWritable, como estaban. Si el worker no
+ *  arranca o no tiene SyncAccessHandle, Safari también. */
+class SyncWriter {
+  private readonly worker: Worker;
+  private nextId = 1;
+  private nextSid = 1;
+  private readonly pending = new Map<
+    number,
+    { resolve: (v: boolean | undefined) => void; reject: (e: Error) => void }
+  >();
+  /** Se cayó: lo que venga después vuelve a createWritable. */
+  dead = false;
+
+  constructor() {
+    this.worker = new Worker(new URL('./opfs-worker.ts', import.meta.url), { type: 'module' });
+    this.worker.onmessage = (e: MessageEvent<OpfsReply>) => {
+      if (e.data.id === 0) {
+        this.stop(new Error(`OPFS writer stopped: ${e.data.error?.message}`));
+        return;
+      }
+      const p = this.pending.get(e.data.id);
+      if (!p) return;
+      this.pending.delete(e.data.id);
+      const err = e.data.error;
+      // con su nombre: storeFrame reconoce el disco lleno por él
+      if (err) p.reject(new DOMException(err.message, err.name));
+      else p.resolve(e.data.value);
+    };
+    // el script no cargó (una pestaña vieja tras publicar otra versión) o
+    // el worker se cayó; o una respuesta no se pudo leer, y lo que la
+    // esperaba esperaría para siempre
+    this.worker.onerror = (e) => this.stop(new Error(`OPFS writer stopped: ${e.message}`));
+    this.worker.onmessageerror = () =>
+      this.stop(new Error('OPFS writer stopped: unreadable reply'));
+  }
+
+  /** Lo para y rechaza lo pendiente. Con `err`, se cayó trabajando: desde
+   *  aquí se escribe con createWritable, y Safari vuelve a dejar copias. */
+  stop(err?: Error): void {
+    if (this.dead) return;
+    this.dead = true;
+    if (err) console.warn('[opfs] sync writer stopped, back to createWritable:', err.message);
+    err ??= new Error('OPFS writer stopped');
+    this.worker.terminate();
+    for (const p of this.pending.values()) p.reject(err);
+    this.pending.clear();
+  }
+
+  private call(op: OpfsOp, transfer: Transferable[] = []): Promise<boolean | undefined> {
+    if (this.dead) return Promise.reject(new Error('OPFS writer stopped'));
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.worker.postMessage({ ...op, id }, transfer);
+    });
+  }
+
+  async probe(): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), PROBE_MS);
+    });
+    try {
+      return (await Promise.race([this.call({ op: 'probe' }), late])) === true;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Escribe el archivo entero de una vez. */
+  async put(path: string[], data: Bytes | Blob): Promise<void> {
+    const p = payload(data);
+    await this.call({ op: 'put', path, data: p.data }, p.transfer);
+  }
+
+  /** Abre (vacío) un archivo para escribirlo por trozos. */
+  async open(path: string[]): Promise<number> {
+    const sid = this.nextSid++;
+    await this.call({ op: 'open', sid, path });
+    return sid;
+  }
+
+  /** Un trozo en `at`, o detrás del anterior. */
+  async write(sid: number, data: Bytes | Blob, at?: number): Promise<void> {
+    const p = payload(data);
+    await this.call({ op: 'write', sid, data: p.data, at }, p.transfer);
+  }
+
+  async close(sid: number): Promise<void> {
+    await this.call({ op: 'close', sid });
+  }
+
+  /** Lo suelta sin más: quien llama borra el archivo. */
+  async discard(sid: number): Promise<void> {
+    await this.call({ op: 'discard', sid });
+  }
+}
+
+let writer: Promise<SyncWriter | null> | null = null;
+
+/** El escritor de Safari, o null: entonces se escribe con createWritable. */
+async function syncWriter(): Promise<SyncWriter | null> {
+  writer ??= (async () => {
+    // WebKit es el único que pone esto: Safari y todo navegador de iOS
+    if (navigator.vendor !== 'Apple Computer, Inc.' || typeof Worker === 'undefined') return null;
+    try {
+      const w = new SyncWriter();
+      if (await w.probe()) return w;
+      w.stop();
+    } catch (e) {
+      console.warn('[opfs] no sync writer:', e);
+    }
+    return null;
+  })();
+  const w = await writer;
+  return w && !w.dead ? w : null;
+}
+
+const dirPromises = new Map<string, Promise<Folder | null>>();
 /** Los borrados de esta pestaña, uno detrás de otro. */
 let clearing: Promise<void> = Promise.resolve();
 /** Cada caché (DIR, PROCESSED, EXPORT) vive en una carpeta por generación,
@@ -189,6 +336,11 @@ async function beat(): Promise<void> {
   const tab = await tabDir();
   if (!tab) return;
   try {
+    const sync = await syncWriter();
+    if (sync) {
+      await sync.put([TABS, TAB_ID, ALIVE], new Uint8Array([1]));
+      return;
+    }
     const w = await (await tab.getFileHandle(ALIVE, { create: true })).createWritable();
     await w.write(new Uint8Array([1]));
     await w.close();
@@ -273,7 +425,7 @@ async function tabDir(create = true): Promise<FileSystemDirectoryHandle | null> 
   }
 }
 
-function cacheDir(name = DIR): Promise<FileSystemDirectoryHandle | null> {
+function cacheDir(name = DIR): Promise<Folder | null> {
   let p = dirPromises.get(name);
   if (!p) {
     const folder = folderOf(name);
@@ -281,7 +433,8 @@ function cacheDir(name = DIR): Promise<FileSystemDirectoryHandle | null> {
       const tab = await tabDir();
       if (!tab) return null;
       try {
-        return await tab.getDirectoryHandle(folder, { create: true });
+        const dir = await tab.getDirectoryHandle(folder, { create: true });
+        return { dir, path: [TABS, TAB_ID, folder] };
       } catch {
         return null;
       }
@@ -438,10 +591,17 @@ export async function storeFrame(
   type = 'image/png',
 ): Promise<Blob> {
   const asBlob = (): Blob => (data instanceof Blob ? data : new Blob([data], { type }));
-  const dir = await cacheDir(dirName);
-  if (!dir) return asBlob();
+  const folder = await cacheDir(dirName);
+  if (!folder) return asBlob();
+  const { dir } = folder;
   let w: FileSystemWritableFileStream | null = null;
   try {
+    const sync = await syncWriter();
+    if (sync) {
+      // si falla, el escritor ya borró lo que dejó a medias
+      await sync.put([...folder.path, name], data);
+      return await (await dir.getFileHandle(name)).getFile();
+    }
     const handle = await dir.getFileHandle(name, { create: true });
     w = await handle.createWritable();
     await w.write(exact(data));
@@ -525,11 +685,12 @@ function memoryOutput(type: string): OutputFile {
   };
 }
 
-async function outDir(): Promise<FileSystemDirectoryHandle | null> {
+async function outDir(): Promise<Folder | null> {
   const tab = await tabDir();
   if (!tab) return null;
   try {
-    return await tab.getDirectoryHandle(OUT, { create: true });
+    const dir = await tab.getDirectoryHandle(OUT, { create: true });
+    return { dir, path: [TABS, TAB_ID, OUT] };
   } catch {
     return null;
   }
@@ -542,10 +703,36 @@ export async function openOutput(
   name: string,
   type = 'application/octet-stream',
 ): Promise<OutputFile> {
-  const dir = await outDir();
-  if (!dir) return memoryOutput(type);
+  const folder = await outDir();
+  if (!folder) return memoryOutput(type);
+  const { dir } = folder;
   try {
     const handle = await dir.getFileHandle(name, { create: true });
+    const sync = await syncWriter();
+    if (sync) {
+      const sid = await sync.open([...folder.path, name]);
+      return {
+        where: 'disk',
+        write: (chunk) => sync.write(sid, chunk),
+        async close() {
+          await sync.close(sid);
+          const f = await handle.getFile();
+          return type ? new Blob([f], { type }) : f;
+        },
+        async abort() {
+          try {
+            await sync.discard(sid);
+          } catch {
+            /* ya cerrado */
+          }
+          try {
+            await dir.removeEntry(name);
+          } catch {
+            /* ya no está */
+          }
+        },
+      };
+    }
     const w = await handle.createWritable();
     return {
       where: 'disk',
@@ -599,21 +786,36 @@ export async function openSeekableOutput(
   name: string,
   type: string,
 ): Promise<SeekableOutput | null> {
-  const dir = await outDir();
-  if (!dir) return null;
+  const folder = await outDir();
+  if (!folder) return null;
+  const { dir } = folder;
   try {
     const handle = await dir.getFileHandle(name, { create: true });
-    const writable = await handle.createWritable();
-    const stream = new WritableStream<PositionedWrite>({
-      write: (chunk) =>
-        writable.write({
-          type: 'write',
-          position: chunk.position,
-          data: exact(chunk.data as Bytes),
-        }),
-      close: () => writable.close(),
-      abort: () => writable.abort(),
-    });
+    const sync = await syncWriter();
+    let stream: WritableStream<PositionedWrite>;
+    let discard: () => Promise<void>;
+    if (sync) {
+      const sid = await sync.open([...folder.path, name]);
+      stream = new WritableStream<PositionedWrite>({
+        write: (chunk) => sync.write(sid, chunk.data as Bytes, chunk.position),
+        close: () => sync.close(sid),
+        abort: () => sync.discard(sid),
+      });
+      discard = () => sync.discard(sid);
+    } else {
+      const writable = await handle.createWritable();
+      stream = new WritableStream<PositionedWrite>({
+        write: (chunk) =>
+          writable.write({
+            type: 'write',
+            position: chunk.position,
+            data: exact(chunk.data as Bytes),
+          }),
+        close: () => writable.close(),
+        abort: () => writable.abort(),
+      });
+      discard = () => writable.abort();
+    }
     return {
       stream,
       async file() {
@@ -622,7 +824,7 @@ export async function openSeekableOutput(
       },
       async abort() {
         try {
-          await writable.abort();
+          await discard();
         } catch {
           /* ya cerrado */
         }

@@ -95,6 +95,18 @@ The shared folders of older versions are emptied after a day. Until
 ZIP failed with `NotFoundError` (Chrome, Opera, Safari) or `AbortError`
 (Firefox).
 
+In Safari every write goes through a small worker of its own
+(`web/src/opfs-worker.ts`, `SyncWriter` in `opfs.ts`) that writes with a
+`FileSystemSyncAccessHandle`. Safari 26.5 keeps a full copy of every file
+written with `createWritable` in the system's temporary folder and never
+deletes it: one session of 31 scans left 2.8 GB there (measured
+2026-10-10). The sync handle writes into the file itself and leaves
+nothing, but it exists only in a worker. The page sends the path and the
+bytes (copied once and transferred) and keeps its file-backed Blobs as
+before. Only WebKit takes this path (`navigator.vendor`: Safari and every
+iOS browser); Chrome, Firefox and the rest keep `createWritable`, and so
+does Safari if the worker does not start.
+
 ## 3) Layer/Module Responsibilities
 
 | Layer or module | Owns | Must not own | Evidence |
