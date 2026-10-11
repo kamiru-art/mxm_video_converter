@@ -86,6 +86,17 @@ const SPANISH_PIECES = [
       ),
   ),
 ];
+/** El español de cada plantilla como patrón (los huecos, cualquier cosa),
+ *  salvo las que se escriben igual en inglés: un texto compuesto que quede
+ *  en español al volver al inglés encaja en uno, por corto que sea («Hoja 3»). */
+const toPattern = (t: string): string =>
+  `^${t
+    .split(/\{#?\d\}/)
+    .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.+?')}$`;
+const SPANISH_TEMPLATES = TEMPLATES.filter(
+  ([en, v]) => /[a-zñáéíóú]{3}/i.test(v.replace(/\{#?\d\}/g, '')) && toPattern(en) !== toPattern(v),
+).map(([, v]) => toPattern(v));
 /** Los textos en inglés de la interfaz cuyo español es otro: ninguno puede
  *  verse tal cual en la página en español. Un oráculo que no depende de lo
  *  que el traductor apunta como no traducido. */
@@ -480,7 +491,8 @@ async function runFlow(
     const en = ui.snapshot();
     const spanish = new Set(${JSON.stringify(SPANISH_ONLY)});
     const pieces = ${JSON.stringify(SPANISH_PIECES)};
-    const leftovers = en.map((t) => t.replace(/^@[a-z-]+=/, '').trim()).filter((t) => spanish.has(t) || pieces.some((p) => t.includes(p)));
+    const patterns = ${JSON.stringify(SPANISH_TEMPLATES)}.map((p) => new RegExp(p));
+    const leftovers = en.map((t) => t.replace(/^@[a-z-]+=/, '').replace(/\\s+/g, ' ').trim()).filter((t) => spanish.has(t) || pieces.some((p) => t.includes(p)) || patterns.some((re) => re.test(t)));
     await ui.lang('es');
     const es2 = ui.snapshot();
     const diff = es1.flatMap((t, i) => (t === es2[i] ? [] : [JSON.stringify(t) + ' → ' + JSON.stringify(es2[i])]));
