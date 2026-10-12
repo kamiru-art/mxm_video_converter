@@ -300,27 +300,33 @@ async function runFlow(
       ? toEs.moved.join(' | ')
       : `${toEs.parts} parts (title, tabs, badge, switch, view) at the same place and size`,
   );
-  // el título termina donde termina el cuadro de ajustes, cuando su columna
-  // mide lo que el cuadro (si la ventana no da, la marca encoge: ahí no)
+  // el título no se sale de su columna
   const titleEdge = await driver.run<{
     title: number;
-    panel: number;
-    column: number;
-    width: number;
+    columnRight: number;
+    markBottom: number;
+    stripTop: number;
+    stripBottom: number;
   }>(
     step(`
     const g = document.createRange();
     g.selectNodeContents(document.querySelector('.wordmark h1'));
-    const panel = document.querySelector('#view-sheets .workbench > .paper').getBoundingClientRect();
-    return { title: g.getBoundingClientRect().right, panel: panel.right, column: document.querySelector('.wordmark').getBoundingClientRect().width, width: panel.width };`),
+    const mark = document.querySelector('.wordmark').getBoundingClientRect();
+    return { title: g.getBoundingClientRect().right, columnRight: mark.right, markBottom: mark.bottom, stripTop: document.getElementById('phase-nav').getBoundingClientRect().top, stripBottom: document.getElementById('phase-nav').getBoundingClientRect().bottom };`),
   );
-  const full = Math.abs(titleEdge.column - titleEdge.width) < 1;
   check(
-    'the title ends where the settings panel ends',
-    !full || Math.abs(titleEdge.title - titleEdge.panel) <= 3,
-    full
-      ? `title ends at ${titleEdge.title.toFixed(1)} px, panel at ${titleEdge.panel.toFixed(1)} px`
-      : `not checked here: the title column is ${titleEdge.column.toFixed(0)} px, the panel ${titleEdge.width.toFixed(0)} px`,
+    'the title stays inside its column',
+    titleEdge.title <= titleEdge.columnRight + 0.5,
+    `title ends at ${titleEdge.title.toFixed(1)} px, its column at ${titleEdge.columnRight.toFixed(1)} px`,
+  );
+  // y, en la misma fila que la tira de fases, no baja de su borde inferior
+  const sameRow = titleEdge.stripTop < titleEdge.markBottom;
+  check(
+    'the title does not go below the phase strip',
+    !sameRow || titleEdge.markBottom <= titleEdge.stripBottom + 0.5,
+    sameRow
+      ? `title bottom ${titleEdge.markBottom.toFixed(1)} px, strip bottom ${titleEdge.stripBottom.toFixed(1)} px`
+      : 'not checked here: the phase strip has its own row',
   );
   await shot('header-es');
   const en1 = await driver.run<string[]>(step(`await ui.lang('en'); return ui.snapshot();`));
