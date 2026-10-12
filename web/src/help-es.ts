@@ -121,6 +121,14 @@ calidad, así que guarda también una copia sin pérdida.</li>
 </ul>
 <p>Si unos pocos fotogramas salen de otro tamaño, la app los ajusta al resto
 sin estirarlos.</p>
+<p>Si faltan fotogramas, cada hueco muestra el dibujo anterior, así que el
+video dura lo mismo que el original y sigue sincronizado con el sonido. Marca
+<strong>Saltar los fotogramas que faltan</strong> para quitarlos, por ejemplo
+cuando duplicaste fotogramas para recortarlos y ponerlos encima de otros. Con
+<strong>Cortar también su sonido</strong> se va también el sonido de esos
+fotogramas, y el resto se une sin silencios. Desmárcalo cuando el sonido ya
+viene editado sin ellos: puedes soltar un archivo de sonido en lugar del
+video.</p>
 
 <h3>Calibración (cuando necesitas precisión)</h3>
 <p>Cada una de estas herramientas te da un resultado. Ponle un nombre, pulsa <strong>Guardar

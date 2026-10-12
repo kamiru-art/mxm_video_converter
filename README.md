@@ -179,6 +179,15 @@ sequence. The video from phase ① is used when it is still loaded; in another
 session, drop the clip in the Sound section. If you change the frame rate,
 the drawings and the sound drift apart, and the page says so.
 
+When frames are missing, each gap shows the drawing before it, so the video
+keeps the length of the original stretch and stays in sync with the sound.
+You can skip the missing frames instead, for example frames that were
+duplicated to be cut out and laid over others. The sound of the skipped
+frames can be cut with them, so every drawing keeps its own sound and the
+pieces join with a crossfade of 5 ms. Or the sound can play straight
+through, when the one you drop (a clip or a sound file) is already edited
+without them.
+
 Every long task has a Cancel button: extracting frames, generating the
 sheets, processing a batch of scans, the rescue sheets and the final video.
 While one runs, the options of that panel are locked.

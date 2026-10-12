@@ -514,6 +514,72 @@ async function runFlow(
   );
   const at = Number(/^(\d+) \//.exec(video.info)?.[1] ?? 0);
   check('es: the preview plays', at > 1, video.info);
+  // con fotogramas que faltan: un layout de tres posiciones con la del medio
+  // sin dibujo, y dos dibujos sueltos aquí. Las dos casillas, el texto de
+  // cada una de sus tres combinaciones y la pregunta al guardar, en español
+  const gaps = await driver.run<{ labels: string[]; hints: string[]; asked: string[] }>(
+    step(`
+    const png = async (shade) => {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 36;
+      const g = c.getContext('2d');
+      g.fillStyle = shade;
+      g.fillRect(0, 0, 64, 36);
+      return await new Promise((r) => c.toBlob(r, 'image/png'));
+    };
+    const drop = (accept, files) => {
+      const input = [...document.querySelectorAll('#view-video input[type=file]')].find((i) => i.accept.startsWith(accept));
+      const dt = new DataTransfer();
+      for (const f of files) dt.items.add(f);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change'));
+    };
+    drop('image/*', [new File([await png('#123')], 'gap_1.png', { type: 'image/png' }), new File([await png('#cde')], 'gap_3.png', { type: 'image/png' })]);
+    const layout = { proyecto: 'gaps', timeline: [1, 2, 3].map((i) => ({ pos: i, etiqueta: 'gap_' + i, rep: 'gap_' + i })) };
+    drop('.json', [new File([JSON.stringify(layout)], 'layout.json', { type: 'application/json' })]);
+    const shown = await ui.until(() => [...document.querySelectorAll('#view-video label.check')].find((l) => l.textContent === ${JSON.stringify(es('Skip the missing frames'))} && l.getClientRects().length), 10000, 'the missing-frames options, in Spanish');
+    const box = shown.parentElement.parentElement;
+    const [skip, cut] = [...box.querySelectorAll('label.check')];
+    const hint = box.querySelector('.hint');
+    // el traductor mira los cambios del documento: traduce al momento, pero
+    // después de que el clic cambie el texto, no a la vez
+    const settled = () => new Promise((r) => setTimeout(r, 100));
+    const hints = [hint.textContent];
+    skip.querySelector('input').click();
+    await settled();
+    hints.push(hint.textContent);
+    cut.querySelector('input').click();
+    await settled();
+    hints.push(hint.textContent);
+    cut.querySelector('input').click();
+    const asked = [];
+    window.confirm = (m) => { asked.push(m); return false; };
+    ui.button(${rx(es('Save the video'), true)}).click();
+    await ui.until(() => asked.length, 10000, 'the question before saving');
+    window.confirm = () => true;
+    skip.querySelector('input').click();
+    return { labels: [skip.textContent, cut.textContent], hints, asked };`),
+  );
+  const wantHints = [
+    es(
+      'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.',
+    ),
+    es(
+      'The missing frames are left out, and so is their sound: every drawing keeps its own sound, and the pieces join without silences.',
+    ),
+    es(
+      'The missing frames are left out and the sound plays straight through, for a sound already edited without them.',
+    ),
+  ];
+  check(
+    'es: the missing-frames options, their three explanations and the question are in Spanish',
+    gaps.labels.join() === [es('Skip the missing frames'), es('Cut their sound too')].join() &&
+      gaps.hints.join() === wantHints.join() &&
+      gaps.asked[0] ===
+        es('{#0} frames are missing; the video skips them and their sound. Continue?', '1'),
+    `${gaps.labels.join(' / ')} | ${gaps.hints.join(' | ')} | ${gaps.asked.join(' | ')}`,
+  );
   await screen('video');
   await screen('calibration');
   await screen('help');
