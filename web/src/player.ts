@@ -5,7 +5,9 @@
 // vista previa no sale del archivo: pasa los mismos fotogramas, en el mismo
 // orden y a los mismos fps, sobre un lienzo, con el sonido del original
 // sonando debajo. Es una vista: las imágenes van reducidas al tamaño de la
-// pantalla y a 8 bits; lo que se guarda no pasa por aquí.
+// pantalla y a 8 bits; lo que se guarda no pasa por aquí. Con fotogramas
+// saltados y su sonido cortado (AudioFrom.keep), el sonido salta con ellos:
+// al acabar cada tramo se lleva al principio del siguiente.
 
 import type { AudioFrom } from './export.ts';
 import { run } from './pool.ts';
@@ -97,6 +99,37 @@ export function createPlayer(): Player {
   let sound: HTMLVideoElement | null = null;
   let soundUrl = '';
   let soundStart = 0;
+  /** Los tramos de la línea de tiempo que suenan (AudioFrom.keep), y en qué
+   *  fotograma de la secuencia empieza cada uno; null si suena seguido. */
+  let spans: Array<[number, number]> | null = null;
+  let spanAt: number[] = [];
+  let span = 0; // el tramo que suena ahora
+
+  /** El tramo en que cae el fotograma `i` de la secuencia. */
+  function spanOf(i: number): number {
+    let s = 0;
+    while (s + 1 < spanAt.length && spanAt[s + 1] <= i) s++;
+    return s;
+  }
+  /** Dónde está el fotograma `i` en el sonido, en segundos desde su inicio. */
+  function soundTimeOf(i: number): number {
+    if (!spans) return i / fps;
+    const s = spanOf(i);
+    return (spans[s][0] + i - spanAt[s]) / fps;
+  }
+  /** El fotograma que toca según el sonido; salta de tramo cuando acaba. */
+  function frameOfSound(snd: HTMLVideoElement): number {
+    const t = snd.currentTime - soundStart;
+    if (!spans) return Math.floor(t * fps + 1e-6);
+    const [a, b] = spans[span];
+    if (t * fps >= b - 1e-6) {
+      if (span + 1 >= spans.length) return seq.length;
+      span++;
+      snd.currentTime = soundStart + spans[span][0] / fps;
+      return spanAt[span];
+    }
+    return spanAt[span] + Math.max(0, Math.floor(t * fps + 1e-6) - a);
+  }
 
   function show(i: number): void {
     current = Math.max(0, Math.min(seq.length - 1, i));
@@ -115,11 +148,10 @@ export function createPlayer(): Player {
   function tick(): void {
     if (!playing) return;
     // con sonido, el reloj es el sonido: la imagen lo sigue a él
-    const t =
+    const i =
       sound && !sound.paused
-        ? sound.currentTime - soundStart
-        : from / fps + (performance.now() - t0) / 1000;
-    const i = Math.floor(t * fps + 1e-6);
+        ? frameOfSound(sound)
+        : Math.floor((from / fps + (performance.now() - t0) / 1000) * fps + 1e-6);
     if (i >= seq.length) {
       pause();
       show(seq.length - 1);
@@ -143,9 +175,15 @@ export function createPlayer(): Player {
     playBtn.textContent = 'Pause';
     from = current;
     t0 = performance.now();
-    if (sound) {
+    // un sonido que se acaba antes de este fotograma: play() lo devolvería a
+    // su principio y la imagen esperaría a ese sonido de fuera del tramo.
+    // Sigue muda, con su propio reloj
+    const at = soundStart + soundTimeOf(current);
+    if (sound && Number.isFinite(sound.duration) && at >= sound.duration) sound.pause();
+    else if (sound) {
       try {
-        sound.currentTime = soundStart + current / fps;
+        span = spanOf(current);
+        sound.currentTime = at;
         await sound.play();
       } catch {
         // el navegador no reproduce ese original (un AVI, un HEVC en
@@ -166,6 +204,8 @@ export function createPlayer(): Player {
     if (soundUrl) URL.revokeObjectURL(soundUrl);
     sound = null;
     soundUrl = '';
+    spans = null;
+    spanAt = [];
   }
 
   playBtn.addEventListener('click', () => {
@@ -204,6 +244,15 @@ export function createPlayer(): Player {
       sound = el('video', { playsinline: '', preload: 'auto' });
       sound.src = soundUrl;
       soundStart = audio.start;
+      if (audio.keep?.length) {
+        spans = audio.keep;
+        let k = 0;
+        spanAt = audio.keep.map(([a, b]) => {
+          const at = k;
+          k += b - a;
+          return at;
+        });
+      }
     }
     const uniq = [...new Set(frames)];
     void (async () => {

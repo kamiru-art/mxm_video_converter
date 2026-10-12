@@ -22,7 +22,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,6 +185,70 @@ interface Check {
   name: string;
   ok: boolean;
   detail: string;
+}
+
+/** Los archivos de un ZIP en base64: ruta dentro del ZIP → bytes (unzip de
+ *  la máquina). */
+async function unzipAll(b64: string): Promise<Map<string, Buffer>> {
+  const dir = await mkdtemp(join(tmpdir(), 'mxm-zip-'));
+  try {
+    const zip = join(dir, 'z.zip');
+    await writeFile(zip, Buffer.from(b64, 'base64'));
+    spawnSync('unzip', ['-q', '-o', zip, '-d', join(dir, 'x')]);
+    const out = new Map<string, Buffer>();
+    const names = await readdir(join(dir, 'x'), { recursive: true }).catch(() => [] as string[]);
+    for (const n of names.sort()) {
+      const f = join(dir, 'x', n);
+      if ((await stat(f)).isFile()) out.set(n, await readFile(f));
+    }
+    return out;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** El sonido de la prueba de los huecos: un WAV de 16 bits estéreo a 44,1 kHz
+ *  de ruido pseudoaleatorio, que no se repite en ningún desplazamiento, así
+ *  que una muestra corrida de sitio no puede coincidir por casualidad. */
+const GAP_RATE = 44100;
+function noiseWav(seconds: number): Buffer {
+  const n = Math.round(seconds * GAP_RATE);
+  const data = Buffer.alloc(n * 4);
+  let x = 0x2545f491;
+  for (let i = 0; i < n * 2; i++) {
+    x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+    data.writeInt16LE(((x >>> 8) % 40000) - 20000, i * 2);
+  }
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0);
+  h.writeUInt32LE(36 + data.length, 4);
+  h.write('WAVEfmt ', 8);
+  h.writeUInt32LE(16, 16);
+  h.writeUInt16LE(1, 20);
+  h.writeUInt16LE(2, 22);
+  h.writeUInt32LE(GAP_RATE, 24);
+  h.writeUInt32LE(GAP_RATE * 4, 28);
+  h.writeUInt16LE(4, 32);
+  h.writeUInt16LE(16, 34);
+  h.write('data', 36);
+  h.writeUInt32LE(data.length, 40);
+  return Buffer.concat([h, data]);
+}
+
+/** Las muestras (estéreo entrelazado) del bloque 'data' de un WAV. */
+function wavSamples(wav: Buffer | undefined): Int16Array | null {
+  if (wav?.toString('latin1', 0, 4) !== 'RIFF') return null;
+  let o = 12;
+  while (o + 8 <= wav.length) {
+    const id = wav.toString('latin1', o, o + 4);
+    const size = wav.readUInt32LE(o + 4);
+    if (id === 'data') {
+      const d = wav.subarray(o + 8, o + 8 + size);
+      return new Int16Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.length));
+    }
+    o += 8 + size + (size & 1);
+  }
+  return null;
 }
 
 async function runFlow(
@@ -577,6 +641,339 @@ async function runFlow(
   const at = Number(/^(\d+) \//.exec(preview)?.[1] ?? 0);
   check('preview plays in the page', at > 1, preview);
   await shot('video-done');
+
+  // ③b fotogramas que faltan, como los deja Kami cuando duplica uno para
+  // recortarlo y ponerlo encima de otro: el layout de las hojas con cinco
+  // posiciones más sin dibujo (la primera, la última, y dos seguidas del
+  // mismo duplicado), a 24 fps desde 0,25 s, y como sonido un WAV soltado
+  // aquí. Se guarda el ZIP de PNG en los tres modos, y el sonido de cada uno
+  // se compara muestra a muestra con el WAV de origen
+  const sheetsZip = await driver.run<string>(
+    step(`
+    const d = ui.downloads.find((x) => /.zip$/.test(x.name));
+    return await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(',')[1] ?? '');
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(d.blob);
+    });`),
+  );
+  const sheetLayout = JSON.parse(
+    [...(await unzipAll(sheetsZip))]
+      .find(([n]) => n.endsWith('layout.json'))?.[1]
+      .toString('utf8') ?? '{}',
+  ) as { timeline?: { pos: number; etiqueta: string; rep: string }[]; video?: object };
+  const drawn = [...(sheetLayout.timeline ?? [])].sort((a, b) => a.pos - b.pos);
+  if (drawn.length !== 6)
+    throw new Error(`the sheets' layout.json has ${drawn.length} timeline positions, not 6`);
+  const gap = (etiqueta: string, rep = etiqueta) => ({ etiqueta, rep });
+  // la posición i de la línea de tiempo: un dibujo de las hojas o un hueco
+  const slots = [
+    gap('dup_a'),
+    drawn[0],
+    gap('dup_b'),
+    drawn[1],
+    drawn[2],
+    gap('dup_c1', 'dup_c'),
+    gap('dup_c2', 'dup_c'),
+    drawn[3],
+    drawn[4],
+    drawn[5],
+    gap('dup_d'),
+  ];
+  const keep: [number, number][] = [
+    [1, 2],
+    [3, 5],
+    [7, 10],
+  ];
+  const GAP_FPS = 24;
+  const GAP_START = 0.25;
+  const gapLayout = {
+    ...sheetLayout,
+    timeline: slots.map((t, i) => ({ pos: i + 1, etiqueta: t?.etiqueta, rep: t?.rep })),
+    video: { ...sheetLayout.video, fps_extraccion: GAP_FPS, inicio_s: GAP_START },
+  };
+  const source = noiseWav(GAP_START + slots.length / GAP_FPS + 0.3);
+  await writeFile(join(shots, 'gaps-source.wav'), source);
+  const gaps = await driver.run<{
+    shown: boolean;
+    cutOffWhileHolding: boolean;
+    plans: string[];
+    asked: string[];
+    zips: string[];
+    mp4: string;
+    preview: string;
+  }>(
+    step(`
+    const b64 = (blob) => new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(',')[1] ?? '');
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(blob);
+    });
+    const drop = (sel, file) => {
+      const input = [...document.querySelectorAll('#view-video input[type=file]')].find((i) => i.accept.startsWith(sel));
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change'));
+    };
+    const asked = [];
+    window.confirm = (m) => { asked.push(m); return true; };
+    const wav = Uint8Array.from(atob(${JSON.stringify(source.toString('base64'))}), (c) => c.charCodeAt(0));
+    drop('video/*,audio/*', new File([wav], 'edited-sound.wav', { type: 'audio/wav' }));
+    drop('.json', new File([${JSON.stringify(JSON.stringify(gapLayout))}], 'layout.json', { type: 'application/json' }));
+    const fps = [...document.querySelectorAll('#view-video input[type=number]')][0];
+    await ui.until(() => fps.value === '${GAP_FPS}', 10000, 'the fps of the dropped layout');
+    const checks = [...document.querySelectorAll('#view-video label.check')];
+    const skip = checks.find((l) => /Skip the missing frames/.test(l.textContent)).querySelector('input');
+    const cut = checks.find((l) => /Cut their sound too/.test(l.textContent)).querySelector('input');
+    // las dos vienen marcadas; para retener se desmarca la de saltar
+    const shown = skip.getClientRects().length > 0 && skip.checked && cut.checked && !cut.disabled;
+    const kind = [...document.querySelectorAll('#view-video select')].find((s) => [...s.options].some((o) => o.value === 'frames'));
+    const planText = (n) => ui.until(() => [...document.querySelectorAll('#view-video .hint')].map((h) => h.textContent).find((x) => new RegExp('^Lossless: .*, ' + n + ' frames;').test(x)), 30000, 'the plan with ' + n + ' frames');
+    const save = async (ext) => {
+      const before = ui.downloads.length;
+      ui.button(/Save the video/).click();
+      const d = await ui.until(() => ui.downloads.slice(before).find((x) => x.name.endsWith(ext)), 180000, 'the ' + ext);
+      await ui.until(() => !ui.button(/Save the video/).disabled, 30000, 'the export to finish');
+      return await b64(d.blob);
+    };
+    kind.value = 'frames';
+    kind.dispatchEvent(new Event('change'));
+    skip.checked = false;
+    skip.dispatchEvent(new Event('change'));
+    const cutOffWhileHolding = cut.disabled;
+    const plans = [await planText(${slots.length})];
+    const zips = [await save('.zip')];
+    skip.checked = true;
+    skip.dispatchEvent(new Event('change'));
+    plans.push(await planText(6));
+    zips.push(await save('.zip'));
+    cut.checked = false;
+    cut.dispatchEvent(new Event('change'));
+    zips.push(await save('.zip'));
+    cut.checked = true;
+    cut.dispatchEvent(new Event('change'));
+    kind.value = 'mp4';
+    kind.dispatchEvent(new Event('change'));
+    const mp4 = await save('.mp4');
+    // la vista previa con los saltos: llega al final, con el sonido saltando
+    ui.button(/^Preview$/).click();
+    const play = await ui.until(() => {
+      const b = document.querySelector('#view-video .player button');
+      return b && !b.disabled && b;
+    }, 60000, 'the preview with gaps');
+    play.click();
+    const preview = await ui.until(() => {
+      const t = document.querySelector('#view-video .player-info').textContent;
+      return play.textContent === 'Play' && /^6 \\/ 6/.test(t) && t;
+    }, 15000, 'the preview to reach its last frame');
+    window.confirm = () => true;
+    return { shown, cutOffWhileHolding, plans, asked, zips, mp4, preview };`),
+  );
+  check(
+    'missing frames: both options appear, both on, cutting idle while holding',
+    gaps.shown && gaps.cutOffWhileHolding,
+    `shown: ${gaps.shown}; cut disabled while holding: ${gaps.cutOffWhileHolding}`,
+  );
+  check(
+    'missing frames: the plan counts the held frames, then only the kept ones',
+    gaps.plans.length === 2,
+    gaps.plans.join(' | '),
+  );
+  check(
+    'missing frames: each save asks with what it will do',
+    gaps.asked.length === 4 &&
+      /^Frames missing: 5\. Each gap shows the drawing before it\./.test(gaps.asked[0] ?? '') &&
+      /skips the gaps and their sound/.test(gaps.asked[1] ?? '') &&
+      /the sound plays without cuts/.test(gaps.asked[2] ?? '') &&
+      /skips the gaps and their sound/.test(gaps.asked[3] ?? ''),
+    gaps.asked.join(' | '),
+  );
+  const [held, cutZip, straightZip] = await Promise.all(gaps.zips.map(unzipAll));
+  const pngSha = (z: Map<string, Buffer>): string[] =>
+    [...z.entries()]
+      .filter(([n]) => n.endsWith('.png'))
+      .map(([, b]) => createHash('sha256').update(b).digest('hex').slice(0, 12));
+  const heldSha = pngSha(held);
+  const keptSha = pngSha(cutZip);
+  // retenido: cada hueco repite el dibujo de antes; el primero, el primero
+  const want = [1, 1, 1, 3, 4, 4, 4, 7, 8, 9, 9].map((i) => keptSha[[1, 3, 4, 7, 8, 9].indexOf(i)]);
+  check(
+    'holding: 11 frames, every gap shows the drawing before it',
+    heldSha.length === 11 && new Set(keptSha).size === 6 && heldSha.join() === want.join(),
+    `held ${heldSha.length}: ${heldSha.join(' ')}`,
+  );
+  check(
+    'skipping: the 6 drawn frames, in order, in both sound modes',
+    keptSha.length === 6 && pngSha(straightZip).join() === keptSha.join(),
+    `kept: ${keptSha.join(' ')}`,
+  );
+  // el sonido: la posición p del tramo empieza en la muestra round(p · rate / fps)
+  const src = wavSamples(source) ?? new Int16Array();
+  const off = Math.round(GAP_START * GAP_RATE);
+  const sampleAt = (p: number): number => Math.round((p * GAP_RATE) / GAP_FPS);
+  const sameAs = (got: Int16Array | null, from: number, frames: number): string => {
+    if (!got) return 'no WAV';
+    if (got.length !== sampleAt(frames) * 2)
+      return `${got.length / 2} samples, want ${sampleAt(frames)}`;
+    for (let i = 0; i < got.length; i++)
+      if (got[i] !== src[from * 2 + i]) return `differs at sample ${i >> 1}`;
+    return 'same';
+  };
+  const wavOf = (z: Map<string, Buffer>) =>
+    wavSamples([...z.entries()].find(([n]) => n.endsWith('.wav'))?.[1]);
+  const heldSound = sameAs(wavOf(held), off, slots.length);
+  check(
+    'holding: the sound is the source from 0.25 s, sample for sample, for all 11 positions',
+    heldSound === 'same',
+    heldSound,
+  );
+  const straight = sameAs(wavOf(straightZip), off, 6);
+  check(
+    'skipping, sound straight through: the source from 0.25 s, uncut, as long as the 6 frames',
+    straight === 'same',
+    straight,
+  );
+  // cortado: fuera de cada empalme, cada muestra es la de su dibujo en el
+  // original; dentro, queda entre la que seguía (la que se quita) y la nueva
+  const cutSound = wavOf(cutZip);
+  let cutDetail = cutSound ? '' : 'no WAV';
+  const fades: number[] = [];
+  if (cutSound) {
+    if (cutSound.length !== sampleAt(6) * 2)
+      cutDetail = `${cutSound.length / 2} samples, want ${sampleAt(6)}`;
+    let k = 0;
+    let prevEnd = -1;
+    for (const [a, b] of keep) {
+      const dst = sampleAt(k);
+      const len = sampleAt(k + b - a) - dst;
+      const from = off + sampleAt(a);
+      let fade = 0;
+      for (let i = 0; i < len && !cutDetail; i++) {
+        for (let c = 0; c < 2; c++) {
+          const got = cutSound[(dst + i) * 2 + c];
+          const own = src[(from + i) * 2 + c];
+          if (got === own) continue;
+          const left = prevEnd >= 0 ? src[(prevEnd + i) * 2 + c] : own;
+          if (
+            prevEnd >= 0 &&
+            i < GAP_RATE * 0.01 &&
+            got >= Math.min(left, own) - 1 &&
+            got <= Math.max(left, own) + 1
+          )
+            fade = i + 1;
+          else
+            cutDetail = `sample ${dst + i} (piece ${a}–${b}, ${i} in) is ${got}, its own is ${own}`;
+        }
+      }
+      fades.push(fade);
+      prevEnd = from + len;
+      k += b - a;
+    }
+  }
+  check(
+    'skipping, sound cut: every drawing keeps its own sound, joined by a crossfade of ≤ 5 ms',
+    !cutDetail &&
+      fades[0] === 0 &&
+      fades.slice(1).every((f) => f > 0 && f <= Math.round(GAP_RATE * 0.005)),
+    cutDetail ||
+      `${cutSound ? cutSound.length / 2 : 0} samples (${sampleAt(6)} wanted); crossfade at each join: ${fades.slice(1).join(', ')} samples`,
+  );
+  const mp4File = join(shots, 'gaps.mp4');
+  await writeFile(mp4File, Buffer.from(gaps.mp4, 'base64'));
+  const probe = spawnSync(
+    'ffprobe',
+    [
+      '-v',
+      'error',
+      '-count_frames',
+      '-show_entries',
+      'stream=codec_type,nb_read_frames',
+      '-of',
+      'json',
+      mp4File,
+    ],
+    { encoding: 'utf8' },
+  );
+  const streams =
+    (JSON.parse(probe.stdout || '{}') as { streams?: Record<string, string>[] }).streams ?? [];
+  const vs = streams.find((x) => x.codec_type === 'video');
+  // el AAC no guarda las muestras, pero se parece: su sonido, decodificado por
+  // el ffmpeg de la máquina, tiene que parecerse al cortado y no al seguido
+  // (los dos coinciden en el primer tramo; se compara desde el primer empalme)
+  const dec = spawnSync(
+    'ffmpeg',
+    [
+      '-v',
+      'error',
+      '-i',
+      mp4File,
+      '-map',
+      '0:a:0',
+      '-f',
+      's16le',
+      '-ac',
+      '2',
+      '-ar',
+      String(GAP_RATE),
+      '-',
+    ],
+    { maxBuffer: 1 << 26 },
+  );
+  const aac =
+    dec.status === 0
+      ? new Int16Array(
+          dec.stdout.buffer.slice(dec.stdout.byteOffset, dec.stdout.byteOffset + dec.stdout.length),
+        )
+      : new Int16Array();
+  /** La mejor correlación del canal 0 de `aac` con `ref` en [i0, i1), con el
+   *  desfase que la da: el AAC empieza con su retardo de codificador (2112
+   *  muestras con el de Chrome), que el ffmpeg de la máquina no quita. */
+  const likeness = (
+    ref: Int16Array | null | undefined,
+    i0: number,
+    i1: number,
+  ): [number, number] => {
+    let best: [number, number] = [-1, 0];
+    if (!ref) return best;
+    for (let lag = -512; lag <= 4096; lag++) {
+      let sab = 0;
+      let saa = 0;
+      let sbb = 0;
+      for (let i = i0; i < i1; i++) {
+        const x = aac[(i + lag) * 2] ?? 0;
+        const y = ref[i * 2] ?? 0;
+        sab += x * y;
+        saa += x * x;
+        sbb += y * y;
+      }
+      const r = saa && sbb ? sab / Math.sqrt(saa * sbb) : 0;
+      if (r > best[0]) best = [r, lag];
+    }
+    return best;
+  };
+  const i0 = sampleAt(1) + 200;
+  const i1 = sampleAt(6) - 200;
+  const [likeCut, lag] = likeness(cutSound, i0, i1);
+  const [likeStraight] = likeness(wavOf(straightZip), i0, i1);
+  const aacLen = aac.length / 2;
+  check(
+    'skipping, MP4: 6 frames, and its sound is the cut one, as long as they are',
+    Number(vs?.nb_read_frames) === 6 &&
+      likeCut > 0.5 &&
+      likeCut - likeStraight > 0.3 &&
+      Math.abs(aacLen - Math.abs(lag) - sampleAt(6)) <= 2048,
+    `video ${vs?.nb_read_frames} frames; sound ${aacLen} samples (${sampleAt(6)} wanted, ${lag} of delay); ` +
+      `like the cut sound ${likeCut.toFixed(3)}, like the uncut one ${likeStraight.toFixed(3)}`,
+  );
+  check('skipping: the preview plays to its last frame', !!gaps.preview, gaps.preview);
+  await writeFile(
+    join(shots, 'gaps.json'),
+    `${JSON.stringify({ layoutTimeline: gapLayout.timeline, keep, held: heldSha, kept: keptSha, fades, mp4: { likeCut, likeStraight, lag, samples: aacLen }, asked: gaps.asked, plans: gaps.plans }, null, 2)}\n`,
+  );
+  await shot('video-gaps');
 
   await screen('calibration');
   await screen('help');

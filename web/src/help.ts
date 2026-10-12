@@ -136,6 +136,13 @@ quality, so keep a lossless copy too.</li>
 </ul>
 <p>If a few frames come out a different size, the app fits them to the rest
 without stretching them.</p>
+<p>If some frames are missing, the video skips them and cuts out their
+sound, so each drawing keeps its own sound. This helps when you duplicated
+frames to cut them out and lay them over others. If your sound was already
+edited without those frames, untick <strong>Cut their sound too</strong> and
+it plays without cuts. You can drop a sound file in place of the video. If
+you untick <strong>Skip the missing frames</strong>, each gap shows the
+drawing before it, and the video keeps the length of the original.</p>
 
 <h3>Calibration (when you need precision)</h3>
 <p>Each of these tools gives you a result. Give it a name, press <strong>Save

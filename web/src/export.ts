@@ -18,7 +18,7 @@
 //   conforma el núcleo (conform.rs), en paralelo en los workers, con tantos
 //   a la vez como deja la memoria del equipo.
 
-import type { InputAudioTrack } from 'mediabunny';
+import type { AudioSample, InputAudioTrack } from 'mediabunny';
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from 'mediabunny';
 import { deviceRamGb } from './device.ts';
 import { CancelledError, errMsg, isCancelled, throwIfCancelled } from './errors.ts';
@@ -37,6 +37,13 @@ import { ZipSink } from './zip.ts';
 export interface AudioFrom {
   file: File;
   start: number;
+  /** Con fotogramas saltados y su sonido cortado: los tramos de la línea de
+   *  tiempo que quedan, como posiciones [desde, hasta) contadas desde el
+   *  primer fotograma del tramo, en orden. El sonido de lo que queda fuera
+   *  se quita y el resto se une sin silencios, cada dibujo con el suyo. Sin
+   *  esto el sonido corre seguido, que es lo que se quiere cuando ya viene
+   *  editado sin esos fotogramas. */
+  keep?: Array<[number, number]>;
 }
 
 /** Dónde va la secuencia: un MOV, o un ZIP de PNG numerados. */
@@ -268,7 +275,7 @@ export async function exportLossless(
   const { plan, infos } = await planSequence(frames, opts.signal);
   const pngs = await uniformPngs(frames, plan, infos, opts);
   throwIfCancelled(opts.signal, 'Video export cancelled.');
-  const sound = await pcmForExport(opts, frames.length / fps);
+  const sound = await pcmForExport(opts, frames.length, fps);
   throwIfCancelled(opts.signal, 'Video export cancelled.');
   const progress = (i: number, n: number): void => opts.onProgress?.('writing', i, n);
   if (kind === 'mov') {
@@ -429,8 +436,8 @@ async function decodePcm(
       const sample = step.value;
       try {
         // el primer bloque suele empezar antes del tramo y el último acabar
-        // después: se recortan a la muestra, que es lo que mantiene el
-        // sonido alineado con el primer fotograma
+        // después: se toma sólo lo de dentro, a la muestra, que es lo que
+        // mantiene el sonido alineado con el primer fotograma
         const from =
           sample.timestamp < start ? Math.round((start - sample.timestamp) * sample.sampleRate) : 0;
         const to =
@@ -438,29 +445,26 @@ async function decodePcm(
             ? Math.round((end - sample.timestamp) * sample.sampleRate)
             : sample.numberOfFrames;
         if (from >= to) continue;
-        const piece = from > 0 || to < sample.numberOfFrames ? sample.trim(from, to) : sample;
-        try {
-          if (!out) {
-            rate = piece.sampleRate;
-            channels = Math.min(2, piece.numberOfChannels);
-            frames = Math.max(1, Math.round(duration * rate));
-            out = new Uint8Array(new ArrayBuffer(frames * channels * 2));
-          }
-          // nunca negativo: un bloque que empieza fracciones de muestra
-          // antes del tramo daría un desplazamiento negativo y la vista
-          // sobre el buffer lanzaría
-          const at = Math.max(0, Math.round((piece.timestamp - start) * rate));
-          if (at >= frames) continue;
-          const n = Math.min(piece.numberOfFrames, frames - at);
-          if (n <= 0) continue;
-          const src = new Int16Array(piece.allocationSize(PCM_COPY) / 2);
-          piece.copyTo(src, PCM_COPY);
-          const dst = new Int16Array(out.buffer, out.byteOffset + at * channels * 2, n * channels);
-          mixInto(dst, src, n, channels, piece.numberOfChannels);
-          onProgress?.(Math.min(1, (at + n) / frames));
-        } finally {
-          if (piece !== sample) piece.close();
+        if (!out) {
+          rate = sample.sampleRate;
+          channels = Math.min(2, sample.numberOfChannels);
+          frames = Math.max(1, Math.round(duration * rate));
+          out = new Uint8Array(new ArrayBuffer(frames * channels * 2));
         }
+        // nunca negativo: un bloque que empieza fracciones de muestra
+        // antes del tramo daría un desplazamiento negativo y la vista
+        // sobre el buffer lanzaría
+        const at = Math.max(
+          0,
+          Math.round((sample.timestamp + from / sample.sampleRate - start) * rate),
+        );
+        if (at >= frames) continue;
+        const n = Math.min(to - from, frames - at);
+        if (n <= 0) continue;
+        const src = s16Of(sample, from, n);
+        const dst = new Int16Array(out.buffer, out.byteOffset + at * channels * 2, n * channels);
+        mixInto(dst, src, n, channels, sample.numberOfChannels);
+        onProgress?.(Math.min(1, (at + n) / frames));
       } finally {
         sample.close();
       }
@@ -520,8 +524,25 @@ function mixInto(dst: Int16Array, src: Int16Array, n: number, dstCh: number, src
   }
 }
 
-/** PCM de 16 bits entrelazado: un solo plano. */
-const PCM_COPY = { planeIndex: 0, format: 's16' } as const;
+/**
+ * `n` muestras de `sample` desde la `from`, en 16 bits entrelazados, sin
+ * perder un bit de un original de 16 bits. mediabunny convierte pasando por
+ * un valor normalizado: lee el s16 como v / 32768 y lo escribe como v · 32767,
+ * así que pedirle s16 (o recortar con `trim`, que copia así) a un bloque que
+ * ya es s16, el de un WAV, le restaba uno a cada muestra grande. Se pide en
+ * f32, que guarda v / 32768 exacto, y se vuelve a 16 bits aquí con el mismo
+ * 32768.
+ */
+function s16Of(sample: AudioSample, from: number, n: number): Int16Array {
+  const f = new Float32Array(n * sample.numberOfChannels);
+  sample.copyTo(f, { planeIndex: 0, format: 'f32', frameOffset: from, frameCount: n });
+  const out = new Int16Array(f.length);
+  for (let i = 0; i < f.length; i++) {
+    const v = Math.round(f[i] * 32768);
+    out[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+  }
+  return out;
+}
 
 /** Lo que se pudo sacar del original: el sonido, o por qué no hay. */
 export interface ExportSound {
@@ -530,12 +551,98 @@ export interface ExportSound {
   note?: string;
 }
 
-/** El sonido que pide `opts`, ya decodificado, o el motivo de que no lo
+/** Lo que dura un empalme del sonido al saltar fotogramas (AudioFrom.keep):
+ *  un corte seco entre dos tramos casi siempre chasquea, y unos milisegundos
+ *  de fundido cruzado no se oyen como fundido. */
+const SPLICE_S = 0.005;
+
+/** ¿Son los tramos de `keep` posiciones válidas, en orden, sin solaparse, y
+ *  suman los `frames` fotogramas del video? Un fallo aquí es del que llama,
+ *  no del sonido. */
+function checkKeep(keep: Array<[number, number]>, frames: number): void {
+  let total = 0;
+  let last = 0;
+  for (const [a, b] of keep) {
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < last || b <= a)
+      throw new Error(`The sound cuts are out of order: ${JSON.stringify(keep)}`);
+    total += b - a;
+    last = b;
+  }
+  if (total !== frames)
+    throw new Error(`The sound cuts cover ${total} frames and the video has ${frames}`);
+}
+
+/**
+ * Sólo los tramos `keep` del sonido, uno detrás de otro (AudioFrom.keep).
+ * `pcm` empieza en la posición 0 de la línea de tiempo y llega hasta el final
+ * del último tramo. Se trabaja sobre el mismo buffer, hacia delante: cada
+ * tramo cae en un sitio que nunca está por detrás de donde se lee, así que no
+ * hace falta otra copia del sonido entero.
+ *
+ * Las fronteras se cuentan en fotogramas de SALIDA (la del fotograma k cae en
+ * la muestra round(k · rate / fps)), así que la pista dura exactamente lo que
+ * el video y cada dibujo arranca con su sonido, sin un desfase que se vaya
+ * acumulando de corte en corte. En cada unión, los primeros SPLICE_S del tramo
+ * nuevo se funden con el sonido que seguía al anterior (el que se quita), sin
+ * mover nada de sitio.
+ */
+function spliceKept(pcm: PcmAudio, keep: Array<[number, number]>, fps: number): PcmAudio {
+  const ch = pcm.channels;
+  const rate = pcm.sampleRate;
+  const s = new Int16Array(pcm.pcm.buffer, pcm.pcm.byteOffset, pcm.pcm.length >> 1);
+  const have = Math.floor(s.length / ch);
+  const at = (pos: number): number => Math.round((pos * rate) / fps);
+  const fadeN = Math.max(1, Math.round(SPLICE_S * rate));
+  let k = 0; // fotogramas de salida ya puestos
+  let prevEnd = -1; // la muestra que seguía al tramo anterior en el original
+  let prevPos = -1; // la posición en que acababa el tramo anterior
+  for (const [a, b] of keep) {
+    const dst = at(k);
+    const len = at(k + b - a) - dst;
+    const src = at(a);
+    const n = Math.max(0, Math.min(len, have - src));
+    // el fundido se calcula ANTES de mover el tramo: lo que se mueve puede
+    // pisar el sonido que seguía al anterior, que es de donde sale el fundido
+    let fade: Int16Array | null = null;
+    if (prevEnd >= 0 && a !== prevPos) {
+      const m = Math.min(fadeN, n, Math.max(0, have - prevEnd));
+      fade = new Int16Array(m * ch);
+      for (let i = 0; i < m; i++) {
+        const w = (i + 0.5) / m;
+        for (let c = 0; c < ch; c++) {
+          const v = s[(prevEnd + i) * ch + c] * (1 - w) + s[(src + i) * ch + c] * w;
+          fade[i * ch + c] = Math.round(v);
+        }
+      }
+    }
+    if (n > 0 && dst !== src) s.copyWithin(dst * ch, src * ch, (src + n) * ch);
+    // lo que el original no llega a cubrir, en silencio
+    if (n < len) s.fill(0, (dst + n) * ch, (dst + len) * ch);
+    if (fade) s.set(fade, dst * ch);
+    prevEnd = src + len;
+    prevPos = b;
+    k += b - a;
+  }
+  const bytes = at(k) * ch * 2;
+  return { ...pcm, pcm: pcm.pcm.subarray(0, bytes) };
+}
+
+/** El sonido que pide `opts` para un video de `frames` fotogramas a `fps`,
+ *  ya decodificado (y cortado, con AudioFrom.keep), o el motivo de que no lo
  *  haya. Nunca lanza por culpa del audio: un fallo suyo deja el video mudo
  *  con su explicación, porque perder una exportación de minutos por una
  *  pista rota sería peor. Una PARADA sí sale: es lo que se pidió. */
-export async function pcmForExport(opts: ExportOptions, duration: number): Promise<ExportSound> {
+export async function pcmForExport(
+  opts: ExportOptions,
+  frames: number,
+  fps: number,
+): Promise<ExportSound> {
   if (!opts.audio) return { pcm: null };
+  const keep = opts.audio.keep;
+  if (keep) checkKeep(keep, frames);
+  // con cortes se decodifica hasta el final del último tramo, y se empalma
+  const span = keep?.length ? keep[keep.length - 1][1] : frames;
+  const duration = span / fps;
   const name = opts.audio.file.name;
   const a = await bounded(
     openAudio(opts.audio.file).catch((e: unknown) => {
@@ -570,6 +677,13 @@ export async function pcmForExport(opts: ExportOptions, duration: number): Promi
     console.info(
       `[video] sound: ${(pcm.pcm.length / 1e6).toFixed(1)} MB of PCM, ${pcm.channels} ch at ${pcm.sampleRate} Hz, decoded in ${((performance.now() - t0) / 1000).toFixed(1)} s`,
     );
+    if (keep && (keep.length > 1 || keep[0][0] !== 0)) {
+      const cut = spliceKept(pcm, keep, fps);
+      console.info(
+        `[video] sound cut to ${keep.length} piece(s): ${(span / fps).toFixed(2)} s → ${(frames / fps).toFixed(2)} s`,
+      );
+      return { pcm: cut };
+    }
     return { pcm };
   } catch (e) {
     if (isCancelled(e)) throw e;

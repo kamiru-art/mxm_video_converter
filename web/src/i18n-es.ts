@@ -394,8 +394,16 @@ export const EXACT: Record<string, string> = {
   'Add the sound of the original video, in sync with the frames':
     'Agregar el sonido del video original, sincronizado con los fotogramas',
   'Original video (for its audio)': 'Video original (para su audio)',
-  'Optional: the clip the frames came from. Only its sound is used.':
-    'Opcional: el clip del que salieron los fotogramas. Solo se usa su sonido.',
+  'Optional: the clip the frames came from, or an edited sound file. Only its sound is used.':
+    'Opcional: el clip del que salieron los fotogramas, o un archivo de sonido editado. Solo se usa su sonido.',
+  'Skip the missing frames': 'Saltar los fotogramas que faltan',
+  'Cut their sound too': 'Cortar también su sonido',
+  'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.':
+    'Cada fotograma que falta muestra el dibujo anterior, así que el video dura lo mismo que el tramo original y sigue sincronizado con su sonido.',
+  'The missing frames and their sound are left out. Each drawing keeps its own sound, and the rest joins with no silent gaps.':
+    'Se quitan los fotogramas que faltan y su sonido. Cada dibujo conserva su propio sonido, y el resto se une sin silencios.',
+  'The missing frames are left out, and the sound plays without cuts. Use this when the sound was already edited without those frames.':
+    'Se quitan los fotogramas que faltan, y el sonido suena sin cortes. Úsalo cuando el sonido ya está editado sin esos fotogramas.',
   'No original video at hand: drop it above to add its sound. The video comes out silent otherwise.':
     'No hay video original a mano: suéltalo arriba para agregar su sonido. De lo contrario, el video sale mudo.',
   '16 bits per channel': '16 bits por canal',
@@ -985,8 +993,16 @@ export const TEMPLATES: [string, string][] = [
   ['Missing {#0}:', 'Faltan {#0}:'],
   ['All {#0} video positions have a frame.', 'Las {#0} posiciones del video tienen fotograma.'],
   [
-    '{#0} frames are missing; the video will skip those positions. Continue?',
-    'Faltan {#0} fotogramas; el video saltará esas posiciones. ¿Continuar?',
+    'Frames missing: {#0}. Each gap shows the drawing before it. Continue?',
+    'Fotogramas que faltan: {#0}. Cada hueco muestra el dibujo anterior. ¿Continuar?',
+  ],
+  [
+    'Frames missing: {#0}. The video skips the gaps and their sound. Continue?',
+    'Fotogramas que faltan: {#0}. El video salta los huecos y su sonido. ¿Continuar?',
+  ],
+  [
+    'Frames missing: {#0}. The video skips the gaps, and the sound plays without cuts. Continue?',
+    'Fotogramas que faltan: {#0}. El video salta los huecos y el sonido suena sin cortes. ¿Continuar?',
   ],
   ['Compressing one {#0}×{#1} frame', 'Comprimir un fotograma de {#0}×{#1}'],
   ['Converting one frame to {#0}×{#1}', 'Convertir un fotograma a {#0}×{#1}'],

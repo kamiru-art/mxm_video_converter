@@ -36,12 +36,13 @@ interface Available {
   data: Blob;
 }
 
-/** Resuelve la secuencia de imágenes según la línea de tiempo del layout
- *  (port de frames_from_timeline: deduplicados reutilizados, alias). */
+/** Resuelve la línea de tiempo del layout posición por posición: el dibujo
+ *  de cada una, o null si falta (port de frames_from_timeline: deduplicados
+ *  reutilizados, alias). */
 function framesFromTimeline(
   layout: Layout,
   disponibles: Map<string, Available>,
-): { files: Available[]; missing: string[] } {
+): { slots: (Available | null)[]; missing: string[] } {
   // alias etiqueta→claves desambiguadas
   const alias = new Map<string, string[]>();
   for (const h of layout.hojas ?? []) {
@@ -65,7 +66,7 @@ function framesFromTimeline(
       }
     }
   }
-  const files: Available[] = [];
+  const slots: (Available | null)[] = [];
   const missing = new Set<string>();
   for (const item of [...timeline].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0))) {
     const rep = sanitizeLabel(item.rep ?? item.etiqueta ?? '');
@@ -78,10 +79,46 @@ function framesFromTimeline(
         break;
       }
     }
-    if (found) files.push(found);
-    else missing.add(item.etiqueta ?? rep);
+    slots.push(found);
+    if (!found) missing.add(item.etiqueta ?? rep);
   }
-  return { files, missing: [...missing].sort() };
+  return { slots, missing: [...missing].sort() };
+}
+
+/** Lo que se guarda con los huecos de la línea de tiempo resueltos. */
+interface Sequence {
+  files: Available[];
+  /** Al saltar huecos: las posiciones [desde, hasta) que quedan, para cortar
+   *  el sonido igual (AudioFrom.keep). Sin huecos saltados, undefined. */
+  keep?: Array<[number, number]>;
+}
+
+/**
+ * Cada hueco, o se salta (`skip`: el video pierde esas posiciones), o
+ * enseña el dibujo de antes, el tiempo que dura la posición que falta, y el
+ * video dura lo que el tramo original. Un hueco al principio, que no tiene
+ * dibujo de antes, enseña el primero que haya.
+ */
+function resolveGaps(slots: (Available | null)[], skip: boolean): Sequence {
+  if (skip) {
+    const files: Available[] = [];
+    const keep: Array<[number, number]> = [];
+    for (const [i, f] of slots.entries()) {
+      if (!f) continue;
+      files.push(f);
+      const last = keep[keep.length - 1];
+      if (last && last[1] === i) last[1] = i + 1;
+      else keep.push([i, i + 1]);
+    }
+    return { files, keep: files.length < slots.length ? keep : undefined };
+  }
+  let prev = slots.find((f) => f) ?? null;
+  const files: Available[] = [];
+  for (const f of slots) {
+    if (f) prev = f;
+    if (prev) files.push(prev);
+  }
+  return { files };
 }
 
 export function mountPhase4(root: HTMLElement): void {
@@ -91,6 +128,27 @@ export function mountPhase4(root: HTMLElement): void {
   const layoutInfo = el('div', { class: 'hint' });
   const stateInfo = el('div', { class: 'hint' });
   const missingBox = el('div');
+  // qué hacer con los huecos (por defecto se saltan, con su sonido): los
+  // fotogramas, y aparte su sonido, porque el
+  // sonido puede ser el del original (hay que cortarlo igual) o uno ya
+  // editado sin esos fotogramas (tiene que sonar seguido)
+  const skipCheck = check('Skip the missing frames', true);
+  const cutCheck = check('Cut their sound too', true);
+  const gapsInfo = el('div', { class: 'hint', 'aria-live': 'polite' });
+  const gapsBox = el(
+    'div',
+    { hidden: '' },
+    el('div', { class: 'row' }, skipCheck.label, cutCheck.label),
+    gapsInfo,
+  );
+  function showGaps(): void {
+    cutCheck.input.disabled = !skipCheck.input.checked;
+    gapsInfo.textContent = !skipCheck.input.checked
+      ? 'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.'
+      : cutCheck.input.checked
+        ? 'The missing frames and their sound are left out. Each drawing keeps its own sound, and the rest joins with no silent gaps.'
+        : 'The missing frames are left out, and the sound plays without cuts. Use this when the sound was already edited without those frames.';
+  }
   const fpsIn = numberInput(12, { min: 0.1, step: 0.1 });
   // los dos primeros guardan los mismos píxeles, sin pérdida, y se elige
   // dónde se van a abrir; el tercero es la copia ligera para ver
@@ -157,8 +215,10 @@ export function mountPhase4(root: HTMLElement): void {
   const audioInfo = el('div', { class: 'hint' });
   const audioDz = dropzone({
     label: 'Original video (for its audio)',
-    sublabel: 'Optional: the clip the frames came from. Only its sound is used.',
-    accept: 'video/*,.mov,.mp4,.mkv,.webm,.avi,.mpg,.mpeg,.m4v',
+    sublabel:
+      'Optional: the clip the frames came from, or an edited sound file. Only its sound is used.',
+    accept:
+      'video/*,audio/*,.mov,.mp4,.mkv,.webm,.avi,.mpg,.mpeg,.m4v,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus',
     onFiles: ([f]) => {
       droppedAudio = f;
       audioCheck.input.checked = true;
@@ -177,11 +237,14 @@ export function mountPhase4(root: HTMLElement): void {
     if (v && (!l?.video?.origen || l.video.origen === v.name)) return { file: v, from: 'phase ①' };
     return null;
   }
-  function audioFrom(): AudioFrom | undefined {
+  /** El sonido que va con `seq`: cortado como ella si se saltaron huecos y
+   *  así se pidió. */
+  function audioFrom(seq: Sequence): AudioFrom | undefined {
     const pick = audioPick();
     if (!pick || !audioCheck.input.checked) return undefined;
     const start = parseFloat(audioStartIn.value);
-    return { file: pick.file, start: Number.isFinite(start) && start > 0 ? start : 0 };
+    const keep = seq.keep && cutCheck.input.checked ? seq.keep : undefined;
+    return { file: pick.file, start: Number.isFinite(start) && start > 0 ? start : 0, keep };
   }
   function refreshAudioInfo(): void {
     const pick = audioPick();
@@ -204,6 +267,13 @@ export function mountPhase4(root: HTMLElement): void {
   audioCheck.input.addEventListener('change', refreshAudioInfo);
   audioStartIn.addEventListener('change', refreshAudioInfo);
   fpsIn.addEventListener('change', refreshAudioInfo);
+
+  /** La secuencia de `l` con lo que haya ahora y los huecos resueltos como
+   *  dicen las casillas. */
+  function sequenceOf(l: Layout): Sequence & { missing: string[] } {
+    const { slots, missing } = framesFromTimeline(l, availableMap());
+    return { ...resolveGaps(slots, skipCheck.input.checked), missing };
+  }
 
   function currentLayout(): Layout | null {
     if (layout) return layout;
@@ -306,7 +376,8 @@ export function mountPhase4(root: HTMLElement): void {
       refreshPlan([]);
       return;
     }
-    const { files, missing } = framesFromTimeline(l, disponibles);
+    const { files, missing } = sequenceOf(l);
+    gapsBox.hidden = !missing.length;
     missingBox.replaceChildren(
       missing.length
         ? el(
@@ -334,17 +405,18 @@ export function mountPhase4(root: HTMLElement): void {
       toast('No layout.', 'err');
       return;
     }
-    const { files, missing } = framesFromTimeline(l, availableMap());
+    const seq = sequenceOf(l);
+    const { files, missing } = seq;
     if (!files.length) {
       toast('There are no frames to build the video.', 'err');
       return;
     }
-    if (
-      missing.length &&
-      !confirm(
-        tr(`${missing.length} frames are missing; the video will skip those positions. Continue?`),
-      )
-    )
+    const gaps = !skipCheck.input.checked
+      ? 'Each gap shows the drawing before it.'
+      : cutCheck.input.checked
+        ? 'The video skips the gaps and their sound.'
+        : 'The video skips the gaps, and the sound plays without cuts.';
+    if (missing.length && !confirm(tr(`Frames missing: ${missing.length}. ${gaps} Continue?`)))
       return;
     // el plan llega solo (refreshPlan); en un teléfono, si aún no está, se
     // espera: sin él no hay aviso. Lo pesado es conformar un fotograma: el
@@ -380,7 +452,7 @@ export function mountPhase4(root: HTMLElement): void {
       // y que nadie borre los fotogramas de debajo mientras se leen (la
       // fase ② los borra al vaciar su informe)
       release = holdFrames();
-      const audio = audioFrom();
+      const audio = audioFrom(seq);
       const fps = parseFloat(fpsIn.value) || 12;
       const kind = kindIs();
       const base = sanitizeLabel(nameIn.value.trim() || l.proyecto || 'video');
@@ -473,7 +545,8 @@ export function mountPhase4(root: HTMLElement): void {
       toast('No layout.', 'err');
       return;
     }
-    const { files } = framesFromTimeline(l, availableMap());
+    const seq = sequenceOf(l);
+    const { files } = seq;
     if (!files.length) {
       toast('There are no frames to preview.', 'err');
       return;
@@ -484,7 +557,7 @@ export function mountPhase4(root: HTMLElement): void {
     player.load(
       files.map((f) => f.data),
       parseFloat(fpsIn.value) || 12,
-      audioFrom(),
+      audioFrom(seq),
     );
   });
 
@@ -524,6 +597,7 @@ export function mountPhase4(root: HTMLElement): void {
     }),
     stateInfo,
     missingBox,
+    gapsBox,
     el('h3', {}, 'Output'),
     el(
       'div',
@@ -572,7 +646,14 @@ export function mountPhase4(root: HTMLElement): void {
     player.root,
   );
 
+  // saltar o no cambia cuántos fotogramas lleva el video: el plan también
+  skipCheck.input.addEventListener('change', () => {
+    showGaps();
+    refresh();
+  });
+  cutCheck.input.addEventListener('change', showGaps);
   showQuality();
+  showGaps();
   root.append(el('div', { class: 'workbench' }, paper, bench));
   root.addEventListener('mxm:activated', refresh);
   refresh();

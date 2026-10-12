@@ -324,7 +324,7 @@ export async function exportCompressed(
   const conformed = [...infos.values()].filter((i) => !spec.fits(i)).length;
   const pngs = await uniformPngs(frames, plan, infos, opts, spec);
   throwIfCancelled(opts.signal, 'Video export cancelled.');
-  const sound = await pcmForExport(opts, frames.length / fps);
+  const sound = await pcmForExport(opts, frames.length, fps);
   throwIfCancelled(opts.signal, 'Video export cancelled.');
 
   // el índice (moov) al principio, también escribiendo a disco: con el
