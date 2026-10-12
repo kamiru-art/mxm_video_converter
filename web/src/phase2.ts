@@ -115,11 +115,7 @@ export function mountPhase2(root: HTMLElement): void {
   // los recortes de la sesión anterior no sirven: el informe no sobrevive
   // a la recarga
   void clearProcessedCache();
-  const layoutInfo = el(
-    'div',
-    { class: 'hint' },
-    'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).',
-  );
+  const layoutInfo = el('div', { class: 'hint' }, 'Load the layout.json produced by phase ①.');
 
   /** Un layout nuevo es otro proyecto: las hojas que el usuario asignó a mano
    *  se refieren a números del anterior y aquí no significan lo mismo. */

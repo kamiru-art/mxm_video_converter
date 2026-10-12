@@ -155,6 +155,24 @@ const INSTRUMENT = `
       }
       return out;
     },
+    /** Dónde están la marca, cada pestaña, el indicador, el selector y el
+     *  principio de la vista: nada de eso puede moverse al cambiar de idioma. */
+    header() {
+      const out = {};
+      // de la vista, sólo dónde empieza: su alto es el de su texto
+      const put = (k, el, whole = true) => {
+        const b = el?.getBoundingClientRect();
+        const v = b && (whole ? [b.left, b.top, b.width, b.height] : [b.left, b.top]);
+        out[k] = v ? v.map((x) => Math.round(x * 10) / 10).join(',') : 'missing';
+      };
+      put('wordmark', document.querySelector('.wordmark'));
+      put('strip', document.getElementById('phase-nav'));
+      document.querySelectorAll('#phase-nav .frame').forEach((f) => put('tab ' + f.dataset.view, f));
+      put('badge', document.getElementById('capbadge'));
+      put('switch', document.getElementById('lang-switch'));
+      put('view', document.getElementById('views'), false);
+      return out;
+    },
     async lang(l) {
       document.querySelector('#lang-switch [data-lang="' + l + '"]').click();
       // el español se carga la primera vez: se espera a que llegue
@@ -230,12 +248,30 @@ async function runFlow(
   );
   await shot('header-en');
   const en0 = await driver.run<string[]>(step('return ui.snapshot();'));
-  const toEs = await driver.run<{ lang: string; nav: string; title: string; changed: number }>(
+  // el indicador aparece cuando el navegador dice si hay GPU: antes, la
+  // cabecera aún no tiene su ancho final
+  await driver.run(
+    step(
+      `return ui.until(() => !document.getElementById('capbadge').hidden, 15000, 'the WebGPU badge');`,
+    ),
+  );
+  const toEs = await driver.run<{
+    lang: string;
+    nav: string;
+    title: string;
+    changed: number;
+    moved: string[];
+    parts: number;
+  }>(
     step(`
     const before = ui.snapshot();
+    const head = ui.header();
     const lang = await ui.lang('es');
     const after = ui.snapshot();
+    const headEs = ui.header();
     return {
+      moved: Object.keys(head).filter((k) => head[k] !== headEs[k]).map((k) => k + ' ' + head[k] + ' → ' + headEs[k]),
+      parts: Object.values(head).filter((v) => v !== 'missing').length,
       lang,
       nav: document.querySelector('#phase-nav .fname').textContent,
       title: document.title,
@@ -249,6 +285,13 @@ async function runFlow(
       toEs.changed > 100 &&
       toEs.title === es('MXM Studio: mixed media & cyanotype animation, free forever'),
     `lang=${toEs.lang}, first tab "${toEs.nav}", ${toEs.changed} texts changed, title "${toEs.title}"`,
+  );
+  check(
+    'the header stays put when switching to ES',
+    toEs.moved.length === 0 && toEs.parts === 10,
+    toEs.moved.length
+      ? toEs.moved.join(' | ')
+      : `${toEs.parts} parts (title, tabs, badge, switch, view) at the same place and size`,
   );
   await shot('header-es');
   const en1 = await driver.run<string[]>(step(`await ui.lang('en'); return ui.snapshot();`));

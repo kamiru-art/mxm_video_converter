@@ -38,25 +38,60 @@ body {
 }
 #app { max-width: 1800px; margin: 0 auto; padding: 0 24px 24px; }
 
-/* ── Cabecera compacta: marca y navegación en una sola fila ── */
-.masthead { display: flex; align-items: center; gap: 24px; padding-top: 14px; flex-wrap: wrap; }
-/* `flex: 0 0 auto` la dimensiona a su contenido y no la deja encoger nunca, y
-   su contenido es un lema de una sola línea de 62 caracteres: en un móvil la
-   marca medía 514 px y era ella, no la tabla, quien seguía desplazando la
-   página de lado. El tope del 100 % la obliga a caber en la fila y el lema
-   pasa a dos líneas; en escritorio el 100 % no llega a morder y nada cambia. */
-.wordmark { position: relative; display: inline-block; padding: 6px 18px 8px 14px; flex: 0 0 auto; max-width: 100%; }
+/* ── Cabecera: marca, fases y estado del equipo ─────────────
+   Ningún ancho depende del idioma: con el de su texto, la marca, las pestañas
+   y el indicador se movían al pasar del inglés al español. La marca ocupa la
+   columna de los ajustes (520 px, como .workbench) en cuanto cabe, y su borde
+   derecho cae sobre el del panel; si no cabe, encoge ella y no las pestañas,
+   que nunca bajan de su ancho (min-content). */
+.masthead {
+  display: grid; align-items: center; column-gap: 20px; row-gap: 12px; padding-top: 14px;
+  grid-template-columns: minmax(340px, 520px) minmax(min-content, 1fr) auto;
+  grid-template-areas: "mark strip side";
+}
+/* sin sitio para las tres en una fila (las pestañas piden ~732 px y el
+   indicador hasta ~250): las fases bajan a la suya, a todo el ancho */
+@media (max-width: 1423px) {
+  .masthead {
+    grid-template-columns: minmax(340px, 520px) 1fr;
+    grid-template-areas:
+      "mark side"
+      "strip strip";
+  }
+}
+@media (max-width: 700px) {
+  .masthead {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "mark"
+      "strip"
+      "side";
+  }
+}
+/* contenedor: el lema mide su letra con el ancho de la marca (abajo) */
+.wordmark { grid-area: mark; position: relative; padding: 6px 18px 8px 14px; container-type: inline-size; }
 .wordmark h1 {
   font-family: var(--font-display);
   font-variation-settings: "wdth" 118;
   font-weight: 850;
   font-size: clamp(26px, 3vw, 38px);
+  /* con el lema en dos líneas, la marca mide lo que la tira de fases */
+  line-height: 1.15;
   letter-spacing: 0.01em;
   margin: 0;
   color: var(--papel);
 }
 .wordmark h1 em { font-style: normal; color: var(--sol); font-variation-settings: "wdth" 84; font-weight: 500; }
-.tagline { margin: 2px 0 0 2px; font-family: var(--font-mono); font-size: 12.5px; color: var(--cian-300); }
+/* Dos líneas en los dos idiomas: el español (77 caracteres) no cabe en una, y
+   si el inglés (62) fuera en una la cabecera cambiaría de alto con el idioma.
+   42ch parte la frase española en su coma y `balance` reparte igual la
+   inglesa. En un teléfono la letra baja lo justo para que la línea española
+   más larga (40 caracteres de 0,6em, y uno de holgura) quepa en la marca. */
+.tagline {
+  margin: 2px 0 0 2px; font-family: var(--font-mono); color: var(--cian-300);
+  font-size: clamp(10px, (100cqi - 2px) / 24.6, 12.5px);
+  max-width: 42ch; text-wrap: balance;
+}
 
 /* marcas de registro (esquinas de imprenta) como firma visual */
 .reg-mark { position: absolute; width: 14px; height: 14px; }
@@ -65,8 +100,8 @@ body {
 
 /* ── Tira de fases (navegación = tira de contactos) ───────── */
 .strip {
+  grid-area: strip;
   display: flex; gap: 8px; margin: 0; padding: 10px 12px;
-  flex: 1 1 520px;
   background: var(--prusia-950);
   border-radius: var(--radius);
   border: 1px solid var(--prusia-700);
@@ -99,10 +134,18 @@ body {
 .fnum { font-family: var(--font-mono); font-size: 13px; line-height: 20px; height: 20px; color: var(--sol); }
 .fname { font-family: var(--font-display); font-weight: 700; font-size: 16px; letter-spacing: .02em; }
 .fdesc { font-size: 11.5px; color: var(--cian-300); }
-.frame.help { flex: 0 0 auto; min-width: 90px; }
+.frame.help, .frame.extra { flex: 0 0 auto; }
 /* separador entre el flujo de 3 pasos y las pestañas auxiliares */
 .strip-sep { flex: 0 0 1px; align-self: stretch; background: var(--prusia-700); margin: 2px 6px; }
-.frame.extra { flex: 0 0 auto; min-width: 130px; }
+/* Cada pestaña reserva el ancho de su texto más largo entre los dos idiomas
+   (medido con las fuentes de la página, más 2 px): así no cambia de ancho al
+   cambiar de idioma. Un texto nuevo más largo lo detecta e2e-i18n.mts. */
+.frame > .fdesc { min-width: var(--tab-w, 0); }
+.frame[data-view="sheets"] { --tab-w: 78px; }
+.frame[data-view="scans"] { --tab-w: 110px; }
+.frame[data-view="video"] { --tab-w: 122px; }
+.frame[data-view="calibration"] { --tab-w: 124px; }
+.frame[data-view="help"] { --tab-w: 81px; }
 
 /* ── Estado del equipo: enderezado por GPU o por CPU ───────── */
 .capbadge {
@@ -116,9 +159,10 @@ body {
 .capbadge.gpu { border-color: rgba(240,180,41,.45); color: var(--sol); }
 .capdot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--cian-300); }
 .capbadge.gpu .capdot { background: var(--sol); }
+#capbadge-text { text-align: center; }
 
 /* ── Columna derecha de la cabecera: estado del equipo e idioma ── */
-.side { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.side { grid-area: side; justify-self: end; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .lang-switch {
   display: inline-flex; padding: 2px; border-radius: 999px;
   background: var(--prusia-950); border: 1px solid var(--prusia-700);
@@ -132,10 +176,7 @@ body {
 .lang-switch button:focus-visible { outline: 2px solid var(--sol); outline-offset: 1px; }
 .lang-switch button[aria-pressed="true"] { background: var(--papel); color: var(--tinta); cursor: default; }
 /* en una pantalla estrecha la columna baja a su propia fila: ahí, en línea */
-@media (max-width: 700px) { .side { flex-direction: row; align-items: center; gap: 8px; } }
-/* el lema en español es más largo: en dos líneas, para que las pestañas
-   quepan donde caben en inglés */
-:root:lang(es) .tagline { max-width: 42ch; }
+@media (max-width: 700px) { .side { justify-self: start; flex-direction: row; align-items: center; gap: 8px; } }
 :root:lang(es) .thumb.dup::after { content: "reusado"; }
 /* abriendo en español: el inglés no se ve mientras llega el diccionario */
 .i18n-wait #app { visibility: hidden; }
