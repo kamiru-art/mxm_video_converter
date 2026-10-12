@@ -224,8 +224,8 @@ export const EXACT: Record<string, string> = {
   'QR size (mm)': 'Tamaño del QR (mm)',
   'Add a QR code per frame (for projects with MANY sheets)':
     'Agregar un código QR por fotograma (para proyectos con MUCHAS hojas)',
-  'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets and keep desktop-app compatibility, at the cost of cell space.':
-    'La identidad de los marcadores cubre un número limitado de hojas; la vista previa avisa cuando un proyecto lo supera. Los QR identifican cualquier número de hojas y mantienen la compatibilidad con la app de escritorio, a costa de espacio en la celda.',
+  'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets, at the cost of cell space.':
+    'La identidad de los marcadores cubre un número limitado de hojas; la vista previa avisa cuando un proyecto lo supera. Los QR identifican cualquier número de hojas, a costa de espacio en la celda.',
   'Gray patch strip (scanner normalization)': 'Tira de parches grises (normalización del escáner)',
   Printer: 'Impresora',
   'Printer profile (Calibration tab)': 'Perfil de impresora (pestaña Calibración)',
@@ -245,8 +245,7 @@ export const EXACT: Record<string, string> = {
   Preview: 'Vista previa',
   'Sheet generation cancelled.': 'Generación de hojas cancelada.',
   // g3-phase2
-  'Load the layout.json produced by phase ① (or by the desktop app, v1/v2).':
-    'Carga el layout.json que produjo la fase ① (o la app de escritorio, v1/v2).',
+  'Load the layout.json produced by phase ①.': 'Carga el layout.json que produjo la fase ①.',
   'Use the current project layout': 'Usar el layout del proyecto actual',
   'You have not generated sheets in this session yet.': 'Aún no has generado hojas en esta sesión.',
   'Drop the layout.json here': 'Suelta el layout.json aquí',

@@ -1529,7 +1529,7 @@ export function mountPhase1(root: HTMLElement): void {
         el(
           'div',
           { class: 'hint' },
-          'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets and keep desktop-app compatibility, at the cost of cell space.',
+          'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets, at the cost of cell space.',
         ),
         qrRow,
       );

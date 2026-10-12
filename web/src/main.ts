@@ -118,6 +118,9 @@ void (async () => {
   }
   badge.classList.add(gpu ? 'gpu' : 'cpu');
   text.textContent = `${gpu ? 'WebGPU' : 'CPU (WebAssembly)'}${coresTxt}`;
+  // «núcleos» tiene dos letras más que «cores»: el indicador guarda el ancho
+  // del español en los dos idiomas, para no mover las pestañas al cambiar
+  text.style.minWidth = `${text.textContent.length + (cores ? 2 : 0)}ch`;
   badge.title = gpu
     ? 'This browser can straighten scans on the graphics card: the heavy step of phase ② runs several times faster and uses half the memory. TIFF and 16-bit PNG scans still go through WebAssembly, so their bit depth survives untouched.'
     : 'No WebGPU here, so scans are straightened in WebAssembly on the processor. Everything works; heavy scans just take longer. Chrome or Edge on a recent machine enables the GPU path.';
