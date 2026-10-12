@@ -52,10 +52,21 @@ body {
 /* sin sitio para las tres en una fila (las pestañas piden ~732 px y el
    indicador hasta ~250): las fases bajan a la suya, a todo el ancho */
 @media (max-width: 1423px) {
-  .masthead { grid-template-columns: minmax(340px, 520px) 1fr; grid-template-areas: "mark side" "strip strip"; }
+  .masthead {
+    grid-template-columns: minmax(340px, 520px) 1fr;
+    grid-template-areas:
+      "mark side"
+      "strip strip";
+  }
 }
 @media (max-width: 700px) {
-  .masthead { grid-template-columns: minmax(0, 1fr); grid-template-areas: "mark" "strip" "side"; }
+  .masthead {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "mark"
+      "strip"
+      "side";
+  }
 }
 /* contenedor: el lema mide su letra con el ancho de la marca (abajo) */
 .wordmark { grid-area: mark; position: relative; padding: 6px 18px 8px 14px; container-type: inline-size; }
