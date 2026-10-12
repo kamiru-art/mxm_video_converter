@@ -77,6 +77,19 @@ window.addEventListener('hashchange', () => {
 // el idioma antes de montar la primera vista: en español no se ve el inglés
 startI18n();
 
+// El alto de la cabecera cambia con el ancho de la ventana (el título llena su
+// columna): los paneles miden lo que queda debajo (style.css, --views-top)
+const viewsEl = document.getElementById('views');
+const mastheadEl = document.querySelector('.masthead');
+if (viewsEl && mastheadEl) {
+  const setViewsTop = () => {
+    const top = viewsEl.getBoundingClientRect().top + window.scrollY;
+    document.documentElement.style.setProperty('--views-top', `${Math.round(top)}px`);
+  };
+  new ResizeObserver(setViewsTop).observe(mastheadEl);
+  setViewsTop();
+}
+
 const initial = resolveRoute(location.hash.replace('#', ''));
 show(mounters[initial] ? initial : 'sheets');
 if (migrationProblem) toast(migrationProblem, 'err', true);

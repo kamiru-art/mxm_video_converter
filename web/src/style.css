@@ -68,35 +68,35 @@ body {
       "side";
   }
 }
-/* contenedor: el lema mide su letra con el ancho de la marca (abajo) */
-.wordmark { grid-area: mark; position: relative; padding: 6px 18px 8px 14px; container-type: inline-size; }
+/* contenedor: título y lema miden su letra con el ancho de la marca, así
+   llenan la columna en cualquier ventana sin salirse de ella */
+.wordmark { grid-area: mark; container-type: inline-size; }
 .wordmark h1 {
   font-family: var(--font-display);
   font-variation-settings: "wdth" 118;
   font-weight: 850;
-  font-size: clamp(26px, 3vw, 38px);
-  /* con el lema en dos líneas, la marca mide lo que la tira de fases */
-  line-height: 1.15;
+  /* «MXM Studio» mide 6,01 veces su letra (Archivo, igual en Chrome, Firefox
+     y Safari): así el título llena la columna y termina donde termina el
+     cuadro de ajustes */
+  font-size: calc(100cqi / 6.03);
+  /* sin descendentes: la línea puede ser más baja que la letra */
+  line-height: 0.9;
   letter-spacing: 0.01em;
   margin: 0;
   color: var(--papel);
 }
 .wordmark h1 em { font-style: normal; color: var(--sol); font-variation-settings: "wdth" 84; font-weight: 500; }
-/* Dos líneas en los dos idiomas: el español (77 caracteres) no cabe en una, y
-   si el inglés (62) fuera en una la cabecera cambiaría de alto con el idioma.
-   42ch parte la frase española en su coma y `balance` reparte igual la
-   inglesa. En un teléfono la letra baja lo justo para que la línea española
-   más larga (40 caracteres de 0,6em, y uno de holgura) quepa en la marca. */
+/* Dos líneas en los dos idiomas: el español (77 caracteres) no cabe en una a
+   este tamaño, y si el inglés (62) fuera en una la cabecera cambiaría de alto
+   con el idioma. 42ch parte la frase española en su coma y `balance` reparte
+   igual la inglesa. Donde la marca es estrecha la letra baja lo justo para que
+   la línea española más larga (40 caracteres de 0,6em, y uno de holgura)
+   quepa. */
 .tagline {
   margin: 2px 0 0 2px; font-family: var(--font-mono); color: var(--cian-300);
-  font-size: clamp(10px, (100cqi - 2px) / 24.6, 12.5px);
+  font-size: clamp(10px, (100cqi - 2px) / 24.6, 16px); line-height: 1.3;
   max-width: 42ch; text-wrap: balance;
 }
-
-/* marcas de registro (esquinas de imprenta) como firma visual */
-.reg-mark { position: absolute; width: 14px; height: 14px; }
-.reg-mark.tl { top: 0; left: 0; border-top: 2px solid var(--sol); border-left: 2px solid var(--sol); }
-.reg-mark.br { bottom: 0; right: 0; border-bottom: 2px solid var(--sol); border-right: 2px solid var(--sol); }
 
 /* ── Tira de fases (navegación = tira de contactos) ───────── */
 .strip {
@@ -199,9 +199,10 @@ body {
 /* En pantallas con altura: cada panel gestiona su propio scroll y la página
    entera cabe en una sola vista, sin scroll global. */
 @media (min-width: 901px) and (min-height: 560px) {
-  /* 190px = cabecera + márgenes + pie: así ninguna fase provoca scroll global */
-  .workbench .paper { max-height: calc(100vh - 198px); overflow-y: auto; overscroll-behavior: contain; }
-  .workbench .bench { max-height: calc(100vh - 198px); overflow-y: auto; overscroll-behavior: contain; }
+  /* lo que queda bajo la cabecera (main.ts mide dónde empiezan las vistas)
+     menos 73 px de margen y pie: así ninguna fase provoca scroll global */
+  .workbench .paper { max-height: calc(100vh - var(--views-top, 125px) - 73px); overflow-y: auto; overscroll-behavior: contain; }
+  .workbench .bench { max-height: calc(100vh - var(--views-top, 125px) - 73px); overflow-y: auto; overscroll-behavior: contain; }
 }
 
 /* panel de controles = ficha de papel */

@@ -270,7 +270,14 @@ async function runFlow(
     const after = ui.snapshot();
     const headEs = ui.header();
     return {
-      moved: Object.keys(head).filter((k) => head[k] !== headEs[k]).map((k) => k + ' ' + head[k] + ' → ' + headEs[k]),
+      // medio píxel de holgura: centrar la tira junto a un título más alto
+      // deja fracciones que el navegador redondea distinto, y no se ven
+      moved: Object.keys(head)
+        .filter((k) => {
+          const a = head[k].split(',').map(Number), b = headEs[k].split(',').map(Number);
+          return a.length !== b.length || a.some((v, i) => !(Math.abs(v - b[i]) <= 0.5));
+        })
+        .map((k) => k + ' ' + head[k] + ' → ' + headEs[k]),
       parts: Object.values(head).filter((v) => v !== 'missing').length,
       lang,
       nav: document.querySelector('#phase-nav .fname').textContent,
@@ -292,6 +299,28 @@ async function runFlow(
     toEs.moved.length
       ? toEs.moved.join(' | ')
       : `${toEs.parts} parts (title, tabs, badge, switch, view) at the same place and size`,
+  );
+  // el título termina donde termina el cuadro de ajustes, cuando su columna
+  // mide lo que el cuadro (si la ventana no da, la marca encoge: ahí no)
+  const titleEdge = await driver.run<{
+    title: number;
+    panel: number;
+    column: number;
+    width: number;
+  }>(
+    step(`
+    const g = document.createRange();
+    g.selectNodeContents(document.querySelector('.wordmark h1'));
+    const panel = document.querySelector('#view-sheets .workbench > .paper').getBoundingClientRect();
+    return { title: g.getBoundingClientRect().right, panel: panel.right, column: document.querySelector('.wordmark').getBoundingClientRect().width, width: panel.width };`),
+  );
+  const full = Math.abs(titleEdge.column - titleEdge.width) < 1;
+  check(
+    'the title ends where the settings panel ends',
+    !full || Math.abs(titleEdge.title - titleEdge.panel) <= 3,
+    full
+      ? `title ends at ${titleEdge.title.toFixed(1)} px, panel at ${titleEdge.panel.toFixed(1)} px`
+      : `not checked here: the title column is ${titleEdge.column.toFixed(0)} px, the panel ${titleEdge.width.toFixed(0)} px`,
   );
   await shot('header-es');
   const en1 = await driver.run<string[]>(step(`await ui.lang('en'); return ui.snapshot();`));
