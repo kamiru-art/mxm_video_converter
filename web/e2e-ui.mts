@@ -728,8 +728,8 @@ async function runFlow(
     const checks = [...document.querySelectorAll('#view-video label.check')];
     const skip = checks.find((l) => /Skip the missing frames/.test(l.textContent)).querySelector('input');
     const cut = checks.find((l) => /Cut their sound too/.test(l.textContent)).querySelector('input');
-    const shown = skip.getClientRects().length > 0 && !skip.checked && cut.checked;
-    const cutOffWhileHolding = cut.disabled;
+    // las dos vienen marcadas; para retener se desmarca la de saltar
+    const shown = skip.getClientRects().length > 0 && skip.checked && cut.checked && !cut.disabled;
     const kind = [...document.querySelectorAll('#view-video select')].find((s) => [...s.options].some((o) => o.value === 'frames'));
     const planText = (n) => ui.until(() => [...document.querySelectorAll('#view-video .hint')].map((h) => h.textContent).find((x) => new RegExp('^Lossless: .*, ' + n + ' frames;').test(x)), 30000, 'the plan with ' + n + ' frames');
     const save = async (ext) => {
@@ -741,6 +741,9 @@ async function runFlow(
     };
     kind.value = 'frames';
     kind.dispatchEvent(new Event('change'));
+    skip.checked = false;
+    skip.dispatchEvent(new Event('change'));
+    const cutOffWhileHolding = cut.disabled;
     const plans = [await planText(${slots.length})];
     const zips = [await save('.zip')];
     skip.checked = true;
@@ -770,7 +773,7 @@ async function runFlow(
     return { shown, cutOffWhileHolding, plans, asked, zips, mp4, preview };`),
   );
   check(
-    'missing frames: both options appear, skipping off and cutting on, cutting idle while holding',
+    'missing frames: both options appear, both on, cutting idle while holding',
     gaps.shown && gaps.cutOffWhileHolding,
     `shown: ${gaps.shown}; cut disabled while holding: ${gaps.cutOffWhileHolding}`,
   );
@@ -782,10 +785,10 @@ async function runFlow(
   check(
     'missing frames: each save asks with what it will do',
     gaps.asked.length === 4 &&
-      /each one shows the drawing before it/.test(gaps.asked[0] ?? '') &&
-      /skips them and their sound/.test(gaps.asked[1] ?? '') &&
-      /sound plays straight through/.test(gaps.asked[2] ?? '') &&
-      /skips them and their sound/.test(gaps.asked[3] ?? ''),
+      /^Frames missing: 5\. Each gap shows the drawing before it\./.test(gaps.asked[0] ?? '') &&
+      /skips the gaps and their sound/.test(gaps.asked[1] ?? '') &&
+      /the sound plays without cuts/.test(gaps.asked[2] ?? '') &&
+      /skips the gaps and their sound/.test(gaps.asked[3] ?? ''),
     gaps.asked.join(' | '),
   );
   const [held, cutZip, straightZip] = await Promise.all(gaps.zips.map(unzipAll));

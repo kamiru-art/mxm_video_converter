@@ -545,31 +545,32 @@ async function runFlow(
     // el traductor mira los cambios del documento: traduce al momento, pero
     // después de que el clic cambie el texto, no a la vez
     const settled = () => new Promise((r) => setTimeout(r, 100));
+    // las dos vienen marcadas: saltar y cortar, luego sin cortar, luego retener
     const hints = [hint.textContent];
+    cut.querySelector('input').click();
+    await settled();
+    hints.push(hint.textContent);
+    cut.querySelector('input').click();
     skip.querySelector('input').click();
     await settled();
     hints.push(hint.textContent);
-    cut.querySelector('input').click();
-    await settled();
-    hints.push(hint.textContent);
-    cut.querySelector('input').click();
+    skip.querySelector('input').click();
     const asked = [];
     window.confirm = (m) => { asked.push(m); return false; };
     ui.button(${rx(es('Save the video'), true)}).click();
     await ui.until(() => asked.length, 10000, 'the question before saving');
     window.confirm = () => true;
-    skip.querySelector('input').click();
     return { labels: [skip.textContent, cut.textContent], hints, asked };`),
   );
   const wantHints = [
     es(
+      'The missing frames and their sound are left out. Each drawing keeps its own sound, and the rest joins with no silent gaps.',
+    ),
+    es(
+      'The missing frames are left out, and the sound plays without cuts. Use this when the sound was already edited without those frames.',
+    ),
+    es(
       'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.',
-    ),
-    es(
-      'The missing frames are left out, and so is their sound: every drawing keeps its own sound, and the pieces join without silences.',
-    ),
-    es(
-      'The missing frames are left out and the sound plays straight through, for a sound already edited without them.',
     ),
   ];
   check(
@@ -577,7 +578,7 @@ async function runFlow(
     gaps.labels.join() === [es('Skip the missing frames'), es('Cut their sound too')].join() &&
       gaps.hints.join() === wantHints.join() &&
       gaps.asked[0] ===
-        es('{#0} frames are missing; the video skips them and their sound. Continue?', '1'),
+        es('Frames missing: {#0}. The video skips the gaps and their sound. Continue?', '1'),
     `${gaps.labels.join(' / ')} | ${gaps.hints.join(' | ')} | ${gaps.asked.join(' | ')}`,
   );
   await screen('video');

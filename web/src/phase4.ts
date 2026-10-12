@@ -128,10 +128,11 @@ export function mountPhase4(root: HTMLElement): void {
   const layoutInfo = el('div', { class: 'hint' });
   const stateInfo = el('div', { class: 'hint' });
   const missingBox = el('div');
-  // qué hacer con los huecos: los fotogramas, y aparte su sonido, porque el
+  // qué hacer con los huecos (por defecto se saltan, con su sonido): los
+  // fotogramas, y aparte su sonido, porque el
   // sonido puede ser el del original (hay que cortarlo igual) o uno ya
   // editado sin esos fotogramas (tiene que sonar seguido)
-  const skipCheck = check('Skip the missing frames', false);
+  const skipCheck = check('Skip the missing frames', true);
   const cutCheck = check('Cut their sound too', true);
   const gapsInfo = el('div', { class: 'hint', 'aria-live': 'polite' });
   const gapsBox = el(
@@ -145,8 +146,8 @@ export function mountPhase4(root: HTMLElement): void {
     gapsInfo.textContent = !skipCheck.input.checked
       ? 'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.'
       : cutCheck.input.checked
-        ? 'The missing frames are left out, and so is their sound: every drawing keeps its own sound, and the pieces join without silences.'
-        : 'The missing frames are left out and the sound plays straight through, for a sound already edited without them.';
+        ? 'The missing frames and their sound are left out. Each drawing keeps its own sound, and the rest joins with no silent gaps.'
+        : 'The missing frames are left out, and the sound plays without cuts. Use this when the sound was already edited without those frames.';
   }
   const fpsIn = numberInput(12, { min: 0.1, step: 0.1 });
   // los dos primeros guardan los mismos píxeles, sin pérdida, y se elige
@@ -215,7 +216,7 @@ export function mountPhase4(root: HTMLElement): void {
   const audioDz = dropzone({
     label: 'Original video (for its audio)',
     sublabel:
-      'Optional: the clip the frames came from, or a sound file already edited. Only its sound is used.',
+      'Optional: the clip the frames came from, or an edited sound file. Only its sound is used.',
     accept:
       'video/*,audio/*,.mov,.mp4,.mkv,.webm,.avi,.mpg,.mpeg,.m4v,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus',
     onFiles: ([f]) => {
@@ -411,11 +412,11 @@ export function mountPhase4(root: HTMLElement): void {
       return;
     }
     const gaps = !skipCheck.input.checked
-      ? 'each one shows the drawing before it'
+      ? 'Each gap shows the drawing before it.'
       : cutCheck.input.checked
-        ? 'the video skips them and their sound'
-        : 'the video skips them and the sound plays straight through';
-    if (missing.length && !confirm(tr(`${missing.length} frames are missing; ${gaps}. Continue?`)))
+        ? 'The video skips the gaps and their sound.'
+        : 'The video skips the gaps, and the sound plays without cuts.';
+    if (missing.length && !confirm(tr(`Frames missing: ${missing.length}. ${gaps} Continue?`)))
       return;
     // el plan llega solo (refreshPlan); en un teléfono, si aún no está, se
     // espera: sin él no hay aviso. Lo pesado es conformar un fotograma: el
