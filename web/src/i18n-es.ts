@@ -371,6 +371,10 @@ export const EXACT: Record<string, string> = {
   'Skip them, sound without cuts': 'Saltarlos, sonido sin cortes',
   'Show the drawing before': 'Mostrar el dibujo anterior',
   'Not normalized': 'Sin normalizar',
+  'Cyanotype prints: choose the reference print in Options. The others are matched to it.':
+    'Copias de cianotipia: elige la copia de referencia en Opciones. Las demás se igualan a ella.',
+  'Cyanotype prints: turn on “Normalize colours with the gray strip” and choose the reference print.':
+    'Copias de cianotipia: activa “Igualar colores con la tira de grises” y elige la copia de referencia.',
   'No original video at hand: drop it above to add its sound. The video comes out silent otherwise.':
     'No hay video original a mano: suéltalo arriba para agregar su sonido. De lo contrario, el video sale mudo.',
   '16 bits per channel': '16 bits por canal',
@@ -491,7 +495,6 @@ export const EXACT: Record<string, string> = {
   after: 'después',
   'Gray strip unreadable: colours not matched.': 'Tira de grises ilegible: colores sin igualar.',
   'Reference print.': 'Copia de referencia.',
-  'process the scans first': 'procesa primero los escaneos',
   'The gray strip of this scan cannot be matched.':
     'La tira de grises de este escaneo no se puede igualar.',
   'The gray strip does not fit beside the markers, so no sheet will carry it. Use smaller markers or a larger page.':
@@ -746,7 +749,14 @@ export const TEMPLATES: [string, string][] = [
     '{#0} sheets exceed the {#1} that the markers can tell apart. Turn on "Add a QR code per frame".',
     '{#0} hojas superan las {#1} que los marcadores pueden distinguir. Activa "Agregar un código QR por fotograma".',
   ],
-  ['More than {#0} sheets.', 'Más de {#0} hojas.'],
+  [
+    'On by default and strongly recommended above {#0} sheets.',
+    'Activado por defecto y muy recomendado con más de {#0} hojas.',
+  ],
+  [
+    'More than {#0} sheets: the markers alone cannot tell them apart. QR codes are now on.',
+    'Más de {#0} hojas: los marcadores solos no pueden distinguirlas. Los códigos QR quedaron activados.',
+  ],
   ['Missing frames: {#0}.', 'Fotogramas faltantes: {#0}.'],
   ['sheet {#0} · {1}', 'hoja {#0} · {1}'],
   ['matching colours: {#0}/{#1} frames', 'igualando colores: {#0}/{#1} fotogramas'],

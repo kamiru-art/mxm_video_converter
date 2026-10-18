@@ -51,7 +51,7 @@ export function context2d(
   return ctx;
 }
 
-export type ToastKind = '' | 'ok' | 'err';
+export type ToastKind = '' | 'ok' | 'err' | 'warn';
 
 /** Un aviso abajo a la derecha. `sticky`: no se va solo, sino al hacerle
  *  clic; para lo que el usuario tiene que poder leer con calma. */

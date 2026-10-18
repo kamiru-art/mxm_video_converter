@@ -619,6 +619,7 @@ export function mountPhase2(root: HTMLElement): void {
         );
       } else {
         toast('Processing finished. Check the report.', 'ok');
+        askForReference();
       }
     } catch (e) {
       // la zona de soltar y el botón de reprocesar lanzan el lote sin await:
@@ -955,27 +956,38 @@ export function mountPhase2(root: HTMLElement): void {
     return `cyan:${JSON.stringify(measuredOf(ref))}`;
   }
 
+  /** La casilla sólo con un layout que lleva la tira; el selector de
+   *  referencia, sólo cuando hay entre qué elegir (dos copias leídas). */
   function syncRefField(): void {
-    const show = patchesCheck.input.checked && hasStrip() && isCyanLayout();
-    refField.style.display = show ? '' : 'none';
-    if (!show) return;
-    const ref = refEntry();
+    patchesCheck.label.style.display = hasStrip() ? '' : 'none';
     const ok = [...readable()].sort(
       (a, b) => (a.result.hoja_numero ?? 0) - (b.result.hoja_numero ?? 0),
     );
+    const show = patchesCheck.input.checked && hasStrip() && isCyanLayout() && ok.length > 1;
+    refField.style.display = show ? '' : 'none';
+    if (!show) return;
     refSel.replaceChildren(
-      ...(ok.length
-        ? ok.map((e) =>
-            el(
-              'option',
-              { value: e.result.scan },
-              `sheet ${e.result.hoja_numero} · ${e.result.scan}`,
-            ),
-          )
-        : [el('option', { value: '' }, 'process the scans first')]),
+      ...ok.map((e) =>
+        el('option', { value: e.result.scan }, `sheet ${e.result.hoja_numero} · ${e.result.scan}`),
+      ),
     );
-    refSel.value = ref?.result.scan ?? '';
-    refSel.disabled = ok.length < 2;
+    refSel.value = refEntry()?.result.scan ?? '';
+  }
+
+  /** Copias de cianotipia con la tira: una vez por layout, se pide elegir
+   *  la de referencia (y activar la normalización si está apagada). */
+  let askedRefFor: Layout | null = null;
+  function askForReference(): void {
+    if (!hasStrip() || !isCyanLayout() || readable().length < 2) return;
+    if (askedRefFor === ph2.layout) return;
+    askedRefFor = ph2.layout;
+    toast(
+      patchesCheck.input.checked
+        ? 'Cyanotype prints: choose the reference print in Options. The others are matched to it.'
+        : 'Cyanotype prints: turn on “Normalize colours with the gray strip” and choose the reference print.',
+      'warn',
+      true,
+    );
   }
 
   let levelsBusy = false;
@@ -1202,6 +1214,7 @@ export function mountPhase2(root: HTMLElement): void {
   }
 
   function renderSummary(): void {
+    syncRefField();
     const any = ph2.results.length > 0;
     clearBtn.style.display = any ? '' : 'none';
     reportTable.style.display = any ? '' : 'none';

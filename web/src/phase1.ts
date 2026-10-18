@@ -1351,13 +1351,21 @@ export function mountPhase1(root: HTMLElement): void {
     const needed =
       cap != null && new Set(nums.map((n) => (((n - 1) % cap) + cap) % cap)).size < nums.length;
     const want = needed ? (qrNeeded ? !!s.qr_on : true) : false;
+    if (needed && !qrNeeded)
+      toast(
+        `More than ${cap} sheets: the markers alone cannot tell them apart. QR codes are now on.`,
+        'warn',
+        true,
+      );
     qrNeeded = needed;
     if (want !== !!s.qr_on) {
       s.qr_on = want;
       persist();
     }
     qrCheck.input.checked = want;
-    qrHint.textContent = needed ? `More than ${cap} sheets.` : '';
+    qrHint.textContent = needed
+      ? `On by default and strongly recommended above ${cap} sheets.`
+      : '';
     qrBox.hidden = !needed;
     showQrRow();
   };
@@ -1518,11 +1526,12 @@ export function mountPhase1(root: HTMLElement): void {
       });
       return c.label;
     })(),
+    // los avisos, antes del botón: se leen antes de imprimir, no después
+    warnBox,
     genBtn,
     sizeInfo,
     el('div', { class: 'row tight', style: 'justify-content:center' }, genCancel.button),
     genProg.root,
-    warnBox,
 
     el('h3', {}, 'Presets'),
     presetsRow,

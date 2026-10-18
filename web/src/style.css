@@ -478,8 +478,16 @@ table.report th { font-family: var(--font-display); font-size: 12px; text-transf
 table.report td.ok { color: var(--quimico-ok); }
 table.report td.bad { color: #E98C77; }
 table.report .mono { font-family: var(--font-mono); font-size: 12px; }
-.warnlist { font-size: 12.5px; line-height: 1.45; color: #D8B04C; margin: 4px 0; padding-left: 18px; }
-.paper .warnlist { color: #8a6d3b; }
+.warnlist {
+  font-size: 13.5px; line-height: 1.45; color: var(--papel); margin: 10px 0;
+  background: rgba(240,180,41,.14); border: 1px solid rgba(240,180,41,.5);
+  border-left: 4px solid var(--sol); border-radius: 8px; padding: 10px 14px 10px 32px;
+}
+.warnlist:empty { display: none; }
+.warnlist li + li { margin-top: 6px; }
+.warnlist li::marker { content: '⚠  '; color: var(--sol); }
+.paper .warnlist { color: var(--tinta); background: #FBEFC9; border-color: #E2C066; border-left-color: #C98A0B; }
+.paper .warnlist li::marker { color: #C98A0B; }
 .missing-box { background: rgba(196,83,58,.12); border: 1px solid rgba(196,83,58,.4); padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px; }
 .allok-box { background: rgba(63,158,110,.12); border: 1px solid rgba(63,158,110,.4); padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px; }
 /* sobre papel el texto de estas cajas es la tinta del panel, no el color
@@ -543,6 +551,7 @@ table.report td.assign-cell .assign-sel { width: 200px; }
 }
 .toast.err { border-left-color: var(--quimico-error); }
 .toast.ok { border-left-color: var(--quimico-ok); }
+.toast.warn { border-left-color: var(--sol); background: #FBEFC9; font-weight: 600; }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }

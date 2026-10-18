@@ -1052,6 +1052,8 @@ async function runFlow(
       frames?: number;
       viewOn?: string[];
       viewOff?: string[];
+      askedRef?: string;
+      refHiddenOff?: boolean;
     }>(
       step(`
       const sheets = ${JSON.stringify(pngs.slice(0, 2).map(([n, b]) => [n, b.toString('base64')]))};
@@ -1095,6 +1097,9 @@ async function runFlow(
       const scansIn = [...document.querySelectorAll('#view-scans table.report td.mono, #view-scans table.report td')].map((t) => t.textContent);
       const zip = async () => { ${PROCESSED_ZIP.replace(/^const ui = window.__ui; /, '')} };
       const sel = [...document.querySelectorAll('#view-scans label')].find((l) => /Reference print/.test(l.textContent)).querySelector('select');
+      // con la opción apagada: el aviso pide activarla y elegir, y aún no hay selector
+      const askedRef = ui.toasts.slice(n0).find((t) => /warn: Cyanotype prints: turn on/.test(t)) ?? '';
+      const refHiddenOff = !sel.closest('label').getClientRects().length;
       const timed = async (act, done) => {
         const t0 = performance.now();
         act();
@@ -1161,7 +1166,7 @@ async function runFlow(
       const offMs = await timed(() => box.click(), () => !notes().some((n) => /Reference print.|Matched to the reference/.test(n)));
       const off = await zip();
       const viewOff = await viewer();
-      return { viewOn, viewOff, raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
+      return { askedRef, refHiddenOff, viewOn, viewOff, raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
     );
     if (strip.error) {
       check('cyanotype gray strip', false, strip.error);
@@ -1184,6 +1189,11 @@ async function runFlow(
       const swRef = same(swapped, raw, refB);
       const swOther = same(swapped, raw, refA);
       const offAll = [...same(off, raw, refA), ...same(off, raw, refB)];
+      check(
+        'cyanotype strip: after scanning, a notice asks to turn it on and choose the reference',
+        !!s.askedRef && s.refHiddenOff === true,
+        `${s.askedRef}; reference field hidden while off: ${s.refHiddenOff}`,
+      );
       check(
         'cyanotype strip: reference defaults to the lowest sheet, both prints offered',
         refA === 1 && (s.options ?? []).length === 2,
