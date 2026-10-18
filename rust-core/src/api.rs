@@ -101,6 +101,14 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
     Ok(out)
 }
 
+/// Cuántas hojas distingue la identidad de los marcadores con estos ajustes
+/// (null si la identidad va por QR o no hay registro).
+#[wasm_bindgen]
+pub fn marker_capacity(settings_json: &str) -> Result<JsValue, JsValue> {
+    let s = parse_settings(settings_json)?;
+    Ok(sheet::marker_capacity(&s).map_or(JsValue::NULL, |c| JsValue::from_f64(c as f64)))
+}
+
 /// Información de layout para la interfaz (páginas, celdas, avisos).
 #[wasm_bindgen]
 pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result<String, JsValue> {
@@ -688,8 +696,16 @@ pub fn analyze_printer_test(
 /// La curva con la que se imprime la carta de la segunda pasada ("null" o
 /// vacío: primera pasada).
 fn parse_prior(prior_json: &str) -> Result<Option<Vec<f64>>, JsValue> {
-    let raw: Option<Vec<f64>> = serde_json::from_str(prior_json).unwrap_or(None);
-    raw.map(|l| calib::prior_curve(&l)).transpose().map_err(err)
+    let t = prior_json.trim();
+    if t.is_empty() || t == "null" {
+        return Ok(None);
+    }
+    // una curva ilegible NO es una primera pasada: la carta y el análisis
+    // saldrían sin ella y la curva nueva estaría mal sin ningún aviso
+    let raw: Vec<f64> = serde_json::from_str(t).map_err(|_| {
+        err("The curve already on the chart is not a valid curve. Pick another one, or none.")
+    })?;
+    calib::prior_curve(&raw).map(Some).map_err(err)
 }
 
 #[wasm_bindgen]

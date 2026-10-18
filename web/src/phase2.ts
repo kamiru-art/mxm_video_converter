@@ -57,6 +57,8 @@ export interface ResultEntry {
   /** qué normalización llevan `frames` (ver levelsKey) */
   levelsKey?: string;
   levelNote?: { text: string; warn: boolean };
+  /** juegos normalizados ya escritos, por clave */
+  levelCache?: Map<string, LabeledPng[]>;
 }
 
 export interface Phase2State {
@@ -916,17 +918,17 @@ export function mountPhase2(root: HTMLElement): void {
   const readable = (): ResultEntry[] =>
     ph2.results.filter((e) => e.result.ok && e.result.hoja_numero != null && measuredOf(e));
 
-  /** La copia de referencia: la elegida, o la hoja de número más bajo con la
-   *  tira legible (determinista: no depende de qué escaneo termina antes). */
+  /** La copia de referencia: la que eligió el usuario, o la hoja de número
+   *  más bajo con la tira legible. La de por defecto NO se guarda en
+   *  ph2.refScan: guardada, una elegida a mitad de lote (cuando sólo había
+   *  terminado la hoja 3) se quedaba aunque luego llegara la 1. */
   function refEntry(): ResultEntry | null {
     const ok = readable();
     const chosen = ok.find((e) => e.result.scan === ph2.refScan);
     if (chosen) return chosen;
-    const first = [...ok].sort(
-      (a, b) => (a.result.hoja_numero ?? 0) - (b.result.hoja_numero ?? 0),
-    )[0];
-    ph2.refScan = first?.result.scan ?? null;
-    return first ?? null;
+    return (
+      [...ok].sort((a, b) => (a.result.hoja_numero ?? 0) - (b.result.hoja_numero ?? 0))[0] ?? null
+    );
   }
 
   /** Qué normalización le toca a una entrada con las opciones de ahora. */
@@ -964,8 +966,10 @@ export function mountPhase2(root: HTMLElement): void {
   let levelsBusy = false;
   let levelsAgain = false;
   /** Pone cada entrada del informe en la normalización que le toca. Sólo
-   *  trabaja en las que cambian; con un lote en marcha espera a su final,
-   *  que vuelve a llamarla. */
+   *  trabaja en las que cambian, y cada juego normalizado se guarda por
+   *  entrada y clave: volver a una referencia o a la casilla de antes no
+   *  escribe otra copia de cada recorte en el disco. Una llamada mientras
+   *  corre otra la repite al terminar con las opciones de ese momento. */
   async function applyLevels(): Promise<void> {
     syncRefField();
     if (levelsBusy) {
@@ -983,10 +987,13 @@ export function mountPhase2(root: HTMLElement): void {
         if (total) prog.show();
         const unreadable: string[] = [];
         for (const e of todo) {
+          if (levelsAgain) break; // las opciones cambiaron: se rehace todo
           const key = levelsKey(e, ref);
+          const cached = e.levelCache?.get(key);
           const raw = e.raw ?? [];
           let frames = raw;
           let note: ResultEntry['levelNote'];
+          let failed = false;
           if (key === 'unreadable') {
             unreadable.push(e.result.scan);
             note = {
@@ -997,6 +1004,14 @@ export function mountPhase2(root: HTMLElement): void {
             // la referencia contra sí misma es la identidad: sus recortes tal cual
             note = {
               text: 'This print is the colour reference: the others are matched to it.',
+              warn: false,
+            };
+          } else if (cached) {
+            frames = cached;
+            note = {
+              text: key.startsWith('cyan')
+                ? 'Colours matched to the reference print with the gray strip.'
+                : 'Levels normalized with the patch strip.',
               warn: false,
             };
           } else if (key !== 'raw') {
@@ -1029,6 +1044,8 @@ export function mountPhase2(root: HTMLElement): void {
                 }),
               );
               frames = out;
+              e.levelCache = e.levelCache ?? new Map();
+              e.levelCache.set(key, out);
               note = {
                 text: cyan
                   ? 'Colours matched to the reference print with the gray strip.'
@@ -1038,6 +1055,7 @@ export function mountPhase2(root: HTMLElement): void {
             } catch (err) {
               console.error(err);
               note = { text: `Colours not matched: ${errMsg(err)}`, warn: true };
+              failed = true;
             }
           }
           // un reprocesado o "Clear results" a mitad la sacó del informe
@@ -1045,7 +1063,8 @@ export function mountPhase2(root: HTMLElement): void {
           replaceResult(e, {
             ...e,
             frames,
-            levelsKey: key,
+            // un fallo queda como recortes crudos: la próxima pasada lo reintenta
+            levelsKey: failed ? 'raw' : key,
             levelNote: note,
             rows: null,
             urls: [],
@@ -1064,13 +1083,12 @@ export function mountPhase2(root: HTMLElement): void {
     }
     syncRefField();
   }
-  patchesCheck.input.addEventListener('change', () => {
-    if (!processing) void applyLevels();
-    else syncRefField();
-  });
+  // también con un lote en marcha: si coincide con la pasada del final, ésta
+  // se repite con lo que haya ahora
+  patchesCheck.input.addEventListener('change', () => void applyLevels());
   refSel.addEventListener('change', () => {
     ph2.refScan = refSel.value || null;
-    if (!processing) void applyLevels();
+    void applyLevels();
   });
 
   /** `keepAssign`: al reprocesar el lote con otras opciones, las hojas que el
@@ -1078,7 +1096,9 @@ export function mountPhase2(root: HTMLElement): void {
   function clearReport(keepAssign = false): void {
     for (const e of ph2.results) dropRows(e);
     ph2.results = [];
-    ph2.refScan = null;
+    // reprocesar conserva la copia de referencia elegida, como las hojas
+    // puestas a mano; si ese escaneo ya no vuelve, manda la de por defecto
+    if (!keepAssign) ph2.refScan = null;
     void clearProcessedCache(); // sus archivos en disco ya no los mira nadie
     if (!keepAssign) ph2.assign = {};
     reportTable.replaceChildren(reportHeader);

@@ -1133,7 +1133,11 @@ export function mountPhase1(root: HTMLElement): void {
     });
   }
 
+  /** se define con el campo de marcadores, más abajo */
+  let syncCapHint: () => void = () => {};
   async function refreshPreview(): Promise<void> {
+    // cualquier ajuste pasa por aquí: también el registro y los QR
+    syncCapHint();
     if (!project.frames.length) return;
     updateThumbLabels();
     if (previewBusy) {
@@ -1370,15 +1374,22 @@ export function mountPhase1(root: HTMLElement): void {
     ],
     String(s.marker_count),
   );
-  // cuántas hojas distingue la identidad de los marcadores: el mismo cálculo
-  // que sheet::marker_id_scheme (IDs del diccionario repartidos entre las
-  // posiciones, dos dígitos alternados ⇒ m²)
+  // cuántas hojas distingue la identidad de los marcadores: lo calcula el
+  // núcleo (sheet::marker_capacity), que es quien reparte los IDs
   const capHint = el('div', { class: 'hint' });
-  const syncCapHint = (): void => {
-    const dict = parseInt(/(\d+)$/.exec(s.marker_dict)?.[1] ?? '100', 10);
-    const m = Math.max(1, Math.floor(dict / s.marker_count));
-    capHint.textContent = `With ${s.marker_count} markers, up to ${m * m} sheets. For more, turn on "Add a QR code per frame".`;
-    capHint.style.display = s.qr_on ? 'none' : '';
+  let capSeq = 0;
+  syncCapHint = (): void => {
+    const seq = ++capSeq;
+    void run('marker_capacity', { settings: settingsForCore(s) })
+      .then((cap) => {
+        if (seq !== capSeq) return;
+        capHint.textContent =
+          cap == null
+            ? ''
+            : `With ${s.marker_count} markers, up to ${cap} sheets. For more, turn on "Add a QR code per frame".`;
+        capHint.style.display = cap == null ? 'none' : '';
+      })
+      .catch((e) => console.error('marker capacity', e));
   };
   syncCapHint();
   markerCountSel.addEventListener('change', () => {

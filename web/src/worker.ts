@@ -91,6 +91,7 @@ function deepFrame(
 
 const handlers: Handlers = {
   version: () => core.version(),
+  marker_capacity: (a) => core.marker_capacity(a.settings) as number | null,
   compute_layout: (a) => core.compute_layout(a.settings, a.firstW, a.firstH),
   render_sheet: (a) => {
     const r = core.render_sheet(

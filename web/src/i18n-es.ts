@@ -357,8 +357,10 @@ export const EXACT: Record<string, string> = {
     'Activado por defecto: la cara impresa de la película va contra el papel, como en la carta de calibración. Desactívalo sólo si expones con la película al revés, y ten en cuenta que la curva se midió en espejo.',
   'Several prints: drop the scans of several prints of the same chart together and the app averages them. It helps when a print came out uneven.':
     'Varias copias: suelta juntos los escaneos de varias copias de la misma carta y la app las promedia. Ayuda cuando una copia salió despareja.',
-  'The last chart you downloaded used a different “Curve already on the chart”. Pick the one it was printed with, or the curve will be wrong.':
-    'La última carta que descargaste usaba otra “Curva ya aplicada a la carta”. Elige aquella con la que se imprimió, o la curva saldrá mal.',
+  'The last chart you downloaded was printed with a different curve: another “Curve already on the chart”, or that profile was saved over since. Pick the curve it was printed with, or download the chart again.':
+    'La última carta que descargaste se imprimió con otra curva: otra “Curva ya aplicada a la carta”, o ese perfil se guardó encima después. Elige la curva con que se imprimió, o descarga la carta de nuevo.',
+  'The curve already on the chart is not a valid curve. Pick another one, or none.':
+    'La curva ya aplicada a la carta no es una curva válida. Elige otra, o ninguna.',
   'Second pass: this curve already includes the first one. Save it and use it instead.':
     'Segunda pasada: esta curva ya incluye la primera. Guárdala y úsala en su lugar.',
   'Drop at least one scan of the chart.': 'Suelta al menos un escaneo de la carta.',

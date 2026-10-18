@@ -1575,10 +1575,19 @@ pub fn apply_level_curves(img: &mut DynImg, curves: &LevelCurves) {
             }
         }
         DynImg::U16(i) => {
+            // tabla también aquí: una búsqueda por píxel y canal costaba
+            // decenas de millones por recorte de 16 bits
             const K: f64 = 65535.0 / 255.0;
+            let luts: Vec<Vec<u16>> = (0..3)
+                .map(|c| {
+                    (0..65536)
+                        .map(|v| (map(c, v as f64 / K) * K).round().clamp(0.0, 65535.0) as u16)
+                        .collect()
+                })
+                .collect();
             for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
-                    p[c] = (map(c, p[c] as f64 / K) * K).round().clamp(0.0, 65535.0) as u16;
+                    p[c] = luts[c][p[c] as usize];
                 }
             }
         }

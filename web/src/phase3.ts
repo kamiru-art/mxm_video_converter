@@ -242,9 +242,10 @@ export function mountPhase3(root: HTMLElement): void {
   };
   const priorLut = (): number[] | null =>
     bPrior.value ? (store.loadProfile('cianotipia', bPrior.value)?.lut ?? null) : null;
-  /** Curva con la que se descargó la última carta en esta sesión ('' = sin
-   *  curva; null = no se descargó ninguna): medir con otra daría una curva
-   *  equivocada sin ningún error. */
+  /** La curva (su JSON, no el nombre del perfil: un perfil guardado encima
+   *  con el mismo nombre ya es otra curva) con la que se descargó la última
+   *  carta en esta sesión ('' = sin curva; null = no se descargó ninguna):
+   *  medir con otra daría una curva equivocada sin ningún error. */
   let downloadedWith: string | null = null;
   let bResult: CyanProfile | null = null;
   /** Zona de un archivo a la vista, pero acepta varios (se promedian, ver
@@ -304,7 +305,7 @@ export function mountPhase3(root: HTMLElement): void {
               ink: bInk.value,
               prior: prior ? JSON.stringify(prior) : 'null',
             });
-            downloadedWith = bPrior.value;
+            downloadedWith = prior ? JSON.stringify(prior) : '';
             download(
               png,
               prior ? 'cyanotype_chart_2nd_pass.png' : 'cyanotype_chart.png',
@@ -330,9 +331,13 @@ export function mountPhase3(root: HTMLElement): void {
         accept: 'image/*,.tif,.tiff',
         onFiles: async (files) => {
           try {
-            if (downloadedWith !== null && downloadedWith !== bPrior.value) {
+            const prior = priorLut();
+            if (
+              downloadedWith !== null &&
+              downloadedWith !== (prior ? JSON.stringify(prior) : '')
+            ) {
               toast(
-                'The last chart you downloaded used a different “Curve already on the chart”. Pick the one it was printed with, or the curve will be wrong.',
+                'The last chart you downloaded was printed with a different curve: another “Curve already on the chart”, or that profile was saved over since. Pick the curve it was printed with, or download the chart again.',
                 'err',
               );
               return;
@@ -340,7 +345,6 @@ export function mountPhase3(root: HTMLElement): void {
             const scans = await Promise.all(
               files.map(async (f) => new Uint8Array(await f.arrayBuffer())),
             );
-            const prior = priorLut();
             const res = await run(
               'analyze_cyan_chart',
               {

@@ -57,6 +57,7 @@ export interface EncodedFrame {
 
 export interface Commands {
   version: { args: Record<string, never>; result: string };
+  marker_capacity: { args: { settings: string }; result: number | null };
   compute_layout: {
     args: { settings: string; firstW: number; firstH: number };
     result: string;
