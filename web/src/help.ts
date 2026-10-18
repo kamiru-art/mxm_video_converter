@@ -155,12 +155,13 @@ the result in ① under <strong>Printer profile</strong>.</p>
 develop it, let it dry and scan the blue print. The app measures how your
 paper and chemistry respond and makes a correction so the tones come out
 even. It follows the
-<a href="https://www.easydigitalnegatives.com/" rel="noopener">Easy Digital
-Negatives</a> method, with its 256-tone chart. Drop several prints of the
-chart at once and the app averages them. For a finer curve, do a second
-pass: pick the curve you saved under <strong>Curve already on the
-chart</strong>, print the new chart, and analyze it the same way; use the
-curve that comes out instead of the first one. If you scanned the film
+<a href="http://www.easydigitalnegatives.com/" rel="noopener">Easy Digital
+Negatives</a> method, with its 256-tone chart. One print is enough. Under
+<strong>Advanced options</strong> you can average several prints, or do a
+second pass for a finer curve: pick the curve you saved under
+<strong>Curve already on the chart</strong>, print the new chart, and
+analyze it the same way; use the curve that comes out instead of the first
+one. If you scanned the film
 instead of the print, or the chart came out with almost no difference
 between light and dark, the app tells you instead of saving a bad curve.
 Pick the result in ① under <strong>Compensation curve</strong>.</p>

@@ -258,6 +258,14 @@ export function mountPhase3(root: HTMLElement): void {
    *  equivocada sin ningún error. */
   let downloadedWith: string | null = null;
   let bResult: CyanProfile | null = null;
+  /** Zona de un archivo a la vista, pero acepta varios (se promedian, ver
+   *  «Advanced options»): con `multiple` mostraría además el botón de carpeta. */
+  const bZone = (opts: Parameters<typeof dropzone>[0]): HTMLDivElement => {
+    const zone = dropzone(opts);
+    const input = zone.querySelector('input[type=file]');
+    if (input instanceof HTMLInputElement) input.multiple = true;
+    return zone;
+  };
   const bOut = el('div');
   const bCanvas = el('canvas', {
     class: 'curveplot',
@@ -277,11 +285,22 @@ export function mountPhase3(root: HTMLElement): void {
       'with the 256-tone chart of Easy Digital Negatives 2.2. Expose the chart exactly as you expose your work.',
     el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
     el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
-    field('Curve already on the chart', bPrior),
+    // lo opcional va plegado: a la vista, la carta se ve como un solo paso
     el(
-      'div',
-      { class: 'hint' },
-      'Second pass: pick the curve you saved from the first chart. The chart prints with it, and the new analysis corrects what it left. Save the result and use it instead of the first curve.',
+      'details',
+      { class: 'adv' },
+      el('summary', {}, 'Advanced options'),
+      el(
+        'div',
+        { class: 'hint' },
+        'Several prints: drop the scans of several prints of the same chart together and the app averages them. It helps when a print came out uneven.',
+      ),
+      field('Curve already on the chart', bPrior),
+      el(
+        'div',
+        { class: 'hint' },
+        'Second pass: pick the curve you saved from the first chart. The chart prints with it, and the new analysis corrects what it left. Save the result and use it instead of the first curve.',
+      ),
     ),
     el(
       'button',
@@ -318,11 +337,9 @@ export function mountPhase3(root: HTMLElement): void {
     el(
       'div',
       { style: 'margin-top:10px' },
-      dropzone({
-        label: 'Drop the SCANS of the blue prints',
-        sublabel: 'one or more prints of the same chart: they are averaged',
+      bZone({
+        label: 'Drop the SCAN of the blue print',
         accept: 'image/*,.tif,.tiff',
-        multiple: true,
         onFiles: async (files) => {
           try {
             if (downloadedWith !== null && downloadedWith !== bPrior.value) {

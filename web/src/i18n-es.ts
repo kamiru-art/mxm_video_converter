@@ -362,9 +362,9 @@ export const EXACT: Record<string, string> = {
     'Imprime en película transparente al 100 %, en modo color (no en escala de grises), expón tu cianotipo como siempre, revela, seca y escanea la COPIA AZUL (no la película).',
   'Download chart (negative for film)': 'Descargar carta (negativo para película)',
   'Drop the SCAN of the blue print': 'Suelta el ESCANEO de la copia azul',
-  'Drop the SCANS of the blue prints': 'Suelta los ESCANEOS de las copias azules',
-  'one or more prints of the same chart: they are averaged':
-    'una o varias copias de la misma carta: se promedian',
+  'Advanced options': 'Opciones avanzadas',
+  'Several prints: drop the scans of several prints of the same chart together and the app averages them. It helps when a print came out uneven.':
+    'Varias copias: suelta juntos los escaneos de varias copias de la misma carta y la app las promedia. Ayuda cuando una copia salió despareja.',
   'The last chart you downloaded used a different “Curve already on the chart”. Pick the one it was printed with, or the curve will be wrong.':
     'La última carta que descargaste usaba otra “Curva ya aplicada a la carta”. Elige aquella con la que se imprimió, o la curva saldrá mal.',
   'Second pass: this curve already includes the first one. Save it and use it instead.':
