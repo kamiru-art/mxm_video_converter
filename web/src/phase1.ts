@@ -1370,13 +1370,26 @@ export function mountPhase1(root: HTMLElement): void {
     ],
     String(s.marker_count),
   );
+  // cuántas hojas distingue la identidad de los marcadores: el mismo cálculo
+  // que sheet::marker_id_scheme (IDs del diccionario repartidos entre las
+  // posiciones, dos dígitos alternados ⇒ m²)
+  const capHint = el('div', { class: 'hint' });
+  const syncCapHint = (): void => {
+    const dict = parseInt(/(\d+)$/.exec(s.marker_dict)?.[1] ?? '100', 10);
+    const m = Math.max(1, Math.floor(dict / s.marker_count));
+    capHint.textContent = `With ${s.marker_count} markers, up to ${m * m} sheets. For more, turn on "Add a QR code per frame".`;
+    capHint.style.display = s.qr_on ? 'none' : '';
+  };
+  syncCapHint();
   markerCountSel.addEventListener('change', () => {
     const v = parseInt(markerCountSel.value, 10);
     if (!Number.isNaN(v)) s.marker_count = v;
+    syncCapHint();
     persist();
     void refreshPreview();
   });
   binds.push(() => {
+    syncCapHint();
     markerCountSel.value = String(s.marker_count);
   });
 
@@ -1473,16 +1486,12 @@ export function mountPhase1(root: HTMLElement): void {
     ),
     el(
       'div',
-      { class: 'hint' },
-      'Each sheet gets its own marker IDs: no QR codes needed, more room for the drawings.',
-    ),
-    el(
-      'div',
       { class: 'row' },
       field('Markers', markerCountSel),
       field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
       field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
+    capHint,
     field(
       'Project name',
       bindText('project_name', el('input', { type: 'text', placeholder: '= output name' })),
@@ -1496,6 +1505,7 @@ export function mountPhase1(root: HTMLElement): void {
       const c = check('Add a QR code per frame (for projects with MANY sheets)', !!s.qr_on);
       const sync = (): void => {
         qrRow.style.display = s.qr_on ? '' : 'none';
+        syncCapHint();
       };
       c.input.addEventListener('change', () => {
         s.qr_on = c.input.checked;
@@ -1552,8 +1562,8 @@ export function mountPhase1(root: HTMLElement): void {
       'div',
       { class: 'row', style: 'align-items:center; margin-top:4px' },
       el('div', { style: 'flex:0 0 auto; font-size:13.5px; font-weight:600' }, 'Formats:'),
-      bindCheck('fmt_png', check('PNG (one per sheet)', s.fmt_png !== false)),
-      bindCheck('fmt_pdf', check('PDF (print-ready)', s.fmt_pdf !== false)),
+      bindCheck('fmt_png', check('PNG', s.fmt_png !== false)),
+      bindCheck('fmt_pdf', check('PDF', s.fmt_pdf !== false)),
       bindCheck('fmt_tiff', check('TIFF', !!s.fmt_tiff)),
     ),
     el('div', { class: 'hint' }, 'layout.json, the map phase ② needs, is always included.'),

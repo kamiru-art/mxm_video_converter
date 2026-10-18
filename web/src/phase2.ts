@@ -190,7 +190,7 @@ export function mountPhase2(root: HTMLElement): void {
   }
   const resizeCheck = check('Resize each frame to its original digital size', false);
   const patchesCheck = check('Normalize levels with the gray strip (if the sheet has one)', false);
-  const fineCheck = check('Local correction for warped paper (recommended for cyanotype)', true);
+  const fineCheck = check('Local correction for warped paper (recommended)', true);
 
   // procesamiento
   const prog = progressBar();

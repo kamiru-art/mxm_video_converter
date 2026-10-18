@@ -212,8 +212,6 @@ export const EXACT: Record<string, string> = {
   'Registration (to scan back)': 'Registro (para volver a escanear)',
   'ArUco markers with per-sheet identity (required for phase ②)':
     'Marcadores ArUco con identidad por hoja (necesarios para la fase ②)',
-  'Each sheet gets its own marker IDs: no QR codes needed, more room for the drawings.':
-    'Cada hoja recibe sus propios IDs de marcadores: no hacen falta códigos QR, más espacio para los dibujos.',
   Markers: 'Marcadores',
   'Size (mm)': 'Tamaño (mm)',
   'Project name': 'Nombre del proyecto',
@@ -232,8 +230,6 @@ export const EXACT: Record<string, string> = {
   'Sheets to generate': 'Hojas a generar',
   'e.g. 3, 5-7 (empty = all)': 'p. ej. 3, 5-7 (vacío = todas)',
   'Formats:': 'Formatos:',
-  'PNG (one per sheet)': 'PNG (uno por hoja)',
-  'PDF (print-ready)': 'PDF (listo para imprimir)',
   'layout.json, the map phase ② needs, is always included.':
     'layout.json, el mapa que necesita la fase ②, siempre se incluye.',
   'Include the frames as image files (phase ② needs them for rescue sheets; also handy on their own)':
@@ -253,8 +249,8 @@ export const EXACT: Record<string, string> = {
     'Redimensionar cada fotograma a su tamaño digital original',
   'Normalize levels with the gray strip (if the sheet has one)':
     'Normalizar niveles con la tira de grises (si la hoja tiene una)',
-  'Local correction for warped paper (recommended for cyanotype)':
-    'Corrección local para papel deformado (recomendada para cianotipia)',
+  'Local correction for warped paper (recommended)':
+    'Corrección local para papel deformado (recomendada)',
   'Not reprocessed. The report stays as it was.': 'No se reprocesó. El informe queda como estaba.',
   'Drop your scans here (any order, any orientation)':
     'Suelta tus escaneos aquí (cualquier orden, cualquier orientación)',
@@ -771,6 +767,10 @@ export const TEMPLATES: [string, string][] = [
   [
     '{#0} sheets exceed the {#1} that marker identity can distinguish. Enable "Add a QR code per frame" in Registration: QRs identify any number of sheets.',
     '{#0} hojas superan las {#1} que la identidad de los marcadores puede distinguir. Activa "Agregar un código QR por fotograma" en Registro: los QR identifican cualquier número de hojas.',
+  ],
+  [
+    'With {#0} markers, up to {#1} sheets. For more, turn on "Add a QR code per frame".',
+    'Con {#0} marcadores, hasta {#1} hojas. Para más, activa "Agregar un código QR por fotograma".',
   ],
   ['{#0} frames loaded', '{#0} fotogramas cargados'],
   ['{#0} selected', '{#0} seleccionados'],
