@@ -177,34 +177,11 @@ const handlers: Handlers = {
   },
   analyze_printer_test: (a) => core.analyze_printer_test(a.bytes, a.paper, a.dpi, a.scanDpi ?? 0),
   cyan_chart_png: (a) => {
-    const png = bytes(
-      core.cyan_chart_png(
-        a.paper,
-        a.dpi,
-        a.ink,
-        a.mirror,
-        a.stops ?? 'null',
-        a.blockColor ?? '',
-        a.prior ?? 'null',
-      ),
-    );
+    const png = bytes(core.cyan_chart_png(a.paper, a.dpi, a.ink, a.prior ?? 'null'));
     return { value: png, transfer: [png.buffer] };
   },
   analyze_cyan_chart: (a) =>
-    core.analyze_cyan_chart(
-      a.scans,
-      a.paper,
-      a.dpi,
-      a.ink ?? '',
-      a.stops ?? 'null',
-      a.blockColor ?? '',
-      a.prior ?? 'null',
-    ),
-  colorblocker_png: (a) => {
-    const png = bytes(core.colorblocker_png(a.paper, a.dpi, a.mirror, a.blockColor ?? ''));
-    return { value: png, transfer: [png.buffer] };
-  },
-  analyze_colorblocker: (a) => core.analyze_colorblocker(a.bytes, a.paper, a.dpi),
+    core.analyze_cyan_chart(a.scans, a.paper, a.dpi, a.ink ?? '', a.prior ?? 'null'),
   // PNG y miniatura de un fotograma de video, fuera del hilo principal (ver
   // frames.ts). No pasa por el núcleo: el codificador PNG del navegador es
   // el mismo que usaba el hilo principal, y aquí corren varios a la vez. El

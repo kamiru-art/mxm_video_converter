@@ -149,10 +149,6 @@ analízala igual; usa la curva que sale en lugar de la primera. Si escaneaste la
 copia, o la carta salió casi sin diferencia entre claro y oscuro, la app te
 lo dice en vez de guardar una curva mala. Elige el resultado en ① en
 <strong>Curva de compensación</strong>.</p>
-<p><strong>ColorBlocker</strong>: encuentra qué color de tinta bloquea mejor la luz UV
-en tu impresora (no siempre es el negro) y hace un degradado con él. Elige
-el resultado en ① en <strong>Perfil de color de tinta</strong>, para que tus negativos
-se impriman en ese color.</p>
 
 <h3>Consejos de cianotipia</h3>
 <ul>

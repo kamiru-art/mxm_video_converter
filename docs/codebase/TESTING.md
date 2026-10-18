@@ -4,8 +4,8 @@
 
 | Layer | Tool | What it covers | Evidence |
 |-------|------|----------------|----------|
-| Rust unit | The built-in `#[test]` harness | 72 tests across the domain modules; those of `conform.rs`, `photo.rs` and `yuv.rs` (8, the twelve ways a 10-bit frame conversion can go wrong) are preceded by the list of the ways it could fail | `rust-core/src/*.rs` |
-| Rust integration | The same harness, in `tests/` | 7 end-to-end round trips: build a sheet, simulate a scan of it, recover the frames. 3 for calibration, preceded by the twelve ways they could fail: the EDN chart exposed with a hard process (about 40 % useful densities), its own uneven coating per print and a crooked scan; one print against three averaged against a second pass printed with the first curve, measured by how straight the tone comes out (and the same curve whatever the file order); the film dropped as one of three prints must be refused by name; a ColorBlocker print whose broken green holds the lightest patch must leave that hue out. Artifacts: `artifacts/calibration/*.json`, byte-identical from run to run | `rust-core/tests/pipeline.rs`, `rust-core/tests/calibration.rs` |
+| Rust unit | The built-in `#[test]` harness | 71 tests across the domain modules; those of `conform.rs`, `photo.rs` and `yuv.rs` (8, the twelve ways a 10-bit frame conversion can go wrong) are preceded by the list of the ways it could fail | `rust-core/src/*.rs` |
+| Rust integration | The same harness, in `tests/` | 7 end-to-end round trips: build a sheet, simulate a scan of it, recover the frames. 2 for calibration, preceded by the ten ways they could fail: the EDN chart exposed with a hard process (about 40 % useful densities), its own uneven coating per print and a crooked scan; one print against three averaged against a second pass printed with the first curve, measured by how straight the tone comes out (and the same curve whatever the file order); the film dropped as one of three prints must be refused by name. Artifacts: `artifacts/calibration/*.json`, byte-identical from run to run | `rust-core/tests/pipeline.rs`, `rust-core/tests/calibration.rs` |
 | Rust lint and format | `cargo clippy -- -D warnings` (native and wasm32), `cargo fmt --check` | Every warning is an error; see `CONVENTIONS.md` §2 | `rust-core/Cargo.toml`, `rust-core/rustfmt.toml` |
 | Web lint and format | Biome (`npm run lint`) | `any`, `@ts-ignore`, default exports, non-null assertions, floating promises, formatting | `web/biome.jsonc` |
 | Browser end-to-end, pipeline | Chrome or Zen/Firefox (`puppeteer-core`, WebDriver BiDi) or Safari (`safaridriver`), against a page the runner serves itself | The real pipeline in a real browser: workers, WebAssembly, WebGPU, WebCodecs, `ffmpeg.wasm`; the lossless exports are then decoded by the machine's own `ffmpeg` and compared sample by sample at 16 bits. In Safari the runner also requires that no `FileSystemWritableStream*` copy appeared during the run in the user's temporary folder (`getconf DARWIN_USER_TEMP_DIR`), and deletes any it finds (Safari leaves one per `createWritable`; with the app's own `createWritable` path forced, the run left 34, 23 MB) | `web/e2e-run.mts`, `web/e2e-verify.mts`, `web/e2e-browsers.mts`, `web/e2e.html`, `web/src/e2e.ts` |
@@ -33,8 +33,8 @@ test passed in the three browsers at both sizes (the translator spent 6–9 ms
 in the whole Spanish run). On 2026-10-12, with the missing-frames options, the pipeline, interface and language tests passed in Chrome, Zen and Safari at both sizes. The Rust counts:
 
 ```
-Unit tests (src/lib.rs):          72 passed; 0 failed
-Integration (tests/calibration.rs): 3 passed; 0 failed
+Unit tests (src/lib.rs):          71 passed; 0 failed
+Integration (tests/calibration.rs): 2 passed; 0 failed
 Integration (tests/pipeline.rs):   7 passed; 0 failed
 Doc-tests:                          0
 ```

@@ -140,8 +140,6 @@ without your own files and without a printer.
 - Cyanotype curve: from the EDN chart of 256 tones. Several prints of the
   chart are averaged, and a second pass, printed with the first curve,
   corrects what that curve left.
-- ColorBlocker: the ink color that blocks ultraviolet light best on your
-  printer.
 
 ### The new video
 

@@ -247,12 +247,6 @@ export interface CyanProfile {
   notas?: string[];
 }
 
-export interface ColorProfile {
-  mejor_color: string;
-  stops?: CyanStops;
-  notas?: string[];
-}
-
 /** Lo que la fase ① guarda con un preset además de los ajustes. */
 export interface Phase1Persist {
   naming: 'auto' | 'original';

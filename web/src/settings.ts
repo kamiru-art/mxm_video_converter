@@ -43,6 +43,10 @@ export function normalizeSettings<T extends Partial<Settings>>(settings: T): T {
     const v = out[key];
     if (typeof v === 'string' && table[v]) out[key] = table[v];
   }
+  // el ColorBlocker ya no existe: un ajuste viejo seguiría imprimiendo con
+  // su degradado y la interfaz no tendría cómo quitarlo
+  if ('cyan_ink_stops' in out) out.cyan_ink_stops = null;
+  if ('cyan_block_color' in out) out.cyan_block_color = null;
   return out;
 }
 

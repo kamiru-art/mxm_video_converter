@@ -135,11 +135,8 @@ export const EXACT: Record<string, string> = {
     'MODO CIANOTIPIA: generar negativos para película transparente',
   Cyanotype: 'Cianotipia',
   '(no curve: linear)': '(sin curva: lineal)',
-  '(plain ink)': '(tinta plana)',
-  'ColorBlocker gradient applied ().': 'Degradado de ColorBlocker aplicado ().',
   'Mirror (emulsion-to-emulsion printing)': 'Espejo (impresión emulsión contra emulsión)',
   'Ink color': 'Color de tinta',
-  'Ink color profile (ColorBlocker)': 'Perfil de color de tinta (ColorBlocker)',
   'Compensation curve (cyanotype profile)': 'Curva de compensación (perfil de cianotipia)',
   'Measured in Calibration. Without a curve, density follows the original brightness.':
     'Medida en Calibración. Sin curva, la densidad sigue el brillo original.',
@@ -349,7 +346,6 @@ export const EXACT: Record<string, string> = {
     'Imprime la página al 100 % (sin “ajustar a la página”), escanéala entera y suéltala aquí.',
   'Download test page': 'Descargar página de prueba',
   'Drop the SCAN of the printed page': 'Suelta el ESCANEO de la página impresa',
-  'Mirrored (like your real negatives)': 'En espejo (como tus negativos reales)',
   'Cyanotype curve': 'Curva de cianotipia',
   'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve with the 256-tone chart of Easy Digital Negatives 2.2. Expose the chart exactly as you expose your work.':
     'Mide la respuesta de tu proceso (impresora, película, química, luz) y crea la curva de compensación con la carta de 256 tonos de Easy Digital Negatives 2.2. Expón la carta exactamente como expones tu obra.',
@@ -374,17 +370,6 @@ export const EXACT: Record<string, string> = {
     'La curva aplicada a la carta tiene valores no válidos.',
   'The curve applied to the chart is not increasing.':
     'La curva aplicada a la carta no es creciente.',
-  "No hue followed the chart's nominal order, so all of them were considered. Check that the scan is flat and evenly lit, and that the print was not over- or underexposed.":
-    'Ningún matiz siguió el orden nominal de la carta, así que se consideraron todos. Comprueba que el escaneo esté plano y con luz pareja, y que la copia no esté sobreexpuesta ni subexpuesta.',
-  Mirrored: 'En espejo',
-  'EDN ColorBlocker': 'EDN ColorBlocker',
-  '36 hues × 21 variants: finds the ink color that blocks UV best on your printer (not always black) and builds a 3-stop gradient. Print at maximum quality: a draft setting ruins this chart.':
-    '36 matices × 21 variantes: encuentra el color de tinta que mejor bloquea el UV en tu impresora (no siempre el negro) y crea un degradado de 3 paradas. Imprime a máxima calidad: un ajuste de borrador arruina esta carta.',
-  'Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.':
-    'Imprime en película transparente al 100 % a calidad MÁXIMA, expón, revela, seca y escanea la copia azul.',
-  'Download ColorBlocker chart': 'Descargar carta ColorBlocker',
-  'Best UV blocker:': 'Mejor bloqueador de UV:',
-  'Gradient (shadows → highlights):': 'Degradado (sombras → luces):',
   'Your profiles & presets': 'Tus perfiles y preajustes',
   'Stored in this browser only: clearing site data deletes them. Export a JSON to move them to another machine or to keep a copy with the project.':
     'Guardados solo en este navegador: borrar los datos del sitio los elimina. Exporta un JSON para llevarlos a otra máquina o para guardar una copia con el proyecto.',
@@ -509,15 +494,11 @@ export const EXACT: Record<string, string> = {
     'No se pudieron medir suficientes parches; comprueba que el escaneo esté completo, plano y bien iluminado.',
   'The measured response is INVERTED: patches with more ink came out darker. Usually this means you scanned the FILM instead of the blue print; scan the dried cyanotype and analyze again.':
     'La respuesta medida está INVERTIDA: los parches con más tinta salieron más oscuros. Normalmente significa que escaneaste la PELÍCULA en vez de la copia azul; escanea el cianotipo seco y analiza de nuevo.',
-  'Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (or use the ColorBlocker) and check the wash.':
-    'Rango dinámico bajo (<35 %). Sugerencias: aumenta la exposición, verifica que la tinta plena en la película de verdad bloquee la luz (o usa el ColorBlocker) y revisa el lavado.',
+  'Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (print in colour mode, at the best quality) and check the wash.':
+    'Rango dinámico bajo (<35 %). Sugerencias: aumenta la exposición, verifica que la tinta plena en la película de verdad bloquee la luz (imprime en modo color, a la mejor calidad) y revisa el lavado.',
   'Excellent dynamic range. 💙': 'Rango dinámico excelente. 💙',
-  'Not enough ColorBlocker patches could be measured; check the scan.':
-    'No se pudieron medir suficientes parches del ColorBlocker; revisa el escaneo.',
   'The chart has almost no contrast: the exposure was far too short or too long.':
     'La carta casi no tiene contraste: la exposición fue demasiado corta o demasiado larga.',
-  'On your printer black/gray is the best blocker: you can keep using black ink.':
-    'En tu impresora el negro/gris es el mejor bloqueador: puedes seguir usando tinta negra.',
   'The layout is invalid or incomplete (no markers).':
     'El layout no es válido o está incompleto (sin marcadores).',
   'The scan arrived MIRRORED (film exposed flipped?); it was flipped back automatically before processing.':
@@ -704,7 +685,6 @@ export const TEMPLATES: [string, string][] = [
     'Heads up: this curve was measured with ink {0} and you are now using {1}.',
     'Atención: esta curva se midió con la tinta {0} y ahora usas {1}.',
   ],
-  ['ColorBlocker gradient applied ({0}).', 'Degradado de ColorBlocker aplicado ({0}).'],
   [
     'Printer profile applied (scale {#0} % × {#1} %).',
     'Perfil de impresora aplicado (escala {#0} % × {#1} %).',
@@ -947,7 +927,6 @@ export const TEMPLATES: [string, string][] = [
     'Measured dynamic range: {#0} % · 256-point curve built.',
     'Rango dinámico medido: {#0} % · curva de 256 puntos creada.',
   ],
-  ['Could not build the ColorBlocker chart: {0}', 'No se pudo crear la carta ColorBlocker: {0}'],
   ['Import failed: {0}', 'La importación falló: {0}'],
   ['From 1 to {#0}.', 'De 1 a {#0}.'],
   [
@@ -1182,14 +1161,6 @@ export const TEMPLATES: [string, string][] = [
   [
     'The chart patches are barely distinguishable (range {#0} %). Usually the exposure was too short or too long, or the scan has minimum contrast.',
     'Los parches de la carta apenas se distinguen (rango {#0} %). Normalmente la exposición fue demasiado corta o demasiado larga, o el escaneo tiene un contraste mínimo.',
-  ],
-  [
-    "On your printer, the color {0} blocks UV clearly better than black: use it as the negatives' ink.",
-    'En tu impresora, el color {0} bloquea el UV claramente mejor que el negro: úsalo como tinta de los negativos.',
-  ],
-  [
-    "{#0} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV) and were left out.",
-    '{#0} matiz(es) no siguieron el orden nominal de la carta (normal en colores que apenas bloquean el UV) y quedaron fuera.',
   ],
   ['Scan {#0} of {#1}: {0}', 'Escaneo {#0} de {#1}: {0}'],
   ['Average of {#0} prints.', 'Promedio de {#0} copias.'],

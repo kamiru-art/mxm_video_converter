@@ -150,9 +150,6 @@ export interface Commands {
       paper: string;
       dpi: number;
       ink: string;
-      mirror: boolean;
-      stops?: string;
-      blockColor?: string;
       /** JSON de la curva con la que se imprime la carta (segunda pasada). */
       prior?: string;
     };
@@ -165,17 +162,10 @@ export interface Commands {
       paper: string;
       dpi: number;
       ink?: string;
-      stops?: string;
-      blockColor?: string;
       prior?: string;
     };
     result: string;
   };
-  colorblocker_png: {
-    args: { paper: string; dpi: number; mirror: boolean; blockColor?: string };
-    result: Bytes;
-  };
-  analyze_colorblocker: { args: { bytes: Bytes; paper: string; dpi: number }; result: string };
   // Sin núcleo: PNG y miniatura de un fotograma de video (ver frames.ts)
   encode_frame: {
     /** `png` por defecto true; sin `thumbW` no hay miniatura. */

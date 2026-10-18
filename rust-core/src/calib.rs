@@ -511,17 +511,11 @@ pub fn render_cyanotype_chart(
     paper: &str,
     dpi: u32,
     ink_color: &str,
-    mirror: bool,
-    ink_stops: Option<&[cyan::InkStop]>,
-    block_color: Option<&str>,
     prior: Option<&[f64]>,
 ) -> Rgb {
     let g = cyanotype_chart_geometry(paper, dpi);
-    let ramp = cyan::ink_ramp(ink_color, ink_stops);
-    let bg = match block_color {
-        Some(c) if !c.is_empty() => cyan::hex_to_rgb(c),
-        _ => ramp[255],
-    };
+    let ramp = cyan::ink_ramp(ink_color, None);
+    let bg = ramp[255];
     let mut canvas = Rgb::new(g.cal.page_w as usize, g.cal.page_h as usize, bg);
     let text_color: [u8; 3] = if (bg[0] as u32 + bg[1] as u32 + bg[2] as u32) < 420 {
         [255, 255, 255]
@@ -531,14 +525,9 @@ pub fn render_cyanotype_chart(
     let f_big = mm(4.0, dpi) as f32;
     let f_small = mm(2.8, dpi) as f32;
 
-    // Marcadores con la tinta del bloqueador (deben bloquear el UV como el fondo)
-    let (marker_ink, marker_stops): (String, Option<Vec<cyan::InkStop>>) = match block_color {
-        Some(c) if !c.is_empty() => (c.to_string(), None),
-        _ => (ink_color.to_string(), ink_stops.map(|s| s.to_vec())),
-    };
     for (&mid, &(px, py)) in &g.cal.marker_positions {
         let patch = marker_patch_gray(Dict::Dict4x4_50, mid, g.cal.marker_side, g.cal.marker_quiet);
-        let rgb = cyan::colorize_gray_patch(&patch, &marker_ink, marker_stops.as_deref());
+        let rgb = cyan::colorize_gray_patch(&patch, ink_color, None);
         canvas.paste(&rgb, px, py);
     }
     let band = g.patches[0].0[0];
@@ -570,18 +559,15 @@ pub fn render_cyanotype_chart(
                 let (w, h) = ((bbox[2] - bbox[0]) as usize, (bbox[3] - bbox[1]) as usize);
                 let d = vec![p[i as usize] as f32; w * h];
                 canvas.paste(
-                    &crate::photo::ink8(&d, w, h, ink_color, ink_stops),
+                    &crate::photo::ink8(&d, w, h, ink_color, None),
                     bbox[0],
                     bbox[1],
                 );
             }
         }
     }
-    if mirror {
-        canvas.flip_horizontal()
-    } else {
-        canvas
-    }
+    // siempre espejada, como los negativos: la cara impresa va contra el papel
+    canvas.flip_horizontal()
 }
 
 // PAVA: regresión isotónica no-decreciente.
@@ -716,8 +702,6 @@ pub fn analyze_cyanotype_chart<I>(
     paper: &str,
     dpi: u32,
     ink_color: Option<&str>,
-    ink_stops: Option<&[cyan::InkStop]>,
-    block_color: Option<&str>,
     prior: Option<&[f64]>,
 ) -> Result<Value, String>
 where
@@ -831,7 +815,7 @@ where
     let rango = (y_max - y_min) / 255.0;
     let mut notas: Vec<String> = Vec::new();
     if rango < 0.35 {
-        notas.push("Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (or use the ColorBlocker) and check the wash.".into());
+        notas.push("Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (print in colour mode, at the best quality) and check the wash.".into());
     }
     if rango > 0.85 {
         notas.push("Excellent dynamic range. 💙".into());
@@ -882,283 +866,6 @@ where
         "respuesta": respuesta.iter().map(|&(d, y)| json!([d, y])).collect::<Vec<_>>(),
         "rango_dinamico": (rango * 1000.0).round() / 1000.0,
         "ink": ink_color,
-        "ink_stops": ink_stops.map(|ss| ss.iter().map(|(d, c)| json!([d, cyan::rgb_to_hex(*c)])).collect::<Vec<_>>()),
-        "block_color": block_color,
-        "notas": notas,
-    }))
-}
-
-// ────────────────────────────────────────────────────────────────
-// EDN ColorBlocker
-// ────────────────────────────────────────────────────────────────
-
-pub const CB_HUE_COLS: usize = 36;
-pub const CB_COLS: usize = CB_HUE_COLS + 1;
-pub const CB_ROWS: usize = 21;
-
-fn hsv_to_rgb(h: f64, s: f64, v: f64) -> [u8; 3] {
-    let i = (h * 6.0).floor();
-    let f = h * 6.0 - i;
-    let p = v * (1.0 - s);
-    let q = v * (1.0 - f * s);
-    let t = v * (1.0 - (1.0 - f) * s);
-    let (r, g, b) = match (i as i64).rem_euclid(6) {
-        0 => (v, t, p),
-        1 => (q, v, p),
-        2 => (p, v, t),
-        3 => (p, q, v),
-        4 => (t, p, v),
-        _ => (v, p, q),
-    };
-    [
-        (r * 255.0).round() as u8,
-        (g * 255.0).round() as u8,
-        (b * 255.0).round() as u8,
-    ]
-}
-
-pub fn cb_patch_rgb(col: usize, row: usize) -> [u8; 3] {
-    if col >= CB_HUE_COLS {
-        let v = (255.0 * row as f64 / (CB_ROWS - 1) as f64).round() as u8;
-        return [v, v, v];
-    }
-    let hue = (col * 10) as f64 / 360.0;
-    let (s, b) = if row <= 10 {
-        (1.0, row as f64 / 10.0)
-    } else {
-        ((10 - (row - 10)) as f64 / 10.0, 1.0)
-    };
-    hsv_to_rgb(hue, s, b)
-}
-
-pub struct CbGeometry {
-    pub cal: CalGeometry,
-    pub patches: Vec<([i64; 4], usize, usize)>, // bbox, col, fila
-}
-
-pub fn colorblocker_geometry(paper: &str, dpi: u32) -> CbGeometry {
-    let cal = cal_frame(paper, dpi, true);
-    let band = mm(CAL_MARGIN_MM, dpi) + cal.marker_side + 2 * cal.marker_quiet + mm(5.0, dpi);
-    let (x1, x2) = (band, cal.page_w - band);
-    let y1 = band + mm(14.0, dpi);
-    let y2 = cal.page_h - band - mm(4.0, dpi);
-    let gap = mm(0.8, dpi);
-    let pitch_x = (x2 - x1 - (CB_COLS as i64 - 1) * gap) / CB_COLS as i64;
-    let pitch_y = (y2 - y1 - (CB_ROWS as i64 - 1) * gap) / CB_ROWS as i64;
-    let pitch = pitch_x.min((pitch_y as f64 * 1.4) as i64);
-    let mut patches = Vec::new();
-    for col in 0..CB_COLS {
-        for row in 0..CB_ROWS {
-            let x = x1 + col as i64 * (pitch + gap);
-            let y = y1 + row as i64 * (pitch_y + gap);
-            patches.push(([x, y, x + pitch, y + pitch_y], col, row));
-        }
-    }
-    CbGeometry { cal, patches }
-}
-
-pub fn render_colorblocker(paper: &str, dpi: u32, mirror: bool, block_color: Option<&str>) -> Rgb {
-    let g = colorblocker_geometry(paper, dpi);
-    let bg = match block_color {
-        Some(c) if !c.is_empty() => cyan::hex_to_rgb(c),
-        _ => [0, 0, 0],
-    };
-    let mut canvas = Rgb::new(g.cal.page_w as usize, g.cal.page_h as usize, bg);
-    let text_color: [u8; 3] = if (bg[0] as u32 + bg[1] as u32 + bg[2] as u32) < 420 {
-        [255, 255, 255]
-    } else {
-        [0, 0, 0]
-    };
-    let marker_ink = block_color.filter(|c| !c.is_empty()).unwrap_or("#000000");
-    for (&mid, &(px, py)) in &g.cal.marker_positions {
-        let patch = marker_patch_gray(Dict::Dict4x4_50, mid, g.cal.marker_side, g.cal.marker_quiet);
-        let rgb = cyan::colorize_gray_patch(&patch, marker_ink, None);
-        canvas.paste(&rgb, px, py);
-    }
-    let x0 = g.patches[0].0[0];
-    draw_text(
-        &mut canvas,
-        "MXM Studio — EDN ColorBlocker (pick the color that blocks UV best)",
-        x0,
-        g.patches[0].0[1] - mm(11.0, dpi),
-        mm(3.6, dpi) as f32,
-        text_color,
-    );
-    draw_text(
-        &mut canvas,
-        "Print on transparency film at 100 % at MAXIMUM quality, expose your cyanotype as usual, develop, dry and scan the blue result.",
-        x0,
-        g.patches[0].0[1] - mm(6.0, dpi),
-        mm(2.2, dpi) as f32,
-        text_color,
-    );
-    for &(bbox, col, row) in &g.patches {
-        canvas.fill_rect(bbox[0], bbox[1], bbox[2], bbox[3], cb_patch_rgb(col, row));
-    }
-    if mirror {
-        canvas.flip_horizontal()
-    } else {
-        canvas
-    }
-}
-
-pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value, String> {
-    let g = colorblocker_geometry(paper, dpi);
-    let (warp, s, _refined) = align_to_canonical(img, &g.cal, "cianotipia")?;
-
-    let mut v = vec![[f64::NAN; CB_ROWS]; CB_COLS];
-    let mut missing = 0usize;
-    for &(bbox, col, row) in &g.patches {
-        match patch_mean(&warp, bbox, s, 0.3) {
-            Some(m) => v[col][row] = m,
-            None => missing += 1,
-        }
-    }
-    if missing > g.patches.len() / 5 {
-        return Err("Not enough ColorBlocker patches could be measured; check the scan.".into());
-    }
-    // reemplazar NaN por la media global
-    let mut acc = 0.0f64;
-    let mut n = 0.0f64;
-    for col in &v {
-        for &x in col {
-            if !x.is_nan() {
-                acc += x;
-                n += 1.0;
-            }
-        }
-    }
-    let mean = acc / n.max(1.0);
-    for col in v.iter_mut() {
-        for x in col.iter_mut() {
-            if x.is_nan() {
-                *x = mean;
-            }
-        }
-    }
-    let (mut vmin, mut vmax) = (f64::MAX, f64::MIN);
-    for col in &v {
-        for &x in col {
-            vmin = vmin.min(x);
-            vmax = vmax.max(x);
-        }
-    }
-    if vmax - vmin < 10.0 {
-        return Err(
-            "The chart has almost no contrast: the exposure was far too short or too long.".into(),
-        );
-    }
-    for col in v.iter_mut() {
-        for x in col.iter_mut() {
-            *x = (*x - vmin) / (vmax - vmin) * 255.0;
-        }
-    }
-
-    // análisis por matiz. Cada columna va del negro (fila 0, bloquea: copia
-    // clara) al blanco (fila 20, no bloquea: copia azul), así que su copia se
-    // OSCURECE fila a fila. Como en EDN, una que se aclara más de 10 niveles
-    // no sigue el orden de la carta, y los escalones son las bajadas ≥ 10.
-    let mut monotona = [true; CB_COLS];
-    let mut escalones = [0usize; CB_COLS];
-    let mut suavidad = vec![0.0f64; CB_COLS];
-    for k in 0..CB_COLS {
-        let colv = &v[k];
-        for i in 1..CB_ROWS {
-            let d = colv[i] - colv[i - 1];
-            if d > 10.0 {
-                monotona[k] = false;
-            }
-            if d <= -10.0 {
-                escalones[k] += 1;
-            }
-        }
-        let mut sorted = *colv;
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let ideal = (sorted[CB_ROWS - 1] - sorted[0]) / (CB_ROWS - 1) as f64;
-        let mut acc = 0.0;
-        for i in 1..CB_ROWS {
-            acc += ((sorted[i] - sorted[i - 1]) - ideal).abs();
-        }
-        suavidad[k] = acc / (CB_ROWS - 1) as f64;
-    }
-
-    // Los matices que no siguen el orden quedan fuera de la elección, como en
-    // EDN; si no sigue ninguno (escaneo muy ruidoso), se elige entre todos.
-    let mut candidatos: Vec<usize> = (0..CB_COLS).filter(|&k| monotona[k]).collect();
-    let todos_fuera = candidatos.is_empty();
-    if todos_fuera {
-        candidatos = (0..CB_COLS).collect();
-    }
-
-    // 1) mejor bloqueador: el parche más claro
-    let (mut best_col, mut best_row, mut best_v) = (0usize, 0usize, f64::MIN);
-    for &col in &candidatos {
-        for row in 0..CB_ROWS {
-            if v[col][row] > best_v {
-                best_v = v[col][row];
-                best_col = col;
-                best_row = row;
-            }
-        }
-    }
-    let mejor_hex = cyan::rgb_to_hex(cb_patch_rgb(best_col, best_row));
-
-    // 2) matiz con mejor separación tonal: top-3 por escalones, gana el más suave
-    let mut orden = candidatos.clone();
-    orden.sort_by(|&a, &b| escalones[b].cmp(&escalones[a]));
-    let top3 = &orden[..3.min(orden.len())];
-    let mejor_hue = *top3
-        .iter()
-        .min_by(|&&a, &&b| suavidad[a].partial_cmp(&suavidad[b]).unwrap())
-        .unwrap();
-
-    // 3) paradas del degradado (sombras / medios / luces)
-    let mut stops = Vec::new();
-    for (target_v, dens) in [(0.0f64, 0i64), (127.0, 127), (255.0, 255)] {
-        let mut fila = 0usize;
-        let mut best_d = f64::MAX;
-        for row in 0..CB_ROWS {
-            let d = (v[mejor_hue][row] - target_v).abs();
-            if d < best_d {
-                best_d = d;
-                fila = row;
-            }
-        }
-        stops.push(json!([
-            dens,
-            cyan::rgb_to_hex(cb_patch_rgb(mejor_hue, fila))
-        ]));
-    }
-
-    let mut notas: Vec<String> = Vec::new();
-    let negro_v = v[CB_HUE_COLS].iter().cloned().fold(f64::MIN, f64::max);
-    if best_col < CB_HUE_COLS && best_v > negro_v + 15.0 {
-        notas.push(format!(
-            "On your printer, the color {mejor_hex} blocks UV clearly better than black: use it as the negatives' ink."
-        ));
-    } else if best_col >= CB_HUE_COLS {
-        notas.push(
-            "On your printer black/gray is the best blocker: you can keep using black ink.".into(),
-        );
-    }
-    let malos = monotona.iter().filter(|&&m| !m).count();
-    if todos_fuera {
-        notas.push("No hue followed the chart's nominal order, so all of them were considered. Check that the scan is flat and evenly lit, and that the print was not over- or underexposed.".into());
-    } else if malos > 0 {
-        notas.push(format!(
-            "{malos} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV) and were left out."
-        ));
-    }
-
-    Ok(json!({
-        "tipo": "cianotipia_color",
-        "paper": paper,
-        "dpi": dpi,
-        "mejor_color": mejor_hex,
-        "mejor_matiz": if best_col >= CB_HUE_COLS { Value::Null } else { json!(best_col * 10) },
-        "stops": stops,
-        "matiz_degradado": if mejor_hue >= CB_HUE_COLS { Value::Null } else { json!(mejor_hue * 10) },
-        "escalones_max": escalones[mejor_hue],
         "notas": notas,
     }))
 }
@@ -1216,46 +923,5 @@ mod tests {
         // en un render perfecto, hasta el marcador de 4 mm debería detectarse
         assert!(out["marker_min_mm"].as_f64().unwrap() <= 6.0, "{out}");
         assert!(out["qr_min_mm"].as_f64().is_some(), "{out}");
-    }
-
-    #[test]
-    fn colorblocker_finds_best_blocker() {
-        // Simulación: el magenta (matiz 300°) bloquea mejor que el negro.
-        let cb = render_colorblocker("A4", 150, true, None);
-        let derecha = cb.flip_horizontal();
-        let g = colorblocker_geometry("A4", 150);
-        let mut azul = Rgb::new(derecha.w, derecha.h, [245, 242, 230]);
-        // modelo: bloqueo = densidad óptica sintética por color
-        for y in 0..derecha.h {
-            for x in 0..derecha.w {
-                let p = derecha.px(x, y);
-                let (r, gg, b) = (
-                    p[0] as f64 / 255.0,
-                    p[1] as f64 / 255.0,
-                    p[2] as f64 / 255.0,
-                );
-                // el UV pasa según el verde (los magentas absorben mucho verde/UV
-                // en este modelo de juguete); el negro bloquea bastante pero menos
-                let block = (1.0 - gg) * 0.95 + (1.0 - (r + gg + b) / 3.0) * 0.05;
-                let expo = (1.0 - block).clamp(0.0, 1.0);
-                let paper = [245.0, 242.0, 230.0];
-                let blue = [23.0, 49.0, 92.0];
-                let mut px = [0u8; 3];
-                for c in 0..3 {
-                    px[c] = (paper[c] + (blue[c] - paper[c]) * expo).round() as u8;
-                }
-                azul.set_px(x, y, px);
-            }
-        }
-        let _ = g;
-        let out = analyze_colorblocker(DynImg::U8(azul), "A4", 150).unwrap();
-        // el ganador debe ser un color con poco verde (magenta/rojo/azul puro)
-        let hexc = out["mejor_color"].as_str().unwrap();
-        let rgb = cyan::hex_to_rgb(hexc);
-        assert!(
-            rgb[1] < 60,
-            "mejor color {hexc} debería tener poco verde: {out}"
-        );
-        assert_eq!(out["stops"].as_array().unwrap().len(), 3);
     }
 }

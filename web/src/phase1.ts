@@ -710,7 +710,7 @@ export function mountPhase1(root: HTMLElement): void {
     const p = curveSel.value ? store.loadProfile('cianotipia', curveSel.value) : null;
     s.cyan_curve = p?.lut ?? null;
     ph1.cyanResponse = p?.respuesta ?? null;
-    if (p?.ink && p.ink !== s.cyan_ink && !s.cyan_ink_stops) {
+    if (p?.ink && p.ink !== s.cyan_ink) {
       toast(
         `Heads up: this curve was measured with ink ${p.ink} and you are now using ${s.cyan_ink}.`,
       );
@@ -718,36 +718,11 @@ export function mountPhase1(root: HTMLElement): void {
     persist();
     void refreshPreview();
   });
-  const inkProfiles = (): SelectOption[] => [
-    ['', '(plain ink)'],
-    ...store.listProfiles('cianotipia_color').map((n): SelectOption => [n, n]),
-  ];
-  const inkProfSel = select(inkProfiles(), '');
-  inkProfSel.dataset.i18n = 'names';
-  inkProfSel.addEventListener('change', () => {
-    const p = inkProfSel.value ? store.loadProfile('cianotipia_color', inkProfSel.value) : null;
-    if (p) {
-      s.cyan_ink_stops = p.stops ?? null;
-      s.cyan_ink = p.mejor_color ?? s.cyan_ink;
-      if (p.mejor_color) s.cyan_block_color = p.mejor_color;
-      toast(`ColorBlocker gradient applied (${p.mejor_color ?? ''}).`, 'ok');
-    } else {
-      s.cyan_ink_stops = null;
-    }
-    persist();
-    void refreshPreview();
-  });
-
   const cyanBody = el(
     'div',
     {},
     bindCheck('cyan_mirror', check('Mirror (emulsion-to-emulsion printing)', s.cyan_mirror)),
-    el(
-      'div',
-      { class: 'row' },
-      field('Ink color', bindColor('cyan_ink', el('input', { type: 'color' }))),
-      field('Ink color profile (ColorBlocker)', inkProfSel),
-    ),
+    field('Ink color', bindColor('cyan_ink', el('input', { type: 'color' }))),
     field(
       'Compensation curve (cyanotype profile)',
       curveSel,
@@ -1273,7 +1248,6 @@ export function mountPhase1(root: HTMLElement): void {
   // refrescar listas de perfiles al volver a esta vista
   root.addEventListener('mxm:activated', () => {
     setOptions(curveSel, curveProfiles());
-    setOptions(inkProfSel, inkProfiles());
     setOptions(printerSel, printerProfiles());
     refreshPresetList();
   });

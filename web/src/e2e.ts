@@ -740,7 +740,7 @@ async function main(): Promise<void> {
         ),
       );
     };
-    const cyChart = { paper: 'A4', dpi: 150, ink: '#000000', mirror: true };
+    const cyChart = { paper: 'A4', dpi: 150, ink: '#000000' };
     const chart1 = new Uint8Array(await run('cyan_chart_png', cyChart));
     await digest('calibration/cyanotype_chart_A4_150.png', chart1);
     const prints1 = [await exposeChart(chart1, 1.0), await exposeChart(chart1, 0.93)];

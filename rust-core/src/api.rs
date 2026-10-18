@@ -652,11 +652,6 @@ pub fn analyze_printer_test(
         .map_err(err)
 }
 
-fn parse_stops(stops_json: &str) -> Option<Vec<cyan::InkStop>> {
-    let raw: Option<Vec<(f64, String)>> = serde_json::from_str(stops_json).ok();
-    raw.map(|ss| ss.iter().map(|(d, c)| (*d, cyan::hex_to_rgb(c))).collect())
-}
-
 /// La curva con la que se imprime la carta de la segunda pasada ("null" o
 /// vacío: primera pasada).
 fn parse_prior(prior_json: &str) -> Result<Option<Vec<f64>>, JsValue> {
@@ -669,25 +664,13 @@ pub fn cyan_chart_png(
     paper: &str,
     dpi: u32,
     ink_color: &str,
-    mirror: bool,
-    stops_json: &str,
-    block_color: &str,
     prior_json: &str,
 ) -> Result<Vec<u8>, JsValue> {
-    let stops = parse_stops(stops_json);
     let prior = parse_prior(prior_json)?;
-    let bc = if block_color.is_empty() {
-        None
-    } else {
-        Some(block_color)
-    };
     Ok(codecs::encode_png_rgb(&calib::render_cyanotype_chart(
         paper,
         dpi,
         ink_color,
-        mirror,
-        stops.as_deref(),
-        bc,
         prior.as_deref(),
     )))
 }
@@ -699,17 +682,9 @@ pub fn analyze_cyan_chart(
     paper: &str,
     dpi: u32,
     ink_color: &str,
-    stops_json: &str,
-    block_color: &str,
     prior_json: &str,
 ) -> Result<String, JsValue> {
-    let stops = parse_stops(stops_json);
     let prior = parse_prior(prior_json)?;
-    let bc = if block_color.is_empty() {
-        None
-    } else {
-        Some(block_color)
-    };
     let n = scans.length();
     let imgs = (0..n).map(|k| {
         let bytes = Uint8Array::new(&scans.get(k)).to_vec();
@@ -724,30 +699,10 @@ pub fn analyze_cyan_chart(
         } else {
             Some(ink_color)
         },
-        stops.as_deref(),
-        bc,
         prior.as_deref(),
     )
     .map(|v| v.to_string())
     .map_err(err)
-}
-
-#[wasm_bindgen]
-pub fn colorblocker_png(paper: &str, dpi: u32, mirror: bool, block_color: &str) -> Vec<u8> {
-    let bc = if block_color.is_empty() {
-        None
-    } else {
-        Some(block_color)
-    };
-    codecs::encode_png_rgb(&calib::render_colorblocker(paper, dpi, mirror, bc))
-}
-
-#[wasm_bindgen]
-pub fn analyze_colorblocker(scan_bytes: &[u8], paper: &str, dpi: u32) -> Result<String, JsValue> {
-    let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
-    calib::analyze_colorblocker(img, paper, dpi)
-        .map(|v| v.to_string())
-        .map_err(err)
 }
 
 // ── PDF combinado ───────────────────────────────────────────────

@@ -18,15 +18,9 @@
 //!  8. una copia invertida (se escaneó la película) o plana contamina el
 //!     promedio en vez de rechazarse diciendo cuál es;
 //!  9. un parche que no se midió en una copia cuenta como cero;
-//! 10. el orden de los archivos cambia la curva;
-//! 11. el ColorBlocker cuenta como "fuera de orden" los matices sanos, o
-//!     sigue eligiendo entre los que de verdad lo están;
-//! 12. si ningún matiz es monótono, la elección se queda sin candidatos.
+//! 10. el orden de los archivos cambia la curva.
 
-use mxm_core::calib::{
-    analyze_colorblocker, analyze_cyanotype_chart, cb_patch_rgb, prior_curve, render_colorblocker,
-    render_cyanotype_chart, CB_ROWS,
-};
+use mxm_core::calib::{analyze_cyanotype_chart, prior_curve, render_cyanotype_chart};
 use mxm_core::geometry::{apply_h, invert_h, Rng, H3};
 use mxm_core::img::{DynImg, Rgb};
 use serde_json::{json, Value};
@@ -150,7 +144,7 @@ fn scan(print: &Rgb, seed: u64) -> DynImg {
 /// La carta tal como la ve el papel (contacto: espejada en la película, al
 /// derecho sobre el papel), impresa con `prior` si es la segunda pasada.
 fn chart_on_paper(prior: Option<&[f64]>) -> Rgb {
-    render_cyanotype_chart(PAPER, DPI, "#000000", true, None, None, prior).flip_horizontal()
+    render_cyanotype_chart(PAPER, DPI, "#000000", prior).flip_horizontal()
 }
 
 fn print_and_scan(prior: Option<&[f64]>, copy: u64) -> DynImg {
@@ -193,8 +187,6 @@ fn analyze(scans: Vec<DynImg>, prior: Option<&[f64]>) -> Result<Value, String> {
         PAPER,
         DPI,
         Some("#000000"),
-        None,
-        None,
         prior,
     )
 }
@@ -306,9 +298,7 @@ fn cyanotype_curve_averaging_and_second_pass() {
 #[test]
 fn cyanotype_chart_rejects_bad_inputs_by_name() {
     // 8. la segunda de tres "copias" es la película escaneada
-    let film = DynImg::U8(render_cyanotype_chart(
-        PAPER, DPI, "#000000", true, None, None, None,
-    ));
+    let film = DynImg::U8(render_cyanotype_chart(PAPER, DPI, "#000000", None));
     let e = analyze(
         vec![print_and_scan(None, 11), film, print_and_scan(None, 33)],
         None,
@@ -342,63 +332,4 @@ fn cyanotype_chart_rejects_bad_inputs_by_name() {
             );
         }
     }
-}
-
-/// Copia simulada de la carta ColorBlocker. La transmisión de UV de cada
-/// tinta depende de su azul (la tinta amarilla bloquea) y ninguna bloquea
-/// del todo; `bad_green` hace que las filas 3-7 del matiz 120° bloqueen por
-/// completo, como una tinta que el driver mezcla mal: esa columna sale de
-/// orden y tiene el parche más claro de la carta.
-fn colorblocker_print(bad_green: bool) -> DynImg {
-    let cb = render_colorblocker(PAPER, DPI, true, None).flip_horizontal();
-    let bad: Vec<[u8; 3]> = (3..8).map(|r| cb_patch_rgb(12, r)).collect();
-    let mut out = Rgb::new(cb.w, cb.h, [255, 255, 255]);
-    for y in 0..cb.h {
-        for x in 0..cb.w {
-            let p = cb.px(x, y);
-            let (r, g, b) = (s2l(p[0] as f64), s2l(p[1] as f64), s2l(p[2] as f64));
-            let mut t = 0.08 + 0.92 * (0.75 * b + 0.15 * g + 0.10 * r).clamp(0.0, 1.0);
-            if bad_green && bad.contains(&p) {
-                t = 0.0;
-            }
-            let dp = (1.0 - (-3.0 * t).exp()) / (1.0 - (-3.0f64).exp());
-            let c = prussian(dp);
-            out.set_px(
-                x,
-                y,
-                [c[0].round() as u8, c[1].round() as u8, c[2].round() as u8],
-            );
-        }
-    }
-    scan(&out, 7)
-}
-
-#[test]
-fn colorblocker_leaves_out_hues_that_break_the_chart_order() {
-    // 11. una copia sana: ningún matiz fuera de orden
-    let ok = analyze_colorblocker(colorblocker_print(false), PAPER, DPI).unwrap();
-    let notes = ok["notas"].to_string();
-    assert!(
-        !notes.contains("did not follow"),
-        "matices sanos marcados: {notes}"
-    );
-
-    // 11. el verde roto tiene el parche más claro, pero queda fuera
-    let bad = analyze_colorblocker(colorblocker_print(true), PAPER, DPI).unwrap();
-    let notes = bad["notas"].to_string();
-    assert!(notes.contains("1 hue(s) did not follow"), "{notes}");
-    // la fila 0 de todos los matices es el mismo negro: se compara el matiz
-    assert_ne!(bad["mejor_matiz"], 120, "eligió el matiz roto: {bad}");
-    assert_ne!(bad["matiz_degradado"], 120, "{bad}");
-    let broken: Vec<String> = (1..CB_ROWS)
-        .map(|r| mxm_core::cyanotype::rgb_to_hex(cb_patch_rgb(12, r)))
-        .collect();
-    assert!(
-        !broken.contains(&bad["mejor_color"].as_str().unwrap().to_string()),
-        "{bad}"
-    );
-    write_artifact(
-        "colorblocker.json",
-        &json!({"healthy": ok, "broken_green": bad}),
-    );
 }
