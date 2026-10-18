@@ -1121,7 +1121,7 @@ async function runFlow(
         Object.keys(b.frames)
           .filter((n) => sheetOf.get(n) === sheet)
           .map((n) => a.frames[n]?.sha256 === b.frames[n]?.sha256);
-      const refA = sheetNum(s.chosen);
+      const refA = sheetNum(s.chosen ?? '');
       const refB = sheetNum(s.other);
       const onRef = same(on, raw, refA);
       const onOther = same(on, raw, refB);
