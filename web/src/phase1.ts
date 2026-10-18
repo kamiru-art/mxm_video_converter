@@ -710,7 +710,7 @@ export function mountPhase1(root: HTMLElement): void {
     const p = curveSel.value ? store.loadProfile('cianotipia', curveSel.value) : null;
     s.cyan_curve = p?.lut ?? null;
     ph1.cyanResponse = p?.respuesta ?? null;
-    if (p?.ink && p.ink !== s.cyan_ink && !s.cyan_ink_stops) {
+    if (p?.ink && p.ink !== s.cyan_ink) {
       toast(
         `Heads up: this curve was measured with ink ${p.ink} and you are now using ${s.cyan_ink}.`,
       );
@@ -718,36 +718,10 @@ export function mountPhase1(root: HTMLElement): void {
     persist();
     void refreshPreview();
   });
-  const inkProfiles = (): SelectOption[] => [
-    ['', '(plain ink)'],
-    ...store.listProfiles('cianotipia_color').map((n): SelectOption => [n, n]),
-  ];
-  const inkProfSel = select(inkProfiles(), '');
-  inkProfSel.dataset.i18n = 'names';
-  inkProfSel.addEventListener('change', () => {
-    const p = inkProfSel.value ? store.loadProfile('cianotipia_color', inkProfSel.value) : null;
-    if (p) {
-      s.cyan_ink_stops = p.stops ?? null;
-      s.cyan_ink = p.mejor_color ?? s.cyan_ink;
-      if (p.mejor_color) s.cyan_block_color = p.mejor_color;
-      toast(`ColorBlocker gradient applied (${p.mejor_color ?? ''}).`, 'ok');
-    } else {
-      s.cyan_ink_stops = null;
-    }
-    persist();
-    void refreshPreview();
-  });
-
   const cyanBody = el(
     'div',
     {},
-    bindCheck('cyan_mirror', check('Mirror (emulsion-to-emulsion printing)', s.cyan_mirror)),
-    el(
-      'div',
-      { class: 'row' },
-      field('Ink color', bindColor('cyan_ink', el('input', { type: 'color' }))),
-      field('Ink color profile (ColorBlocker)', inkProfSel),
-    ),
+    field('Ink color', bindColor('cyan_ink', el('input', { type: 'color' }))),
     field(
       'Compensation curve (cyanotype profile)',
       curveSel,
@@ -793,6 +767,19 @@ export function mountPhase1(root: HTMLElement): void {
       field(
         'Blocking border (mm)',
         bindNum('cyan_frame_border_mm', numberInput(0.8, { min: 0, step: 0.1 })),
+      ),
+    ),
+    // plegado: la carta de calibración sale siempre espejada, y un negativo
+    // sin espejo ya no coincide con ella
+    el(
+      'details',
+      { class: 'adv' },
+      el('summary', {}, 'Advanced options'),
+      bindCheck('cyan_mirror', check('Mirror (emulsion-to-emulsion printing)', s.cyan_mirror)),
+      el(
+        'div',
+        { class: 'hint' },
+        'On by default: the printed side of the film goes against the paper, as with the calibration chart. Turn it off only if you expose with the film the other way round, and know that the curve was measured mirrored.',
       ),
     ),
   );
@@ -1146,7 +1133,11 @@ export function mountPhase1(root: HTMLElement): void {
     });
   }
 
+  /** se define con el campo de marcadores, más abajo */
+  let syncCapHint: () => void = () => {};
   async function refreshPreview(): Promise<void> {
+    // cualquier ajuste pasa por aquí: también el registro y los QR
+    syncCapHint();
     if (!project.frames.length) return;
     updateThumbLabels();
     if (previewBusy) {
@@ -1273,7 +1264,6 @@ export function mountPhase1(root: HTMLElement): void {
   // refrescar listas de perfiles al volver a esta vista
   root.addEventListener('mxm:activated', () => {
     setOptions(curveSel, curveProfiles());
-    setOptions(inkProfSel, inkProfiles());
     setOptions(printerSel, printerProfiles());
     refreshPresetList();
   });
@@ -1384,13 +1374,33 @@ export function mountPhase1(root: HTMLElement): void {
     ],
     String(s.marker_count),
   );
+  // cuántas hojas distingue la identidad de los marcadores: lo calcula el
+  // núcleo (sheet::marker_capacity), que es quien reparte los IDs
+  const capHint = el('div', { class: 'hint' });
+  let capSeq = 0;
+  syncCapHint = (): void => {
+    const seq = ++capSeq;
+    void run('marker_capacity', { settings: settingsForCore(s) })
+      .then((cap) => {
+        if (seq !== capSeq) return;
+        capHint.textContent =
+          cap == null
+            ? ''
+            : `With ${s.marker_count} markers, up to ${cap} sheets. For more, turn on "Add a QR code per frame".`;
+        capHint.style.display = cap == null ? 'none' : '';
+      })
+      .catch((e) => console.error('marker capacity', e));
+  };
+  syncCapHint();
   markerCountSel.addEventListener('change', () => {
     const v = parseInt(markerCountSel.value, 10);
     if (!Number.isNaN(v)) s.marker_count = v;
+    syncCapHint();
     persist();
     void refreshPreview();
   });
   binds.push(() => {
+    syncCapHint();
     markerCountSel.value = String(s.marker_count);
   });
 
@@ -1487,16 +1497,12 @@ export function mountPhase1(root: HTMLElement): void {
     ),
     el(
       'div',
-      { class: 'hint' },
-      'Each sheet gets its own marker IDs: no QR codes needed, more room for the drawings.',
-    ),
-    el(
-      'div',
       { class: 'row' },
       field('Markers', markerCountSel),
       field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
       field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
+    capHint,
     field(
       'Project name',
       bindText('project_name', el('input', { type: 'text', placeholder: '= output name' })),
@@ -1510,6 +1516,7 @@ export function mountPhase1(root: HTMLElement): void {
       const c = check('Add a QR code per frame (for projects with MANY sheets)', !!s.qr_on);
       const sync = (): void => {
         qrRow.style.display = s.qr_on ? '' : 'none';
+        syncCapHint();
       };
       c.input.addEventListener('change', () => {
         s.qr_on = c.input.checked;
@@ -1566,8 +1573,8 @@ export function mountPhase1(root: HTMLElement): void {
       'div',
       { class: 'row', style: 'align-items:center; margin-top:4px' },
       el('div', { style: 'flex:0 0 auto; font-size:13.5px; font-weight:600' }, 'Formats:'),
-      bindCheck('fmt_png', check('PNG (one per sheet)', s.fmt_png !== false)),
-      bindCheck('fmt_pdf', check('PDF (print-ready)', s.fmt_pdf !== false)),
+      bindCheck('fmt_png', check('PNG', s.fmt_png !== false)),
+      bindCheck('fmt_pdf', check('PDF', s.fmt_pdf !== false)),
       bindCheck('fmt_tiff', check('TIFF', !!s.fmt_tiff)),
     ),
     el('div', { class: 'hint' }, 'layout.json, the map phase ② needs, is always included.'),

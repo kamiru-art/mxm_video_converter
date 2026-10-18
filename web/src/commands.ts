@@ -57,6 +57,7 @@ export interface EncodedFrame {
 
 export interface Commands {
   version: { args: Record<string, never>; result: string };
+  marker_capacity: { args: { settings: string }; result: number | null };
   compute_layout: {
     args: { settings: string; firstW: number; firstH: number };
     result: string;
@@ -102,6 +103,10 @@ export interface Commands {
     args: { bytes: Bytes; name: string; layout: string; opts?: string; claims?: string };
     result: ScanOutput;
   };
+  frame_levels: {
+    args: { bytes: Bytes; measured: string; niveles: string; cyan: boolean; reference: string };
+    result: { png: Bytes; thumb: Bytes };
+  };
   scan_detect: {
     args: { rgba: Bytes; w: number; h: number; name: string; layout: string; opts?: string };
     result: string;
@@ -145,35 +150,27 @@ export interface Commands {
     args: { bytes: Bytes; paper: string; dpi: number; scanDpi?: number };
     result: string;
   };
-  cyan_strip_png: {
+  cyan_chart_png: {
     args: {
       paper: string;
       dpi: number;
       ink: string;
-      mirror: boolean;
-      target: string;
-      stops?: string;
-      blockColor?: string;
+      /** JSON de la curva con la que se imprime la carta (segunda pasada). */
+      prior?: string;
     };
     result: Bytes;
   };
-  analyze_cyan_strip: {
+  analyze_cyan_chart: {
     args: {
-      bytes: Bytes;
+      /** Una copia escaneada de la carta por elemento; se promedian. */
+      scans: Bytes[];
       paper: string;
       dpi: number;
-      target: string;
       ink?: string;
-      stops?: string;
-      blockColor?: string;
+      prior?: string;
     };
     result: string;
   };
-  colorblocker_png: {
-    args: { paper: string; dpi: number; mirror: boolean; blockColor?: string };
-    result: Bytes;
-  };
-  analyze_colorblocker: { args: { bytes: Bytes; paper: string; dpi: number }; result: string };
   // Sin núcleo: PNG y miniatura de un fotograma de video (ver frames.ts)
   encode_frame: {
     /** `png` por defecto true; sin `thumbW` no hay miniatura. */

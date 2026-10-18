@@ -135,11 +135,8 @@ export const EXACT: Record<string, string> = {
     'MODO CIANOTIPIA: generar negativos para película transparente',
   Cyanotype: 'Cianotipia',
   '(no curve: linear)': '(sin curva: lineal)',
-  '(plain ink)': '(tinta plana)',
-  'ColorBlocker gradient applied ().': 'Degradado de ColorBlocker aplicado ().',
   'Mirror (emulsion-to-emulsion printing)': 'Espejo (impresión emulsión contra emulsión)',
   'Ink color': 'Color de tinta',
-  'Ink color profile (ColorBlocker)': 'Perfil de color de tinta (ColorBlocker)',
   'Compensation curve (cyanotype profile)': 'Curva de compensación (perfil de cianotipia)',
   'Measured in Calibration. Without a curve, density follows the original brightness.':
     'Medida en Calibración. Sin curva, la densidad sigue el brillo original.',
@@ -215,8 +212,6 @@ export const EXACT: Record<string, string> = {
   'Registration (to scan back)': 'Registro (para volver a escanear)',
   'ArUco markers with per-sheet identity (required for phase ②)':
     'Marcadores ArUco con identidad por hoja (necesarios para la fase ②)',
-  'Each sheet gets its own marker IDs: no QR codes needed, more room for the drawings.':
-    'Cada hoja recibe sus propios IDs de marcadores: no hacen falta códigos QR, más espacio para los dibujos.',
   Markers: 'Marcadores',
   'Size (mm)': 'Tamaño (mm)',
   'Project name': 'Nombre del proyecto',
@@ -235,8 +230,6 @@ export const EXACT: Record<string, string> = {
   'Sheets to generate': 'Hojas a generar',
   'e.g. 3, 5-7 (empty = all)': 'p. ej. 3, 5-7 (vacío = todas)',
   'Formats:': 'Formatos:',
-  'PNG (one per sheet)': 'PNG (uno por hoja)',
-  'PDF (print-ready)': 'PDF (listo para imprimir)',
   'layout.json, the map phase ② needs, is always included.':
     'layout.json, el mapa que necesita la fase ②, siempre se incluye.',
   'Include the frames as image files (phase ② needs them for rescue sheets; also handy on their own)':
@@ -254,10 +247,8 @@ export const EXACT: Record<string, string> = {
   'not detected': 'no detectada',
   'Resize each frame to its original digital size':
     'Redimensionar cada fotograma a su tamaño digital original',
-  'Normalize levels with the gray strip (if the sheet has one)':
-    'Normalizar niveles con la tira de grises (si la hoja tiene una)',
-  'Local correction for warped paper (recommended for cyanotype)':
-    'Corrección local para papel deformado (recomendada para cianotipia)',
+  'Local correction for warped paper (recommended)':
+    'Corrección local para papel deformado (recomendada)',
   'Not reprocessed. The report stays as it was.': 'No se reprocesó. El informe queda como estaba.',
   'Drop your scans here (any order, any orientation)':
     'Suelta tus escaneos aquí (cualquier orden, cualquier orientación)',
@@ -349,27 +340,34 @@ export const EXACT: Record<string, string> = {
     'Imprime la página al 100 % (sin “ajustar a la página”), escanéala entera y suéltala aquí.',
   'Download test page': 'Descargar página de prueba',
   'Drop the SCAN of the printed page': 'Suelta el ESCANEO de la página impresa',
-  '21-patch strip (quick)': 'Tira de 21 parches (rápida)',
-  'EDN 2.2 chart, 256 tones (fine)': 'Carta EDN 2.2, 256 tonos (fina)',
-  'Mirrored (like your real negatives)': 'En espejo (como tus negativos reales)',
   'Cyanotype curve': 'Curva de cianotipia',
-  'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve (Easy Digital Negatives method). Expose the chart exactly as you expose your work.':
-    'Mide la respuesta de tu proceso (impresora, película, química, luz) y crea la curva de compensación (método Easy Digital Negatives). Expón la carta exactamente como expones tu obra.',
-  Chart: 'Carta',
+  'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve with the 256-tone chart of Easy Digital Negatives 2.2. Expose the chart exactly as you expose your work.':
+    'Mide la respuesta de tu proceso (impresora, película, química, luz) y crea la curva de compensación con la carta de 256 tonos de Easy Digital Negatives 2.2. Expón la carta exactamente como expones tu obra.',
+  'Curve already on the chart': 'Curva ya aplicada a la carta',
+  '(none: first pass)': '(ninguna: primera pasada)',
+  'Second pass: pick the curve you saved from the first chart. The chart prints with it, and the new analysis corrects what it left. Save the result and use it instead of the first curve.':
+    'Segunda pasada: elige la curva que guardaste de la primera carta. La carta se imprime con ella, y el nuevo análisis corrige lo que esa curva dejó. Guarda el resultado y úsalo en lugar de la primera curva.',
   'Negative ink': 'Tinta del negativo',
-  'Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).':
-    'Imprime en película transparente al 100 %, expón tu cianotipo como siempre, revela, seca y escanea la COPIA AZUL (no la película).',
+  'Print on transparency film at 100 %, in colour mode (not grayscale), expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).':
+    'Imprime en película transparente al 100 %, en modo color (no en escala de grises), expón tu cianotipo como siempre, revela, seca y escanea la COPIA AZUL (no la película).',
   'Download chart (negative for film)': 'Descargar carta (negativo para película)',
   'Drop the SCAN of the blue print': 'Suelta el ESCANEO de la copia azul',
-  Mirrored: 'En espejo',
-  'EDN ColorBlocker': 'EDN ColorBlocker',
-  '36 hues × 21 variants: finds the ink color that blocks UV best on your printer (not always black) and builds a 3-stop gradient. Print at maximum quality: a draft setting ruins this chart.':
-    '36 matices × 21 variantes: encuentra el color de tinta que mejor bloquea el UV en tu impresora (no siempre el negro) y crea un degradado de 3 paradas. Imprime a máxima calidad: un ajuste de borrador arruina esta carta.',
-  'Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.':
-    'Imprime en película transparente al 100 % a calidad MÁXIMA, expón, revela, seca y escanea la copia azul.',
-  'Download ColorBlocker chart': 'Descargar carta ColorBlocker',
-  'Best UV blocker:': 'Mejor bloqueador de UV:',
-  'Gradient (shadows → highlights):': 'Degradado (sombras → luces):',
+  'Advanced options': 'Opciones avanzadas',
+  'On by default: the printed side of the film goes against the paper, as with the calibration chart. Turn it off only if you expose with the film the other way round, and know that the curve was measured mirrored.':
+    'Activado por defecto: la cara impresa de la película va contra el papel, como en la carta de calibración. Desactívalo sólo si expones con la película al revés, y ten en cuenta que la curva se midió en espejo.',
+  'Several prints: drop the scans of several prints of the same chart together and the app averages them. It helps when a print came out uneven.':
+    'Varias copias: suelta juntos los escaneos de varias copias de la misma carta y la app las promedia. Ayuda cuando una copia salió despareja.',
+  'The last chart you downloaded was printed with a different curve: another “Curve already on the chart”, or that profile was saved over since. Pick the curve it was printed with, or download the chart again.':
+    'La última carta que descargaste se imprimió con otra curva: otra “Curva ya aplicada a la carta”, o ese perfil se guardó encima después. Elige la curva con que se imprimió, o descarga la carta de nuevo.',
+  'The curve already on the chart is not a valid curve. Pick another one, or none.':
+    'La curva ya aplicada a la carta no es una curva válida. Elige otra, o ninguna.',
+  'Second pass: this curve already includes the first one. Save it and use it instead.':
+    'Segunda pasada: esta curva ya incluye la primera. Guárdala y úsala en su lugar.',
+  'Drop at least one scan of the chart.': 'Suelta al menos un escaneo de la carta.',
+  'The curve applied to the chart has invalid values.':
+    'La curva aplicada a la carta tiene valores no válidos.',
+  'The curve applied to the chart is not increasing.':
+    'La curva aplicada a la carta no es creciente.',
   'Your profiles & presets': 'Tus perfiles y preajustes',
   'Stored in this browser only: clearing site data deletes them. Export a JSON to move them to another machine or to keep a copy with the project.':
     'Guardados solo en este navegador: borrar los datos del sitio los elimina. Exporta un JSON para llevarlos a otra máquina o para guardar una copia con el proyecto.',
@@ -494,15 +492,11 @@ export const EXACT: Record<string, string> = {
     'No se pudieron medir suficientes parches; comprueba que el escaneo esté completo, plano y bien iluminado.',
   'The measured response is INVERTED: patches with more ink came out darker. Usually this means you scanned the FILM instead of the blue print; scan the dried cyanotype and analyze again.':
     'La respuesta medida está INVERTIDA: los parches con más tinta salieron más oscuros. Normalmente significa que escaneaste la PELÍCULA en vez de la copia azul; escanea el cianotipo seco y analiza de nuevo.',
-  'Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (or use the ColorBlocker) and check the wash.':
-    'Rango dinámico bajo (<35 %). Sugerencias: aumenta la exposición, verifica que la tinta plena en la película de verdad bloquee la luz (o usa el ColorBlocker) y revisa el lavado.',
+  'Low dynamic range (<35 %). Suggestions: increase exposure, verify that full ink on the film actually blocks light (print in colour mode, at the best quality) and check the wash.':
+    'Rango dinámico bajo (<35 %). Sugerencias: aumenta la exposición, verifica que la tinta plena en la película de verdad bloquee la luz (imprime en modo color, a la mejor calidad) y revisa el lavado.',
   'Excellent dynamic range. 💙': 'Rango dinámico excelente. 💙',
-  'Not enough ColorBlocker patches could be measured; check the scan.':
-    'No se pudieron medir suficientes parches del ColorBlocker; revisa el escaneo.',
   'The chart has almost no contrast: the exposure was far too short or too long.':
     'La carta casi no tiene contraste: la exposición fue demasiado corta o demasiado larga.',
-  'On your printer black/gray is the best blocker: you can keep using black ink.':
-    'En tu impresora el negro/gris es el mejor bloqueador: puedes seguir usando tinta negra.',
   'The layout is invalid or incomplete (no markers).':
     'El layout no es válido o está incompleto (sin marcadores).',
   'The scan arrived MIRRORED (film exposed flipped?); it was flipped back automatically before processing.':
@@ -517,6 +511,23 @@ export const EXACT: Record<string, string> = {
   'Could not compute the homography (degenerate markers).':
     'No se pudo calcular la homografía (marcadores degenerados).',
   'Levels normalized with the patch strip.': 'Niveles normalizados con la tira de parches.',
+  'Normalize levels with the gray strip': 'Normalizar niveles con la tira de grises',
+  'Colour reference print': 'Copia de referencia de color',
+  'Pick the print that came out best: the others are matched to it. Changing it, or the box above, only recolours the frames already cut; nothing is scanned again.':
+    'Elige la copia que salió mejor: las demás se igualan a ella. Cambiarla, o la casilla de arriba, solo recolorea los fotogramas ya recortados; no se vuelve a procesar ningún escaneo.',
+  'Every sheet of the project carries the strip, or none does (Registration, phase ①). In cyanotype, each print is matched to the reference print, which evens out differences in exposure and chemistry between prints.':
+    'O todas las hojas del proyecto llevan la tira, o ninguna (Registro, fase ①). En cianotipia, cada copia se iguala a la copia de referencia, así se emparejan las diferencias de exposición y de química entre copias.',
+  'The gray strip could not be read: this sheet keeps its scanned colours, unlike the rest.':
+    'No se pudo leer la tira de grises: esta hoja conserva los colores del escaneo, a diferencia del resto.',
+  'This print is the colour reference: the others are matched to it.':
+    'Esta copia es la referencia de color: las demás se igualan a ella.',
+  'process the scans first': 'procesa primero los escaneos',
+  'The gray strip of this scan cannot be matched.':
+    'La tira de grises de este escaneo no se puede igualar.',
+  'The gray strip does not fit beside the markers, so no sheet will carry it. Use smaller markers or a larger page.':
+    'La tira de grises no cabe junto a los marcadores, así que ninguna hoja la llevará. Usa marcadores más pequeños o una página más grande.',
+  'Colours matched to the reference print with the gray strip.':
+    'Colores igualados a la copia de referencia con la tira de grises.',
   'No marker identity or readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.':
     'Sin identidad de marcadores ni QR legible: hoja identificada por eliminación (el layout tiene una sola hoja). Verifica en el informe que este escaneo pertenece a este proyecto.',
   "Sheet not identified: crops saved as 'unidentified'.":
@@ -689,7 +700,6 @@ export const TEMPLATES: [string, string][] = [
     'Heads up: this curve was measured with ink {0} and you are now using {1}.',
     'Atención: esta curva se midió con la tinta {0} y ahora usas {1}.',
   ],
-  ['ColorBlocker gradient applied ({0}).', 'Degradado de ColorBlocker aplicado ({0}).'],
   [
     'Printer profile applied (scale {#0} % × {#1} %).',
     'Perfil de impresora aplicado (escala {#0} % × {#1} %).',
@@ -774,6 +784,17 @@ export const TEMPLATES: [string, string][] = [
   [
     '{#0} sheets exceed the {#1} that marker identity can distinguish. Enable "Add a QR code per frame" in Registration: QRs identify any number of sheets.',
     '{#0} hojas superan las {#1} que la identidad de los marcadores puede distinguir. Activa "Agregar un código QR por fotograma" en Registro: los QR identifican cualquier número de hojas.',
+  ],
+  [
+    'With {#0} markers, up to {#1} sheets. For more, turn on "Add a QR code per frame".',
+    'Con {#0} marcadores, hasta {#1} hojas. Para más, activa "Agregar un código QR por fotograma".',
+  ],
+  ['sheet {#0} · {1}', 'hoja {#0} · {1}'],
+  ['matching colours: {#0}/{#1} frames', 'igualando colores: {#0}/{#1} fotogramas'],
+  ['Colours not matched: {0}', 'Colores sin igualar: {0}'],
+  [
+    'The gray strip of {#0} scan(s) could not be read: those sheets keep their scanned colours. Check them in the report.',
+    'No se pudo leer la tira de grises de {#0} escaneo(s): esas hojas conservan los colores del escaneo. Revísalas en el informe.',
   ],
   ['{#0} frames loaded', '{#0} fotogramas cargados'],
   ['{#0} selected', '{#0} seleccionados'],
@@ -932,7 +953,6 @@ export const TEMPLATES: [string, string][] = [
     'Measured dynamic range: {#0} % · 256-point curve built.',
     'Rango dinámico medido: {#0} % · curva de 256 puntos creada.',
   ],
-  ['Could not build the ColorBlocker chart: {0}', 'No se pudo crear la carta ColorBlocker: {0}'],
   ['Import failed: {0}', 'La importación falló: {0}'],
   ['From 1 to {#0}.', 'De 1 a {#0}.'],
   [
@@ -1168,13 +1188,15 @@ export const TEMPLATES: [string, string][] = [
     'The chart patches are barely distinguishable (range {#0} %). Usually the exposure was too short or too long, or the scan has minimum contrast.',
     'Los parches de la carta apenas se distinguen (rango {#0} %). Normalmente la exposición fue demasiado corta o demasiado larga, o el escaneo tiene un contraste mínimo.',
   ],
+  ['Scan {#0} of {#1}: {0}', 'Escaneo {#0} de {#1}: {0}'],
+  ['Average of {#0} prints.', 'Promedio de {#0} copias.'],
   [
-    "On your printer, the color {0} blocks UV clearly better than black: use it as the negatives' ink.",
-    'En tu impresora, el color {0} bloquea el UV claramente mejor que el negro: úsalo como tinta de los negativos.',
+    'The curve applied to the chart must have 256 points; it has {#0}.',
+    'La curva aplicada a la carta debe tener 256 puntos; tiene {#0}.',
   ],
   [
-    "{#0} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV). They are not discarded.",
-    '{#0} matiz(es) no siguieron el orden nominal de la carta (normal en colores que apenas bloquean el UV). No se descartan.',
+    'Your {#0} prints differ by about {#1} % on average: the coating, the exposure or the development changed between them. The curve uses their average.',
+    'Tus {#0} copias difieren en promedio un {#1} %: la emulsión, la exposición o el revelado cambiaron entre ellas. La curva usa su promedio.',
   ],
   ['Unrecognized format: {0}', 'Formato no reconocido: {0}'],
   ['Could not decode the image: {0}', 'No se pudo decodificar la imagen: {0}'],

@@ -239,13 +239,11 @@ export interface CyanProfile {
   lut: number[];
   respuesta?: [number, number][];
   rango_dinamico?: number;
+  /** Copias escaneadas que se promediaron (sin él, una). */
+  escaneos?: number;
+  /** 2: la carta se imprimió con una curva previa, que esta ya incluye. */
+  pasada?: 1 | 2;
   ink?: string;
-  notas?: string[];
-}
-
-export interface ColorProfile {
-  mejor_color: string;
-  stops?: CyanStops;
   notas?: string[];
 }
 

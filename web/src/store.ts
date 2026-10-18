@@ -1,13 +1,7 @@
 // Presets y perfiles de calibración: viven en el navegador (localStorage)
 // y se pueden exportar/importar como JSON para compartirlos entre máquinas.
 
-import type {
-  ColorProfile,
-  CyanProfile,
-  PresetProfile,
-  PrinterProfile,
-  Settings,
-} from './types.ts';
+import type { CyanProfile, PresetProfile, PrinterProfile, Settings } from './types.ts';
 
 const KEY = 'mxm-studio-v1';
 /** La RAM que el usuario declara en la fase ②: una clave aparte. */
@@ -40,7 +34,6 @@ export interface ProfileMap {
   presets: PresetProfile;
   impresora: PrinterProfile;
   cianotipia: CyanProfile;
-  cianotipia_color: ColorProfile;
 }
 
 export type ProfileKind = keyof ProfileMap;
@@ -55,7 +48,6 @@ interface StoreData {
   presets?: Record<string, Stored<PresetProfile>>;
   impresora?: Record<string, Stored<PrinterProfile>>;
   cianotipia?: Record<string, Stored<CyanProfile>>;
-  cianotipia_color?: Record<string, Stored<ColorProfile>>;
   ajustes?: Partial<Settings>;
   /** Resultados de pruebas del navegador que no cambian entre sesiones (la
    *  del ffmpeg multihilo): evitan repetirlas en cada carga. */

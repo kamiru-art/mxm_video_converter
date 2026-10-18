@@ -51,6 +51,14 @@ export interface ResultEntry {
   rows?: HTMLTableRowElement[] | null;
   urls?: string[];
   shown?: LabeledPng[];
+  /** los recortes tal como salieron del escaneo; `frames` son éstos o los
+   *  normalizados con la tira de grises */
+  raw?: LabeledPng[];
+  /** qué normalización llevan `frames` (ver levelsKey) */
+  levelsKey?: string;
+  levelNote?: { text: string; warn: boolean };
+  /** juegos normalizados ya escritos, por clave */
+  levelCache?: Map<string, LabeledPng[]>;
 }
 
 export interface Phase2State {
@@ -63,6 +71,9 @@ export interface Phase2State {
   claims: Record<number, string>;
   /** nombre de escaneo → nº de hoja puesto a mano */
   assign: Record<string, number>;
+  /** cianotipia: el escaneo cuya tira de grises es la referencia de color;
+   *  las demás copias se igualan a ella */
+  refScan: string | null;
 }
 
 export const ph2: Phase2State = {
@@ -71,6 +82,7 @@ export const ph2: Phase2State = {
   results: [],
   claims: {},
   assign: {},
+  refScan: null,
 };
 
 /** Opciones de detección comunes a todo el lote (van al núcleo en JSON). */
@@ -79,7 +91,6 @@ interface ScanOpts {
   min_markers: number;
   mode: string;
   resize_to_original: boolean;
-  normalize_patches: boolean;
   fine_align: boolean;
   thumbs: boolean;
   forced_sheet?: number;
@@ -123,6 +134,7 @@ export function mountPhase2(root: HTMLElement): void {
     ph2.layout = layout;
     ph2.layoutName = name;
     ph2.assign = {};
+    ph2.refScan = null;
     layoutInfo.textContent = info;
   }
 
@@ -189,8 +201,14 @@ export function mountPhase2(root: HTMLElement): void {
     return { gb: deviceRamGb(), manual: false };
   }
   const resizeCheck = check('Resize each frame to its original digital size', false);
-  const patchesCheck = check('Normalize levels with the gray strip (if the sheet has one)', false);
-  const fineCheck = check('Local correction for warped paper (recommended for cyanotype)', true);
+  const patchesCheck = check('Normalize levels with the gray strip', false);
+  const refSel = el('select') as HTMLSelectElement;
+  const refField = field(
+    'Colour reference print',
+    refSel,
+    'Pick the print that came out best: the others are matched to it. Changing it, or the box above, only recolours the frames already cut; nothing is scanned again.',
+  );
+  const fineCheck = check('Local correction for warped paper (recommended)', true);
 
   // procesamiento
   const prog = progressBar();
@@ -411,7 +429,6 @@ export function mountPhase2(root: HTMLElement): void {
       min_markers: Number.isFinite(minMarkersVal) ? minMarkersVal : 3,
       mode: modeSel.value,
       resize_to_original: resizeCheck.input.checked,
-      normalize_patches: patchesCheck.input.checked,
       fine_align: fineCheck.input.checked,
       // miniaturas pequeñas del núcleo para el informe: con los recortes
       // enteros (cientos de MB) Safari se congelaba al desplazarlo
@@ -487,6 +504,8 @@ export function mountPhase2(root: HTMLElement): void {
       })),
       overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
       overlayThumb: r.overlay_thumb ? asBlob(r.overlay_thumb, 'image/jpeg') : undefined,
+      raw: frames,
+      levelsKey: 'raw',
     };
   }
 
@@ -586,6 +605,7 @@ export function mountPhase2(root: HTMLElement): void {
         }),
       );
       recycleIdle(); // liberar la memoria WASM que infló el lote
+      await applyLevels();
       renderSummary();
       // cancelado cuando ya corrían todos: terminaron igual, no hubo parada
       if (ctl.signal.aborted && done < files.length) {
@@ -649,6 +669,7 @@ export function mountPhase2(root: HTMLElement): void {
       // falla, se queda como estaba en vez de perder sus fotogramas
       const entry = await runOne(f, ctx);
       addResult(entry); // reemplaza la fila anterior de este mismo archivo
+      await applyLevels();
       prog.set(1, '');
       recycleIdle();
       ran = true;
@@ -831,6 +852,13 @@ export function mountPhase2(root: HTMLElement): void {
         el('td', {}, String(frames?.length ?? 0)),
         el('td', {}, [
           ...(r.advertencias ?? []).map((a) => el('div', { class: 'hint warn' }, a)),
+          entry.levelNote
+            ? el(
+                'div',
+                { class: entry.levelNote.warn ? 'hint warn' : 'hint' },
+                entry.levelNote.text,
+              )
+            : null,
           r.error ? el('div', { class: 'hint err' }, r.error) : null,
         ]),
       ),
@@ -878,11 +906,199 @@ export function mountPhase2(root: HTMLElement): void {
     renderSummary();
   }
 
+  // ---------- normalización con la tira de grises ----------
+  // Va sobre los recortes ya guardados y no sobre el escaneo: activarla,
+  // quitarla o cambiar la copia de referencia sólo recolorea recortes
+  // (decodificar, aplicar tres curvas y volver a codificar), sin volver a
+  // detectar ni enderezar nada.
+  const isCyanLayout = (): boolean => /^(cyan|cian)/i.test(String(ph2.layout?.modo ?? ''));
+  const hasStrip = (): boolean => !!ph2.layout?.parche_grises;
+  const measuredOf = (e: ResultEntry): number[][] | null =>
+    Array.isArray(e.result.parche_medido) ? (e.result.parche_medido as number[][]) : null;
+  const readable = (): ResultEntry[] =>
+    ph2.results.filter((e) => e.result.ok && e.result.hoja_numero != null && measuredOf(e));
+
+  /** La copia de referencia: la que eligió el usuario, o la hoja de número
+   *  más bajo con la tira legible. La de por defecto NO se guarda en
+   *  ph2.refScan: guardada, una elegida a mitad de lote (cuando sólo había
+   *  terminado la hoja 3) se quedaba aunque luego llegara la 1. */
+  function refEntry(): ResultEntry | null {
+    const ok = readable();
+    const chosen = ok.find((e) => e.result.scan === ph2.refScan);
+    if (chosen) return chosen;
+    return (
+      [...ok].sort((a, b) => (a.result.hoja_numero ?? 0) - (b.result.hoja_numero ?? 0))[0] ?? null
+    );
+  }
+
+  /** Qué normalización le toca a una entrada con las opciones de ahora. */
+  function levelsKey(e: ResultEntry, ref: ResultEntry | null): string {
+    if (!patchesCheck.input.checked || !hasStrip()) return 'raw';
+    if (!measuredOf(e)) return 'unreadable';
+    if (!isCyanLayout()) return 'normal';
+    if (!ref) return 'raw';
+    return `cyan:${JSON.stringify(measuredOf(ref))}`;
+  }
+
+  function syncRefField(): void {
+    const show = patchesCheck.input.checked && hasStrip() && isCyanLayout();
+    refField.style.display = show ? '' : 'none';
+    if (!show) return;
+    const ref = refEntry();
+    const ok = [...readable()].sort(
+      (a, b) => (a.result.hoja_numero ?? 0) - (b.result.hoja_numero ?? 0),
+    );
+    refSel.replaceChildren(
+      ...(ok.length
+        ? ok.map((e) =>
+            el(
+              'option',
+              { value: e.result.scan },
+              `sheet ${e.result.hoja_numero} · ${e.result.scan}`,
+            ),
+          )
+        : [el('option', { value: '' }, 'process the scans first')]),
+    );
+    refSel.value = ref?.result.scan ?? '';
+    refSel.disabled = ok.length < 2;
+  }
+
+  let levelsBusy = false;
+  let levelsAgain = false;
+  /** Pone cada entrada del informe en la normalización que le toca. Sólo
+   *  trabaja en las que cambian, y cada juego normalizado se guarda por
+   *  entrada y clave: volver a una referencia o a la casilla de antes no
+   *  escribe otra copia de cada recorte en el disco. Una llamada mientras
+   *  corre otra la repite al terminar con las opciones de ese momento. */
+  async function applyLevels(): Promise<void> {
+    syncRefField();
+    if (levelsBusy) {
+      levelsAgain = true;
+      return;
+    }
+    levelsBusy = true;
+    try {
+      do {
+        levelsAgain = false;
+        const ref = refEntry();
+        const todo = ph2.results.filter((e) => e.raw && e.levelsKey !== levelsKey(e, ref));
+        const total = todo.reduce((n, e) => n + (e.raw?.length ?? 0), 0);
+        let done = 0;
+        if (total) prog.show();
+        const unreadable: string[] = [];
+        for (const e of todo) {
+          if (levelsAgain) break; // las opciones cambiaron: se rehace todo
+          const key = levelsKey(e, ref);
+          const cached = e.levelCache?.get(key);
+          const raw = e.raw ?? [];
+          let frames = raw;
+          let note: ResultEntry['levelNote'];
+          let failed = false;
+          if (key === 'unreadable') {
+            unreadable.push(e.result.scan);
+            note = {
+              text: 'The gray strip could not be read: this sheet keeps its scanned colours, unlike the rest.',
+              warn: true,
+            };
+          } else if (key !== 'raw' && e === ref && key.startsWith('cyan')) {
+            // la referencia contra sí misma es la identidad: sus recortes tal cual
+            note = {
+              text: 'This print is the colour reference: the others are matched to it.',
+              warn: false,
+            };
+          } else if (cached) {
+            frames = cached;
+            note = {
+              text: key.startsWith('cyan')
+                ? 'Colours matched to the reference print with the gray strip.'
+                : 'Levels normalized with the patch strip.',
+              warn: false,
+            };
+          } else if (key !== 'raw') {
+            const cyan = key.startsWith('cyan');
+            const args = {
+              measured: JSON.stringify(measuredOf(e)),
+              niveles: JSON.stringify(e.result.parche_niveles ?? []),
+              cyan,
+              reference: JSON.stringify(cyan ? measuredOf(ref as ResultEntry) : null),
+            };
+            try {
+              // de a poolSize() a la vez: leer todos los recortes juntos
+              // llenaba la memoria en proyectos largos
+              const out: LabeledPng[] = new Array(raw.length);
+              let next = 0;
+              await Promise.all(
+                Array.from({ length: Math.min(poolSize(), raw.length) }, async () => {
+                  for (let i = next++; i < raw.length; i = next++) {
+                    const fr = raw[i];
+                    const bytes = new Uint8Array(await fr.png.arrayBuffer());
+                    const r = await run('frame_levels', { bytes, ...args }, [bytes.buffer]);
+                    out[i] = {
+                      label: fr.label,
+                      png: await storeProcessedFrame(fr.label, r.png),
+                      thumb: new Blob([r.thumb], { type: 'image/jpeg' }),
+                    };
+                    done++;
+                    prog.set(done / total, `matching colours: ${done}/${total} frames`);
+                  }
+                }),
+              );
+              frames = out;
+              e.levelCache = e.levelCache ?? new Map();
+              e.levelCache.set(key, out);
+              note = {
+                text: cyan
+                  ? 'Colours matched to the reference print with the gray strip.'
+                  : 'Levels normalized with the patch strip.',
+                warn: false,
+              };
+            } catch (err) {
+              console.error(err);
+              note = { text: `Colours not matched: ${errMsg(err)}`, warn: true };
+              failed = true;
+            }
+          }
+          // un reprocesado o "Clear results" a mitad la sacó del informe
+          if (!ph2.results.includes(e)) continue;
+          replaceResult(e, {
+            ...e,
+            frames,
+            // un fallo queda como recortes crudos: la próxima pasada lo reintenta
+            levelsKey: failed ? 'raw' : key,
+            levelNote: note,
+            rows: null,
+            urls: [],
+            shown: undefined,
+          });
+        }
+        if (total) prog.hide();
+        if (unreadable.length)
+          toast(
+            `The gray strip of ${unreadable.length} scan(s) could not be read: those sheets keep their scanned colours. Check them in the report.`,
+            'err',
+          );
+      } while (levelsAgain);
+    } finally {
+      levelsBusy = false;
+    }
+    syncRefField();
+  }
+  // también con un lote en marcha: si coincide con la pasada del final, ésta
+  // se repite con lo que haya ahora
+  patchesCheck.input.addEventListener('change', () => void applyLevels());
+  refSel.addEventListener('change', () => {
+    ph2.refScan = refSel.value || null;
+    void applyLevels();
+  });
+
   /** `keepAssign`: al reprocesar el lote con otras opciones, las hojas que el
    *  usuario asignó a mano deben sobrevivir; el botón “Clear results” no. */
   function clearReport(keepAssign = false): void {
     for (const e of ph2.results) dropRows(e);
     ph2.results = [];
+    // reprocesar conserva la copia de referencia elegida, como las hojas
+    // puestas a mano; si ese escaneo ya no vuelve, manda la de por defecto
+    if (!keepAssign) ph2.refScan = null;
     void clearProcessedCache(); // sus archivos en disco ya no los mira nadie
     if (!keepAssign) ph2.assign = {};
     reportTable.replaceChildren(reportHeader);
@@ -1335,6 +1551,12 @@ export function mountPhase2(root: HTMLElement): void {
     ),
     resizeCheck.label,
     patchesCheck.label,
+    el(
+      'div',
+      { class: 'hint' },
+      'Every sheet of the project carries the strip, or none does (Registration, phase ①). In cyanotype, each print is matched to the reference print, which evens out differences in exposure and chemistry between prints.',
+    ),
+    refField,
     fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,

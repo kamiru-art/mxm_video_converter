@@ -91,6 +91,7 @@ function deepFrame(
 
 const handlers: Handlers = {
   version: () => core.version(),
+  marker_capacity: (a) => core.marker_capacity(a.settings) as number | null,
   compute_layout: (a) => core.compute_layout(a.settings, a.firstW, a.firstH),
   render_sheet: (a) => {
     const r = core.render_sheet(
@@ -140,6 +141,13 @@ const handlers: Handlers = {
     ) as ScanOutput;
     return { value: r, transfer: scanTransfer(r) };
   },
+  frame_levels: (a) => {
+    const r = core.frame_levels(a.bytes, a.measured, a.niveles, a.cyan, a.reference) as {
+      png: Bytes;
+      thumb: Bytes;
+    };
+    return { value: r, transfer: [r.png.buffer, r.thumb.buffer] };
+  },
   scan_detect: (a) => core.scan_detect(a.rgba, a.w, a.h, a.name, a.layout, a.opts ?? '{}'),
   scan_finish: (a) => {
     const r = core.scan_finish(
@@ -176,35 +184,12 @@ const handlers: Handlers = {
     return { value: png, transfer: [png.buffer] };
   },
   analyze_printer_test: (a) => core.analyze_printer_test(a.bytes, a.paper, a.dpi, a.scanDpi ?? 0),
-  cyan_strip_png: (a) => {
-    const png = bytes(
-      core.cyan_strip_png(
-        a.paper,
-        a.dpi,
-        a.ink,
-        a.mirror,
-        a.target,
-        a.stops ?? 'null',
-        a.blockColor ?? '',
-      ),
-    );
+  cyan_chart_png: (a) => {
+    const png = bytes(core.cyan_chart_png(a.paper, a.dpi, a.ink, a.prior ?? 'null'));
     return { value: png, transfer: [png.buffer] };
   },
-  analyze_cyan_strip: (a) =>
-    core.analyze_cyan_strip(
-      a.bytes,
-      a.paper,
-      a.dpi,
-      a.target,
-      a.ink ?? '',
-      a.stops ?? 'null',
-      a.blockColor ?? '',
-    ),
-  colorblocker_png: (a) => {
-    const png = bytes(core.colorblocker_png(a.paper, a.dpi, a.mirror, a.blockColor ?? ''));
-    return { value: png, transfer: [png.buffer] };
-  },
-  analyze_colorblocker: (a) => core.analyze_colorblocker(a.bytes, a.paper, a.dpi),
+  analyze_cyan_chart: (a) =>
+    core.analyze_cyan_chart(a.scans, a.paper, a.dpi, a.ink ?? '', a.prior ?? 'null'),
   // PNG y miniatura de un fotograma de video, fuera del hilo principal (ver
   // frames.ts). No pasa por el núcleo: el codificador PNG del navegador es
   // el mismo que usaba el hilo principal, y aquí corren varios a la vez. El

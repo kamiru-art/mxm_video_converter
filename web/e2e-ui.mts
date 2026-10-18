@@ -975,6 +975,187 @@ async function runFlow(
   );
   await shot('video-gaps');
 
+  // ④ la tira de grises en cianotipia, desde los clics: las hojas del
+  // ejemplo como negativos con la tira, copiadas en azul con exposiciones,
+  // papeles y escáneres distintos (la hoja 1 bien, la 2 subexpuesta, en papel
+  // más cálido y con un escáner que tiñe). Activar la opción, cambiar la
+  // copia de referencia y quitarla sólo recolorea los recortes ya hechos: la
+  // copia de referencia queda byte a byte como se escaneó y las demás no.
+  if (tabs) {
+    await screen('sheets');
+    const negatives = await driver.run<string>(
+      step(`
+      const label = (re) => [...document.querySelectorAll('#view-sheets label')].find((l) => re.test(l.textContent));
+      const box = (re) => label(re).querySelector('input[type=checkbox]');
+      for (const [re, on] of [[/CYANOTYPE MODE/, true], [/Gray patch strip/, true]]) {
+        const b = box(re);
+        if (b.checked !== on) b.click();
+      }
+      // 2×2: los seis dibujos del ejemplo en dos hojas
+      for (const re of [/^Columns/, /^Rows/]) {
+        const i = label(re).querySelector('input');
+        i.value = '2';
+        i.dispatchEvent(new Event('input', { bubbles: true }));
+        i.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const before = ui.downloads.length;
+      ui.button(/Generate sheets/).click();
+      const zip = await ui.until(() => ui.downloads.slice(before).find((d) => /\\.zip$/.test(d.name)), 180000, 'the cyanotype sheets ZIP');
+      return await new Promise((res, rej) => {
+        const f = new FileReader();
+        f.onload = () => res(String(f.result).split(',')[1] ?? '');
+        f.onerror = () => rej(f.error);
+        f.readAsDataURL(zip.blob);
+      });`),
+    );
+    const sheetFiles = await unzipAll(negatives);
+    const layoutBuf = [...sheetFiles].find(([n]) => /layout\.json$/.test(n))?.[1];
+    const layoutCy = JSON.parse(layoutBuf?.toString('utf8') ?? '{}') as {
+      parche_grises?: unknown;
+      hojas?: { numero: number; frames?: Record<string, unknown> }[];
+    };
+    const pngs = [...sheetFiles]
+      .filter(([n]) => /_p\d+\.png$/.test(n))
+      .sort(([a], [b]) => a.localeCompare(b));
+    const sheetOf = new Map<string, number>();
+    for (const h of layoutCy.hojas ?? [])
+      for (const et of Object.keys(h.frames ?? {})) sheetOf.set(`${et}.png`, h.numero);
+    check(
+      'cyanotype: every sheet carries the gray strip',
+      !!layoutCy.parche_grises && pngs.length >= 2,
+      `${pngs.length} negatives, strip ${layoutCy.parche_grises ? 'in the layout' : 'missing'}: ${pngs.map(([n]) => n).join(', ')}`,
+    );
+    await screen('scans');
+    const strip = await driver.run<{
+      error?: string;
+      options?: string[];
+      chosen?: string;
+      onMs?: number;
+      swapMs?: number;
+      offMs?: number;
+      notes?: string[];
+      frames?: number;
+    }>(
+      step(`
+      const sheets = ${JSON.stringify(pngs.slice(0, 2).map(([n, b]) => [n, b.toString('base64')]))};
+      // la copia: el negativo al derecho, su transparencia expone el azul
+      const print = async ([name, b64], gamma, paper, blue, gain, off) => {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const x = c.getContext('2d');
+        x.translate(bmp.width, 0);
+        x.scale(-1, 1);
+        x.drawImage(bmp, 0, 0);
+        bmp.close();
+        const im = x.getImageData(0, 0, c.width, c.height);
+        const d = im.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const t = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+          const b = t ** gamma;
+          for (let k = 0; k < 3; k++) d[i + k] = (paper[k] * (1 - b) + blue[k] * b) * gain[k] + off[k];
+        }
+        x.putImageData(im, 0, 0);
+        const png = await c.convertToBlob({ type: 'image/png' });
+        return new File([png], name.replace(/^.*\\//, '').replace(/\\.png$/, '_print.png'), { type: 'image/png' });
+      };
+      const files = [
+        await print(sheets[0], 1, [245, 242, 230], [23, 49, 92], [1, 1, 1], [0, 0, 0]),
+        await print(sheets[1], 1.6, [240, 230, 205], [23, 49, 92], [0.82, 0.78, 0.7], [28, 30, 22]),
+      ];
+      const n0 = ui.toasts.length;
+      ui.button(/Clear results/)?.click();
+      ui.button(/Use the current project layout/).click();
+      const box = [...document.querySelectorAll('#view-scans label')].find((l) => /Normalize levels with the gray strip/.test(l.textContent)).querySelector('input');
+      if (box.checked) box.click();
+      const input = document.querySelector('#view-scans input[type=file][accept^=".tif"]');
+      const dt = new DataTransfer();
+      for (const f of files) dt.items.add(f);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change'));
+      await ui.until(() => ui.toasts.slice(n0).some((t) => /Processing finished/.test(t)), 240000, 'processing the prints');
+      const notes = () => [...document.querySelectorAll('#view-scans table.report td .hint')].map((h) => h.textContent);
+      const scansIn = [...document.querySelectorAll('#view-scans table.report td.mono, #view-scans table.report td')].map((t) => t.textContent);
+      const zip = async () => { ${PROCESSED_ZIP.replace(/^const ui = window.__ui; /, '')} };
+      const sel = [...document.querySelectorAll('#view-scans label')].find((l) => /Colour reference print/.test(l.textContent)).querySelector('select');
+      const timed = async (act, done) => {
+        const t0 = performance.now();
+        act();
+        await ui.until(done, 60000, 'the recolouring').catch((e) => {
+          const rows = [...document.querySelectorAll('#view-scans table.report tr')].map((tr) => tr.textContent.slice(0, 160));
+          throw new Error(e.message.split(' | ')[0] + ' | ref ' + sel?.value + ' | rows: ' + rows.join(' // '));
+        });
+        return Math.round(performance.now() - t0);
+      };
+      const raw = await zip();
+      if (raw.error) return { error: raw.error };
+      const onMs = await timed(() => box.click(), () => notes().some((n) => /colour reference/.test(n)) && notes().some((n) => /matched to the reference/.test(n)));
+      const options = [...sel.options].map((o) => o.textContent);
+      const chosen = sel.value;
+      const on = await zip();
+      const other = [...sel.options].find((o) => o.value !== chosen).value;
+      const swapMs = await timed(() => { sel.value = other; sel.dispatchEvent(new Event('change')); },
+        () => {
+          const rows = [...document.querySelectorAll('#view-scans table.report tr')];
+          // por la celda del escaneo: el selector de hoja de una fila nombra
+          // también al otro escaneo ("already taken by …")
+          const row = (scan) => rows.find((tr) => tr.cells[1]?.textContent === scan)?.textContent ?? '';
+          return /colour reference/.test(row(other)) && /matched to the reference/.test(row(chosen));
+        });
+      const swapped = await zip();
+      const offMs = await timed(() => box.click(), () => !notes().some((n) => /colour reference|matched to the reference/.test(n)));
+      const off = await zip();
+      return { raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
+    );
+    if (strip.error) {
+      check('cyanotype gray strip', false, strip.error);
+    } else {
+      const s = strip as unknown as Record<string, string> & typeof strip & { other: string };
+      const [raw, on, swapped, off] = await Promise.all(
+        [s.raw, s.on, s.swapped, s.off].map((b) => readProcessedZip(b)),
+      );
+      // número de hoja de cada copia, por su nombre en el selector ("sheet N · archivo")
+      const sheetNum = (scan: string): number =>
+        Number(/sheet (\d+)/.exec((s.options ?? []).find((o) => o.includes(scan)) ?? '')?.[1]);
+      const same = (a: ProcessedZip, b: ProcessedZip, sheet: number): boolean[] =>
+        Object.keys(b.frames)
+          .filter((n) => sheetOf.get(n) === sheet)
+          .map((n) => a.frames[n]?.sha256 === b.frames[n]?.sha256);
+      const refA = sheetNum(s.chosen ?? '');
+      const refB = sheetNum(s.other);
+      const onRef = same(on, raw, refA);
+      const onOther = same(on, raw, refB);
+      const swRef = same(swapped, raw, refB);
+      const swOther = same(swapped, raw, refA);
+      const offAll = [...same(off, raw, refA), ...same(off, raw, refB)];
+      check(
+        'cyanotype strip: reference defaults to the lowest sheet, both prints offered',
+        refA === 1 && (s.options ?? []).length === 2,
+        `reference sheet ${refA}; options ${(s.options ?? []).join(' | ')}`,
+      );
+      check(
+        'cyanotype strip on: the reference keeps its scanned frames, the other print is recoloured',
+        onRef.length > 0 && onRef.every(Boolean) && onOther.length > 0 && !onOther.some(Boolean),
+        `${onRef.filter(Boolean).length}/${onRef.length} reference frames untouched, ${onOther.filter((x) => !x).length}/${onOther.length} of the other recoloured, in ${s.onMs} ms`,
+      );
+      check(
+        'cyanotype strip: choosing the other print as reference recolours the first instead',
+        swRef.every(Boolean) && swRef.length > 0 && !swOther.some(Boolean) && swOther.length > 0,
+        `${swRef.filter(Boolean).length}/${swRef.length} new-reference frames untouched, ${swOther.filter((x) => !x).length}/${swOther.length} of the first recoloured, in ${s.swapMs} ms`,
+      );
+      check(
+        'cyanotype strip off: every frame back to its scan',
+        offAll.length > 0 && offAll.every(Boolean),
+        `${offAll.filter(Boolean).length}/${offAll.length} frames as scanned, in ${s.offMs} ms`,
+      );
+      await writeFile(
+        join(shots, 'gray-strip.json'),
+        `${JSON.stringify({ options: s.options, reference: s.chosen, swappedTo: s.other, ms: { on: s.onMs, swap: s.swapMs, off: s.offMs }, notes: s.notes, frames: { raw: raw.frames, on: on.frames, swapped: swapped.frames, off: off.frames } }, null, 2)}\n`,
+      );
+    }
+    await shot('gray-strip');
+  }
+
   await screen('calibration');
   await screen('help');
   return { checks, mov: movBytes, mp4: Buffer.from(mp4.b64, 'base64') };

@@ -140,15 +140,15 @@ el resultado en ① en <strong>Perfil de impresora</strong>.</p>
 revélala, déjala secar y escanea la copia azul. La app mide cómo responden tu
 papel y tu química y hace una corrección para que los tonos salgan
 parejos. Sigue el método
-<a href="https://www.easydigitalnegatives.com/" rel="noopener">Easy Digital
-Negatives</a>, con una tira de 21 parches o una carta de 256 tonos. Si
-escaneaste la película en vez de la copia, o la carta salió casi sin
-diferencia entre claro y oscuro, la app te lo dice en vez de guardar una
-curva mala. Elige el resultado en ① en <strong>Curva de compensación</strong>.</p>
-<p><strong>ColorBlocker</strong>: encuentra qué color de tinta bloquea mejor la luz UV
-en tu impresora (no siempre es el negro) y hace un degradado con él. Elige
-el resultado en ① en <strong>Perfil de color de tinta</strong>, para que tus negativos
-se impriman en ese color.</p>
+<a href="http://www.easydigitalnegatives.com/" rel="noopener">Easy Digital
+Negatives</a>, con su carta de 256 tonos. Basta con una copia. En
+<strong>Opciones avanzadas</strong> puedes promediar varias copias, o hacer
+una segunda pasada para una curva más fina: elige la curva que guardaste en
+<strong>Curva ya aplicada a la carta</strong>, imprime la nueva carta y
+analízala igual; usa la curva que sale en lugar de la primera. Si escaneaste la película en vez de la
+copia, o la carta salió casi sin diferencia entre claro y oscuro, la app te
+lo dice en vez de guardar una curva mala. Elige el resultado en ① en
+<strong>Curva de compensación</strong>.</p>
 
 <h3>Consejos de cianotipia</h3>
 <ul>

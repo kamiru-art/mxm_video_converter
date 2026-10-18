@@ -13,8 +13,8 @@ use crate::layoutfile;
 use crate::pdf::PdfBuilder;
 use crate::photo::FramePixels;
 use crate::scanproc::{
-    base_report, detect_scan, finish_scan, process_scan, resolve_markers, FinishInput, LocalShift,
-    ScanOptions, MAX_IMAGE_PIXELS,
+    apply_level_curves, base_report, detect_scan, finish_scan, patch_curves, process_scan,
+    resolve_markers, FinishInput, LocalShift, ScanOptions, MAX_IMAGE_PIXELS,
 };
 use crate::sheet::{self, FrameInput, Settings};
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -101,11 +101,27 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
     Ok(out)
 }
 
+/// Cuántas hojas distingue la identidad de los marcadores con estos ajustes
+/// (null si la identidad va por QR o no hay registro).
+#[wasm_bindgen]
+pub fn marker_capacity(settings_json: &str) -> Result<JsValue, JsValue> {
+    let s = parse_settings(settings_json)?;
+    Ok(sheet::marker_capacity(&s).map_or(JsValue::NULL, |c| JsValue::from_f64(c as f64)))
+}
+
 /// Información de layout para la interfaz (páginas, celdas, avisos).
 #[wasm_bindgen]
 pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result<String, JsValue> {
     let s = parse_settings(settings_json)?;
     let l = sheet::build_layout(&s, (first_w, first_h)).map_err(err)?;
+    let mut avisos = sheet::cyanotype_size_warnings(&s);
+    // la tira va en todas las hojas o en ninguna: si no cabe, en ninguna
+    if s.gray_patch_on && l.patch_strip.is_none() {
+        avisos.push(
+            "The gray strip does not fit beside the markers, so no sheet will carry it. Use smaller markers or a larger page."
+                .to_string(),
+        );
+    }
     Ok(json!({
         "page_w": l.page_w,
         "page_h": l.page_h,
@@ -117,7 +133,7 @@ pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result
         "cell_h": l.cell_h,
         "img_area_h": l.img_area_h,
         "grid_swapped": (l.cols, l.rows) != (s.cols, s.rows),
-        "avisos": sheet::cyanotype_size_warnings(&s),
+        "avisos": avisos,
         "marker_capacity": sheet::marker_capacity(&s),
     })
     .to_string())
@@ -349,9 +365,6 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     if let Some(b) = opts_v.get("resize_to_original").and_then(|v| v.as_bool()) {
         opts.resize_to_original = b;
     }
-    if let Some(b) = opts_v.get("normalize_patches").and_then(|v| v.as_bool()) {
-        opts.normalize_patches = b;
-    }
     if let Some(b) = opts_v.get("fine_align").and_then(|v| v.as_bool()) {
         opts.fine_align = b;
     }
@@ -468,6 +481,34 @@ pub fn scan_process(
     let (img, _alpha) = codecs::decode(scan_bytes).map_err(err)?;
     let out = process_scan(img, scan_name, &layout, &opts, &claims_map);
     Ok(scan_output_to_js(out, wants_thumbs(opts_json)))
+}
+
+/// Normaliza UN recorte ya guardado con la tira de grises de su escaneo:
+/// `measured` y `niveles` son los `parche_medido` / `parche_niveles` del
+/// informe; `reference_json`, en cianotipia, la tira de la copia de
+/// referencia (`null` en modo normal). Devuelve {png, thumb}. Es lo único que
+/// cuesta activar la opción o cambiar de referencia: ni detectar ni enderezar.
+#[wasm_bindgen]
+pub fn frame_levels(
+    png: &[u8],
+    measured_json: &str,
+    niveles_json: &str,
+    cyan: bool,
+    reference_json: &str,
+) -> Result<JsValue, JsValue> {
+    let measured: Vec<[f64; 3]> = serde_json::from_str(measured_json).map_err(err)?;
+    let niveles: Vec<i64> = serde_json::from_str(niveles_json).map_err(err)?;
+    let reference: Option<Vec<[f64; 3]>> = serde_json::from_str(reference_json).map_err(err)?;
+    let curves = patch_curves(&measured, &niveles, cyan, reference.as_deref())
+        .ok_or_else(|| err("The gray strip of this scan cannot be matched."))?;
+    let (mut img, _alpha) = codecs::decode(png).map_err(err)?;
+    apply_level_curves(&mut img, &curves);
+    let obj = Object::new();
+    let out = codecs::encode_png_dyn(&img);
+    Reflect::set(&obj, &"png".into(), &Uint8Array::from(out.as_slice())).ok();
+    let jpg = thumb_jpeg(&img);
+    Reflect::set(&obj, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
+    Ok(obj.into())
 }
 
 /// Fase de detección para el camino con warp por WebGPU: recibe el RGBA de
@@ -652,90 +693,65 @@ pub fn analyze_printer_test(
         .map_err(err)
 }
 
-fn parse_stops(stops_json: &str) -> Option<Vec<cyan::InkStop>> {
-    let raw: Option<Vec<(f64, String)>> = serde_json::from_str(stops_json).ok();
-    raw.map(|ss| ss.iter().map(|(d, c)| (*d, cyan::hex_to_rgb(c))).collect())
+/// La curva con la que se imprime la carta de la segunda pasada ("null" o
+/// vacío: primera pasada).
+fn parse_prior(prior_json: &str) -> Result<Option<Vec<f64>>, JsValue> {
+    let t = prior_json.trim();
+    if t.is_empty() || t == "null" {
+        return Ok(None);
+    }
+    // una curva ilegible NO es una primera pasada: la carta y el análisis
+    // saldrían sin ella y la curva nueva estaría mal sin ningún aviso
+    let raw: Vec<f64> = serde_json::from_str(t).map_err(|_| {
+        err("The curve already on the chart is not a valid curve. Pick another one, or none.")
+    })?;
+    calib::prior_curve(&raw).map(Some).map_err(err)
 }
 
 #[wasm_bindgen]
-pub fn cyan_strip_png(
+pub fn cyan_chart_png(
     paper: &str,
     dpi: u32,
     ink_color: &str,
-    mirror: bool,
-    target: &str,
-    stops_json: &str,
-    block_color: &str,
-) -> Vec<u8> {
-    let stops = parse_stops(stops_json);
-    let bc = if block_color.is_empty() {
-        None
-    } else {
-        Some(block_color)
-    };
-    codecs::encode_png_rgb(&calib::render_cyanotype_strip(
+    prior_json: &str,
+) -> Result<Vec<u8>, JsValue> {
+    let prior = parse_prior(prior_json)?;
+    Ok(codecs::encode_png_rgb(&calib::render_cyanotype_chart(
         paper,
         dpi,
         ink_color,
-        mirror,
-        calib::CYANO_STEPS,
-        target,
-        stops.as_deref(),
-        bc,
-    ))
+        prior.as_deref(),
+    )))
 }
 
+/// `scans`: un Uint8Array por copia escaneada de la carta; se promedian.
 #[wasm_bindgen]
-pub fn analyze_cyan_strip(
-    scan_bytes: &[u8],
+pub fn analyze_cyan_chart(
+    scans: Array,
     paper: &str,
     dpi: u32,
-    target: &str,
     ink_color: &str,
-    stops_json: &str,
-    block_color: &str,
+    prior_json: &str,
 ) -> Result<String, JsValue> {
-    let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
-    let stops = parse_stops(stops_json);
-    let bc = if block_color.is_empty() {
-        None
-    } else {
-        Some(block_color)
-    };
-    calib::analyze_cyanotype_strip(
-        img,
+    let prior = parse_prior(prior_json)?;
+    let n = scans.length();
+    let imgs = (0..n).map(|k| {
+        let bytes = Uint8Array::new(&scans.get(k)).to_vec();
+        codecs::decode(&bytes).map(|(img, _)| img)
+    });
+    calib::analyze_cyanotype_chart(
+        imgs,
         paper,
         dpi,
-        calib::CYANO_STEPS,
-        target,
         if ink_color.is_empty() {
             None
         } else {
             Some(ink_color)
         },
-        stops.as_deref(),
-        bc,
+        prior.as_deref(),
     )
     .map(|v| v.to_string())
     .map_err(err)
-}
-
-#[wasm_bindgen]
-pub fn colorblocker_png(paper: &str, dpi: u32, mirror: bool, block_color: &str) -> Vec<u8> {
-    let bc = if block_color.is_empty() {
-        None
-    } else {
-        Some(block_color)
-    };
-    codecs::encode_png_rgb(&calib::render_colorblocker(paper, dpi, mirror, bc))
-}
-
-#[wasm_bindgen]
-pub fn analyze_colorblocker(scan_bytes: &[u8], paper: &str, dpi: u32) -> Result<String, JsValue> {
-    let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
-    calib::analyze_colorblocker(img, paper, dpi)
-        .map(|v| v.to_string())
-        .map_err(err)
 }
 
 // ── PDF combinado ───────────────────────────────────────────────

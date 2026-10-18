@@ -1,13 +1,13 @@
-// Fase ③ — Calibración: perfil de impresora, curva de cianotipia, ColorBlocker.
+// Fase ③ — Calibración: perfil de impresora y curva de cianotipia.
 
 import { errMsg } from './errors.ts';
 import { tr } from './i18n.ts';
 import { run } from './pool.ts';
 import type { ProfileKind, ProfileMap } from './store.ts';
 import * as store from './store.ts';
-import type { ColorProfile, CyanProfile, PrinterProfile } from './types.ts';
-import type { Child } from './ui.ts';
-import { check, download, dropzone, el, field, numberInput, select, toast } from './ui.ts';
+import type { CyanProfile, PrinterProfile } from './types.ts';
+import type { Child, SelectOption } from './ui.ts';
+import { download, dropzone, el, field, numberInput, select, setOptions, toast } from './ui.ts';
 
 const PAPERS = ['A4', 'A3', 'A5', 'Letter'];
 
@@ -29,6 +29,7 @@ function calibCard(title: string, intro: string, ...body: Child[]): HTMLDivEleme
 function profileSaver<K extends ProfileKind>(
   kind: K,
   getData: () => ProfileMap[K] | null,
+  onSaved?: () => void,
 ): HTMLDivElement {
   const name = el('input', { type: 'text', placeholder: 'profile name' });
   const btn = el(
@@ -51,6 +52,7 @@ function profileSaver<K extends ProfileKind>(
           return;
         }
         toast(`Profile “${n}” saved. You can now use it in phase ①.`, 'ok');
+        onSaved?.();
       },
     },
     'Save profile',
@@ -219,19 +221,41 @@ export function mountPhase3(root: HTMLElement): void {
     profileSaver('impresora', () => aResult),
   );
 
-  // ── B. Curva de cianotipia ────────────────────────────────
+  // ── B. Curva de cianotipia (carta EDN 2.2, 256 tonos) ─────
   const bPaper = select(PAPERS, 'A4');
   const bDpi = numberInput(300, { min: 150, max: 600 });
-  const bTarget = select(
-    [
-      ['kamiru21', '21-patch strip (quick)'],
-      ['edn256', 'EDN 2.2 chart, 256 tones (fine)'],
-    ],
-    'kamiru21',
-  );
   const bInk = el('input', { type: 'color', value: '#000000' });
-  const bMirror = check('Mirrored (like your real negatives)', true);
+  // Segunda pasada: la carta se imprime con una curva ya guardada y el
+  // análisis mide lo que esa curva no corrigió. La curva que sale ya la
+  // incluye: se guarda y se usa EN LUGAR de la primera.
+  const priorOptions = (): SelectOption[] => [
+    ['', '(none: first pass)'],
+    ...store.listProfiles('cianotipia').map((n): SelectOption => [n, n]),
+  ];
+  const bPrior = select(priorOptions(), '');
+  // los nombres los puso el usuario: el traductor (i18n.ts) no los toca
+  bPrior.dataset.i18n = 'names';
+  const refreshPriors = (): void => {
+    const keep = bPrior.value;
+    setOptions(bPrior, priorOptions());
+    bPrior.value = store.listProfiles('cianotipia').includes(keep) ? keep : '';
+  };
+  const priorLut = (): number[] | null =>
+    bPrior.value ? (store.loadProfile('cianotipia', bPrior.value)?.lut ?? null) : null;
+  /** La curva (su JSON, no el nombre del perfil: un perfil guardado encima
+   *  con el mismo nombre ya es otra curva) con la que se descargó la última
+   *  carta en esta sesión ('' = sin curva; null = no se descargó ninguna):
+   *  medir con otra daría una curva equivocada sin ningún error. */
+  let downloadedWith: string | null = null;
   let bResult: CyanProfile | null = null;
+  /** Zona de un archivo a la vista, pero acepta varios (se promedian, ver
+   *  «Advanced options»): con `multiple` mostraría además el botón de carpeta. */
+  const bZone = (opts: Parameters<typeof dropzone>[0]): HTMLDivElement => {
+    const zone = dropzone(opts);
+    const input = zone.querySelector('input[type=file]');
+    if (input instanceof HTMLInputElement) input.multiple = true;
+    return zone;
+  };
   const bOut = el('div');
   const bCanvas = el('canvas', {
     class: 'curveplot',
@@ -244,29 +268,51 @@ export function mountPhase3(root: HTMLElement): void {
   document.addEventListener('mxm:lang', () => {
     if (bResult) drawCurve(bCanvas, { respuesta: bResult.respuesta, lut: bResult.lut });
   });
+  root.addEventListener('mxm:activated', refreshPriors);
   const cardB = calibCard(
     'Cyanotype curve',
     'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve ' +
-      '(Easy Digital Negatives method). Expose the chart exactly as you expose your work.',
+      'with the 256-tone chart of Easy Digital Negatives 2.2. Expose the chart exactly as you expose your work.',
     el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
-    field('Chart', bTarget),
-    el('div', { class: 'row tight' }, field('Negative ink', bInk), bMirror.label),
+    field('Negative ink', bInk),
+    // lo opcional va plegado: a la vista, la carta se ve como un solo paso
+    el(
+      'details',
+      { class: 'adv' },
+      el('summary', {}, 'Advanced options'),
+      el(
+        'div',
+        { class: 'hint' },
+        'Several prints: drop the scans of several prints of the same chart together and the app averages them. It helps when a print came out uneven.',
+      ),
+      field('Curve already on the chart', bPrior),
+      el(
+        'div',
+        { class: 'hint' },
+        'Second pass: pick the curve you saved from the first chart. The chart prints with it, and the new analysis corrects what it left. Save the result and use it instead of the first curve.',
+      ),
+    ),
     el(
       'button',
       {
         class: 'btn ghost small',
         onclick: async () => {
           try {
-            const png = await run('cyan_strip_png', {
+            const prior = priorLut();
+            const png = await run('cyan_chart_png', {
               paper: bPaper.value,
               dpi: parseInt(bDpi.value, 10),
               ink: bInk.value,
-              mirror: bMirror.input.checked,
-              target: bTarget.value,
+              prior: prior ? JSON.stringify(prior) : 'null',
             });
-            download(png, 'cyanotype_chart.png', 'image/png');
+            downloadedWith = prior ? JSON.stringify(prior) : '';
+            download(
+              png,
+              prior ? 'cyanotype_chart_2nd_pass.png' : 'cyanotype_chart.png',
+              'image/png',
+            );
             toast(
-              'Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).',
+              'Print on transparency film at 100 %, in colour mode (not grayscale), expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).',
               'ok',
             );
           } catch (e) {
@@ -280,22 +326,35 @@ export function mountPhase3(root: HTMLElement): void {
     el(
       'div',
       { style: 'margin-top:10px' },
-      dropzone({
+      bZone({
         label: 'Drop the SCAN of the blue print',
         accept: 'image/*,.tif,.tiff',
-        onFiles: async ([f]) => {
+        onFiles: async (files) => {
           try {
-            const bytes = new Uint8Array(await f.arrayBuffer());
+            const prior = priorLut();
+            if (
+              downloadedWith !== null &&
+              downloadedWith !== (prior ? JSON.stringify(prior) : '')
+            ) {
+              toast(
+                'The last chart you downloaded was printed with a different curve: another “Curve already on the chart”, or that profile was saved over since. Pick the curve it was printed with, or download the chart again.',
+                'err',
+              );
+              return;
+            }
+            const scans = await Promise.all(
+              files.map(async (f) => new Uint8Array(await f.arrayBuffer())),
+            );
             const res = await run(
-              'analyze_cyan_strip',
+              'analyze_cyan_chart',
               {
-                bytes,
+                scans,
                 paper: bPaper.value,
                 dpi: parseInt(bDpi.value, 10),
-                target: bTarget.value,
                 ink: bInk.value,
+                prior: prior ? JSON.stringify(prior) : 'null',
               },
-              [bytes.buffer],
+              scans.map((b) => b.buffer),
             );
             const result = JSON.parse(res) as CyanProfile;
             result.respuesta = result.respuesta ?? [];
@@ -306,7 +365,21 @@ export function mountPhase3(root: HTMLElement): void {
               el(
                 'div',
                 { class: 'allok-box' },
-                `Measured dynamic range: ${((result.rango_dinamico ?? 0) * 100).toFixed(0)} % · 256-point curve built.`,
+                el(
+                  'div',
+                  {},
+                  `Measured dynamic range: ${((result.rango_dinamico ?? 0) * 100).toFixed(0)} % · 256-point curve built.`,
+                ),
+                (result.escaneos ?? 1) > 1
+                  ? el('div', {}, `Average of ${result.escaneos} prints.`)
+                  : '',
+                result.pasada === 2
+                  ? el(
+                      'div',
+                      {},
+                      'Second pass: this curve already includes the first one. Save it and use it instead.',
+                    )
+                  : '',
               ),
               result.notas?.length
                 ? el(
@@ -324,104 +397,7 @@ export function mountPhase3(root: HTMLElement): void {
     ),
     bCanvas,
     bOut,
-    profileSaver('cianotipia', () => bResult),
-  );
-
-  // ── C. ColorBlocker ───────────────────────────────────────
-  const cPaper = select(PAPERS, 'A4');
-  const cDpi = numberInput(300, { min: 150, max: 600 });
-  const cMirror = check('Mirrored', true);
-  let cResult: ColorProfile | null = null;
-  const cOut = el('div');
-  const cardC = calibCard(
-    'EDN ColorBlocker',
-    '36 hues × 21 variants: finds the ink color that blocks UV best on your printer (not always black) and builds a 3-stop gradient. ' +
-      'Print at maximum quality: a draft setting ruins this chart.',
-    el('div', { class: 'row' }, field('Paper', cPaper), field('DPI', cDpi)),
-    cMirror.label,
-    el(
-      'button',
-      {
-        class: 'btn ghost small',
-        onclick: async () => {
-          try {
-            const png = await run('colorblocker_png', {
-              paper: cPaper.value,
-              dpi: parseInt(cDpi.value, 10),
-              mirror: cMirror.input.checked,
-            });
-            download(png, 'colorblocker.png', 'image/png');
-            toast(
-              'Print on transparency film at 100 % at MAXIMUM quality, expose, develop, dry and scan the blue print.',
-              'ok',
-            );
-          } catch (e) {
-            console.error(e);
-            toast(`Could not build the ColorBlocker chart: ${errMsg(e)}`, 'err');
-          }
-        },
-      },
-      'Download ColorBlocker chart',
-    ),
-    el(
-      'div',
-      { style: 'margin-top:10px' },
-      dropzone({
-        label: 'Drop the SCAN of the blue print',
-        accept: 'image/*,.tif,.tiff',
-        onFiles: async ([f]) => {
-          try {
-            const bytes = new Uint8Array(await f.arrayBuffer());
-            const res = await run(
-              'analyze_colorblocker',
-              {
-                bytes,
-                paper: cPaper.value,
-                dpi: parseInt(cDpi.value, 10),
-              },
-              [bytes.buffer],
-            );
-            const result = JSON.parse(res) as ColorProfile;
-            cResult = result;
-            const sw = (hex: string): HTMLSpanElement =>
-              el('span', {
-                style: `display:inline-block; width:22px; height:22px; border-radius:4px; background:${hex}; border:1px solid #0003; vertical-align:middle; margin:0 4px`,
-                title: hex,
-              });
-            cOut.replaceChildren(
-              el(
-                'div',
-                { class: 'allok-box' },
-                el(
-                  'div',
-                  {},
-                  'Best UV blocker: ',
-                  sw(result.mejor_color),
-                  el('code', {}, result.mejor_color),
-                ),
-                el(
-                  'div',
-                  { style: 'margin-top:4px' },
-                  'Gradient (shadows → highlights): ',
-                  ...(result.stops ?? []).map((s) => sw(s[1])),
-                ),
-              ),
-              result.notas?.length
-                ? el(
-                    'ul',
-                    { class: 'warnlist' },
-                    result.notas.map((n) => el('li', {}, n)),
-                  )
-                : '',
-            );
-          } catch (e) {
-            toast(errMsg(e), 'err');
-          }
-        },
-      }),
-    ),
-    cOut,
-    profileSaver('cianotipia_color', () => cResult),
+    profileSaver('cianotipia', () => bResult, refreshPriors),
   );
 
   // ── exportar/importar perfiles ────────────────────────────
@@ -479,5 +455,5 @@ export function mountPhase3(root: HTMLElement): void {
     ),
   );
 
-  root.append(el('div', { class: 'calib-grid' }, cardA, cardB, cardC, cardD));
+  root.append(el('div', { class: 'calib-grid' }, cardA, cardB, cardD));
 }
