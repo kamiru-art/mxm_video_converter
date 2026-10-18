@@ -45,10 +45,8 @@ squares around the edges of the sheet. The app uses them to straighten each
 scan and to know which sheet it is, so you can scan in any order. With 8
 markers you can paint over some of them: the app needs at least 3 clean ones
 to straighten the scan.</p>
-<p>The markers can tell apart up to 144 sheets with the default settings, and
-the preview warns you if you go over. For longer projects, turn on
-<strong>&ldquo;Add a QR code per frame&rdquo;</strong> in the Registration
-section.</p>
+<p>The markers can tell apart up to 144 sheets with the default settings.
+Above that, the app adds a QR code to each frame by itself.</p>
 <p>You can export the sheets as <strong>PNG</strong>, <strong>PDF</strong>
 (ready to print), <strong>TIFF</strong>, or several at once. The download
 always includes a file ending in <code>_layout.json</code>, which you will
@@ -127,13 +125,11 @@ quality, so keep a lossless copy too.</li>
 </ul>
 <p>If a few frames come out a different size, the app fits them to the rest
 without stretching them.</p>
-<p>If some frames are missing, the video skips them and cuts out their
-sound, so each drawing keeps its own sound. This helps when you duplicated
-frames to cut them out and lay them over others. If your sound was already
-edited without those frames, untick <strong>Cut their sound too</strong> and
-it plays without cuts. You can drop a sound file in place of the video. If
-you untick <strong>Skip the missing frames</strong>, each gap shows the
-drawing before it, and the video keeps the length of the original.</p>
+<p>If some frames are missing, <strong>Missing frames</strong> chooses what
+happens: skip them and their sound, so each drawing keeps its own sound; skip
+them with the sound <em>without cuts</em>, for a sound already edited without
+those frames; or show the drawing before, so the video keeps the length of the
+original. You can drop a sound file in place of the video.</p>
 
 <h3>Calibration (when you need precision)</h3>
 <p>Each of these tools gives you a result. Give it a name, press <strong>Save

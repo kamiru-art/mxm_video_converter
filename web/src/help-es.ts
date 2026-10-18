@@ -30,10 +30,8 @@ cuadrados alrededor de los bordes de la hoja. La app los usa para enderezar cada
 escaneo y para saber qué hoja es, así que puedes escanear en cualquier orden. Con 8
 marcadores puedes pintar encima de algunos: la app necesita al menos 3 limpios
 para enderezar el escaneo.</p>
-<p>Los marcadores pueden distinguir hasta 144 hojas con los ajustes predeterminados, y
-la vista previa te avisa si te pasas. Para proyectos más largos, activa
-<strong>&ldquo;Agregar un código QR por fotograma&rdquo;</strong> en la sección
-Registro.</p>
+<p>Los marcadores pueden distinguir hasta 144 hojas con los ajustes predeterminados.
+Por encima de eso, la app agrega sola un código QR a cada fotograma.</p>
 <p>Puedes exportar las hojas como <strong>PNG</strong>, <strong>PDF</strong>
 (listo para imprimir), <strong>TIFF</strong>, o varios a la vez. La descarga
 siempre incluye un archivo que termina en <code>_layout.json</code>, que
@@ -112,13 +110,11 @@ calidad, así que guarda también una copia sin pérdida.</li>
 </ul>
 <p>Si unos pocos fotogramas salen de otro tamaño, la app los ajusta al resto
 sin estirarlos.</p>
-<p>Si faltan fotogramas, el video los salta y quita su sonido, así cada
-dibujo conserva el suyo. Sirve cuando duplicaste fotogramas para recortarlos y
-ponerlos encima de otros. Si tu sonido ya está editado sin esos fotogramas,
-desmarca <strong>Cortar también su sonido</strong> y sonará sin cortes. Puedes
-soltar un archivo de sonido en lugar del video. Si desmarcas <strong>Saltar
-los fotogramas que faltan</strong>, cada hueco muestra el dibujo anterior y el
-video dura lo mismo que el original.</p>
+<p>Si faltan fotogramas, <strong>Fotogramas que faltan</strong> elige qué pasa:
+saltarlos con su sonido, así cada dibujo conserva el suyo; saltarlos con el
+sonido <em>sin cortes</em>, para un sonido ya editado sin esos fotogramas; o
+mostrar el dibujo anterior, así el video dura lo mismo que el original. Puedes
+soltar un archivo de sonido en lugar del video.</p>
 
 <h3>Calibración (cuando necesitas precisión)</h3>
 <p>Cada una de estas herramientas te da un resultado. Ponle un nombre, pulsa <strong>Guardar

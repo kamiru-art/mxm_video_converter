@@ -174,8 +174,6 @@ export interface ScanOutput {
   sin_identificar: CoreFrame[];
   overlay: Bytes | null;
   overlay_thumb?: Bytes;
-  /** la hoja enderezada y reducida, sólo si lleva la tira de grises */
-  sheet?: Bytes;
 }
 
 /** Salida (JSON) de scan_detect: la homografía para el warp en la GPU y el

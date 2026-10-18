@@ -128,27 +128,19 @@ export function mountPhase4(root: HTMLElement): void {
   const layoutInfo = el('div', { class: 'hint' });
   const stateInfo = el('div', { class: 'hint' });
   const missingBox = el('div');
-  // qué hacer con los huecos (por defecto se saltan, con su sonido): los
-  // fotogramas, y aparte su sonido, porque el
+  // qué hacer con los huecos (por defecto se saltan, con su sonido): el
   // sonido puede ser el del original (hay que cortarlo igual) o uno ya
   // editado sin esos fotogramas (tiene que sonar seguido)
-  const skipCheck = check('Skip the missing frames', true);
-  const cutCheck = check('Cut their sound too', true);
-  const gapsInfo = el('div', { class: 'hint', 'aria-live': 'polite' });
-  const gapsBox = el(
-    'div',
-    { hidden: '' },
-    el('div', { class: 'row' }, skipCheck.label, cutCheck.label),
-    gapsInfo,
+  const gapSel = select(
+    [
+      ['cut', 'Skip them and their sound'],
+      ['keep', 'Skip them, sound without cuts'],
+      ['hold', 'Show the drawing before'],
+    ],
+    'cut',
   );
-  function showGaps(): void {
-    cutCheck.input.disabled = !skipCheck.input.checked;
-    gapsInfo.textContent = !skipCheck.input.checked
-      ? 'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.'
-      : cutCheck.input.checked
-        ? 'The missing frames and their sound are left out. Each drawing keeps its own sound, and the rest joins with no silent gaps.'
-        : 'The missing frames are left out, and the sound plays without cuts. Use this when the sound was already edited without those frames.';
-  }
+  const skipGaps = (): boolean => gapSel.value !== 'hold';
+  const gapsBox = el('div', { hidden: '' }, field('Missing frames', gapSel));
   const fpsIn = numberInput(12, { min: 0.1, step: 0.1 });
   // los dos primeros guardan los mismos píxeles, sin pérdida, y se elige
   // dónde se van a abrir; el tercero es la copia ligera para ver
@@ -243,7 +235,7 @@ export function mountPhase4(root: HTMLElement): void {
     const pick = audioPick();
     if (!pick || !audioCheck.input.checked) return undefined;
     const start = parseFloat(audioStartIn.value);
-    const keep = seq.keep && cutCheck.input.checked ? seq.keep : undefined;
+    const keep = seq.keep && gapSel.value === 'cut' ? seq.keep : undefined;
     return { file: pick.file, start: Number.isFinite(start) && start > 0 ? start : 0, keep };
   }
   function refreshAudioInfo(): void {
@@ -272,7 +264,7 @@ export function mountPhase4(root: HTMLElement): void {
    *  dicen las casillas. */
   function sequenceOf(l: Layout): Sequence & { missing: string[] } {
     const { slots, missing } = framesFromTimeline(l, availableMap());
-    return { ...resolveGaps(slots, skipCheck.input.checked), missing };
+    return { ...resolveGaps(slots, skipGaps()), missing };
   }
 
   function currentLayout(): Layout | null {
@@ -411,13 +403,7 @@ export function mountPhase4(root: HTMLElement): void {
       toast('There are no frames to build the video.', 'err');
       return;
     }
-    const gaps = !skipCheck.input.checked
-      ? 'Each gap shows the drawing before it.'
-      : cutCheck.input.checked
-        ? 'The video skips the gaps and their sound.'
-        : 'The video skips the gaps, and the sound plays without cuts.';
-    if (missing.length && !confirm(tr(`Frames missing: ${missing.length}. ${gaps} Continue?`)))
-      return;
+    if (missing.length && !confirm(tr(`Frames missing: ${missing.length}. Continue?`))) return;
     // el plan llega solo (refreshPlan); en un teléfono, si aún no está, se
     // espera: sin él no hay aviso. Lo pesado es conformar un fotograma: el
     // máster sin pérdida solo lo hace con los que no encajan, el MP4 los
@@ -647,13 +633,8 @@ export function mountPhase4(root: HTMLElement): void {
   );
 
   // saltar o no cambia cuántos fotogramas lleva el video: el plan también
-  skipCheck.input.addEventListener('change', () => {
-    showGaps();
-    refresh();
-  });
-  cutCheck.input.addEventListener('change', showGaps);
+  gapSel.addEventListener('change', refresh);
   showQuality();
-  showGaps();
   root.append(el('div', { class: 'workbench' }, paper, bench));
   root.addEventListener('mxm:activated', refresh);
   refresh();

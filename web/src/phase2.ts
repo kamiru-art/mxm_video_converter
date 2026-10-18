@@ -53,12 +53,11 @@ export interface ResultEntry {
   /** qué normalización llevan `frames` (ver levelsKey) */
   levelsKey?: string;
   levelNote?: { text: string; warn: boolean };
-  /** la hoja enderezada y reducida: el «antes» de la tira de grises */
-  sheet?: Blob;
-  /** la misma, normalizada: el «después» */
-  sheetAfter?: LabeledPng;
+  /** el overlay de alineación normalizado; el visor deja ver `overlay`, el
+   *  de antes, con el botón «Not normalized» */
+  overlayAfter?: LabeledPng;
   /** juegos normalizados ya escritos, por clave */
-  levelCache?: Map<string, { frames: LabeledPng[]; sheet?: LabeledPng }>;
+  levelCache?: Map<string, { frames: LabeledPng[]; overlay?: LabeledPng }>;
 }
 
 export interface Phase2State {
@@ -220,6 +219,16 @@ export function mountPhase2(root: HTMLElement): void {
     class: 'btn ghost small',
     style: 'display:none; margin-top:6px',
   });
+  // al lado, no en el informe: rehacer no obliga a bajar hasta el final
+  const clearBtn = el(
+    'button',
+    {
+      class: 'btn ghost small',
+      style: 'display:none; margin-top:6px',
+      onclick: () => clearReport(),
+    },
+    'Clear results',
+  );
   function refreshReprocess(): void {
     reprocessBtn.style.display = loadedScans.size ? '' : 'none';
     reprocessBtn.textContent = `Reprocess the ${loadedScans.size} loaded scan(s) with the current options`;
@@ -500,7 +509,6 @@ export function mountPhase2(root: HTMLElement): void {
       })),
       overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
       overlayThumb: r.overlay_thumb ? asBlob(r.overlay_thumb, 'image/jpeg') : undefined,
-      sheet: r.sheet ? asBlob(r.sheet, 'image/jpeg') : undefined,
       raw: frames,
       levelsKey: 'raw',
     };
@@ -766,12 +774,19 @@ export function mountPhase2(root: HTMLElement): void {
     for (const e of ph2.results) {
       if (e.overlay) {
         items.push({
-          data: e.overlay,
+          data: e.overlayAfter?.png ?? e.overlay,
+          alt: e.overlayAfter ? e.overlay : undefined,
           caption: `${e.result.scan}: green = marker found, red = missing, blue = frames, orange = QRs`,
         });
       }
+      // con la tira de grises puesta, cada recorte lleva su versión cruda
+      const raw = e.raw && e.frames !== e.raw ? new Map(e.raw.map((f) => [f.label, f.png])) : null;
       for (const f of e.shown ?? [])
-        items.push({ data: f.png, caption: `${e.result.scan} · ${f.label}` });
+        items.push({
+          data: f.png,
+          alt: raw?.get(f.label),
+          caption: `${e.result.scan} · ${f.label}`,
+        });
     }
     return items;
   }
@@ -787,7 +802,10 @@ export function mountPhase2(root: HTMLElement): void {
   }
 
   function buildResultRows(entry: ResultEntry): HTMLTableRowElement[] {
-    const { result: r, frames, sinIdentificar, overlay, overlayThumb } = entry;
+    const { result: r, frames, sinIdentificar, overlay, overlayAfter } = entry;
+    const overlayThumb = overlayAfter
+      ? (overlayAfter.thumb ?? overlayAfter.png)
+      : (entry.overlayThumb ?? overlay);
     const urls: string[] = [];
     entry.urls = urls;
     const trackUrl = (u: string): string => {
@@ -808,34 +826,8 @@ export function mountPhase2(root: HTMLElement): void {
         }),
         el('div', { class: 'tag' }, 'alignment'),
       );
-      t.addEventListener('click', () => openInGallery(overlay, r.scan));
+      t.addEventListener('click', () => openInGallery(overlayAfter?.png ?? overlay, r.scan));
       thumbs.append(t);
-    }
-    // antes y después de la tira, sólo con la normalización puesta: las
-    // flechas del visor pasan de uno a otro
-    const { sheet, sheetAfter } = entry;
-    if (sheet && sheetAfter) {
-      const pair = [
-        { data: sheet, caption: `${r.scan}: before` },
-        { data: sheetAfter.png, caption: `${r.scan}: after` },
-      ];
-      for (const [i, [img, tag]] of (
-        [
-          [sheet, 'before'],
-          [sheetAfter.thumb ?? sheetAfter.png, 'after'],
-        ] as const
-      ).entries()) {
-        const t = el(
-          'div',
-          { class: 'thumb clickable' },
-          el('img', { src: trackUrl(URL.createObjectURL(img)), alt: tag }),
-          el('div', { class: 'tag' }, tag),
-        );
-        t.addEventListener('click', () =>
-          lightbox(pair[i].data, pair[i].caption, { items: pair, index: i }),
-        );
-        thumbs.append(t);
-      }
     }
     for (const f of shown) {
       const t = el(
@@ -1013,7 +1005,7 @@ export function mountPhase2(root: HTMLElement): void {
           if (levelsAgain) break; // las opciones cambiaron: se rehace todo
           const key = levelsKey(e, ref);
           const cached = e.levelCache?.get(key);
-          let sheetAfter: LabeledPng | undefined;
+          let overlayAfter: LabeledPng | undefined;
           const raw = e.raw ?? [];
           let frames = raw;
           let note: ResultEntry['levelNote'];
@@ -1032,7 +1024,7 @@ export function mountPhase2(root: HTMLElement): void {
             };
           } else if (cached) {
             frames = cached.frames;
-            sheetAfter = cached.sheet;
+            overlayAfter = cached.overlay;
             note = {
               text: key.startsWith('cyan') ? 'Matched to the reference.' : 'Colours normalized.',
               warn: false,
@@ -1067,17 +1059,17 @@ export function mountPhase2(root: HTMLElement): void {
                 }),
               );
               frames = out;
-              if (e.sheet) {
-                const bytes = new Uint8Array(await e.sheet.arrayBuffer());
+              if (e.overlay) {
+                const bytes = new Uint8Array(await e.overlay.arrayBuffer());
                 const r = await run('frame_levels', { bytes, ...args }, [bytes.buffer]);
-                sheetAfter = {
-                  label: 'after',
+                overlayAfter = {
+                  label: 'alignment',
                   png: new Blob([r.png], { type: 'image/png' }),
                   thumb: new Blob([r.thumb], { type: 'image/jpeg' }),
                 };
               }
               e.levelCache = e.levelCache ?? new Map();
-              e.levelCache.set(key, { frames: out, sheet: sheetAfter });
+              e.levelCache.set(key, { frames: out, overlay: overlayAfter });
               note = {
                 text: cyan ? 'Matched to the reference.' : 'Colours normalized.',
                 warn: false,
@@ -1093,7 +1085,7 @@ export function mountPhase2(root: HTMLElement): void {
           replaceResult(e, {
             ...e,
             frames,
-            sheetAfter,
+            overlayAfter,
             // un fallo queda como recortes crudos: la próxima pasada lo reintenta
             levelsKey: failed ? 'raw' : key,
             levelNote: note,
@@ -1211,6 +1203,7 @@ export function mountPhase2(root: HTMLElement): void {
 
   function renderSummary(): void {
     const any = ph2.results.length > 0;
+    clearBtn.style.display = any ? '' : 'none';
     reportTable.style.display = any ? '' : 'none';
     downloadRow.style.display = any ? '' : 'none';
     renderConflicts();
@@ -1272,14 +1265,6 @@ export function mountPhase2(root: HTMLElement): void {
         },
       },
       'Download frames + report (ZIP)',
-    ),
-    el(
-      'button',
-      {
-        class: 'btn ghost-light small',
-        onclick: () => clearReport(),
-      },
-      'Clear results',
     ),
   );
   resultsBox.append(assignSlot, conflictSlot, missingSlot, reportScroll, downloadRow);
@@ -1419,6 +1404,7 @@ export function mountPhase2(root: HTMLElement): void {
     scansDz,
     demoBtn,
     reprocessBtn,
+    clearBtn,
     el('div', { class: 'row tight', style: 'justify-content:center' }, batchCancel.button),
     specsInfo,
     prog.root,

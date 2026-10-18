@@ -62,7 +62,6 @@ function scanTransfer(r: ScanOutput): Transferable[] {
   }
   if (r.overlay) transfer.push(r.overlay.buffer);
   if (r.overlay_thumb) transfer.push(r.overlay_thumb.buffer);
-  if (r.sheet) transfer.push(r.sheet.buffer);
   return transfer;
 }
 

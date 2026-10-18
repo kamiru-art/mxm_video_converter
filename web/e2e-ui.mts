@@ -725,11 +725,13 @@ async function runFlow(
     drop('.json', new File([${JSON.stringify(JSON.stringify(gapLayout))}], 'layout.json', { type: 'application/json' }));
     const fps = [...document.querySelectorAll('#view-video input[type=number]')][0];
     await ui.until(() => fps.value === '${GAP_FPS}', 10000, 'the fps of the dropped layout');
-    const checks = [...document.querySelectorAll('#view-video label.check')];
-    const skip = checks.find((l) => /Skip the missing frames/.test(l.textContent)).querySelector('input');
-    const cut = checks.find((l) => /Cut their sound too/.test(l.textContent)).querySelector('input');
-    // las dos vienen marcadas; para retener se desmarca la de saltar
-    const shown = skip.getClientRects().length > 0 && skip.checked && cut.checked && !cut.disabled;
+    const gap = [...document.querySelectorAll('#view-video select')].find((s) => [...s.options].some((o) => o.value === 'hold'));
+    // viene en saltar con su sonido
+    const shown = gap.getClientRects().length > 0 && gap.value === 'cut';
+    const pick = (v) => {
+      gap.value = v;
+      gap.dispatchEvent(new Event('change'));
+    };
     const kind = [...document.querySelectorAll('#view-video select')].find((s) => [...s.options].some((o) => o.value === 'frames'));
     const planText = (n) => ui.until(() => [...document.querySelectorAll('#view-video .hint')].map((h) => h.textContent).find((x) => new RegExp('^Lossless: .*, ' + n + ' frames;').test(x)), 30000, 'the plan with ' + n + ' frames');
     const save = async (ext) => {
@@ -741,20 +743,15 @@ async function runFlow(
     };
     kind.value = 'frames';
     kind.dispatchEvent(new Event('change'));
-    skip.checked = false;
-    skip.dispatchEvent(new Event('change'));
-    const cutOffWhileHolding = cut.disabled;
+    pick('hold');
     const plans = [await planText(${slots.length})];
     const zips = [await save('.zip')];
-    skip.checked = true;
-    skip.dispatchEvent(new Event('change'));
+    pick('cut');
     plans.push(await planText(6));
     zips.push(await save('.zip'));
-    cut.checked = false;
-    cut.dispatchEvent(new Event('change'));
+    pick('keep');
     zips.push(await save('.zip'));
-    cut.checked = true;
-    cut.dispatchEvent(new Event('change'));
+    pick('cut');
     kind.value = 'mp4';
     kind.dispatchEvent(new Event('change'));
     const mp4 = await save('.mp4');
@@ -770,12 +767,12 @@ async function runFlow(
       return play.textContent === 'Play' && /^6 \\/ 6/.test(t) && t;
     }, 15000, 'the preview to reach its last frame');
     window.confirm = () => true;
-    return { shown, cutOffWhileHolding, plans, asked, zips, mp4, preview };`),
+    return { shown, plans, asked, zips, mp4, preview };`),
   );
   check(
-    'missing frames: both options appear, both on, cutting idle while holding',
-    gaps.shown && gaps.cutOffWhileHolding,
-    `shown: ${gaps.shown}; cut disabled while holding: ${gaps.cutOffWhileHolding}`,
+    'missing frames: the choice appears, on skipping with the sound',
+    gaps.shown,
+    `shown: ${gaps.shown}`,
   );
   check(
     'missing frames: the plan counts the held frames, then only the kept ones',
@@ -783,12 +780,8 @@ async function runFlow(
     gaps.plans.join(' | '),
   );
   check(
-    'missing frames: each save asks with what it will do',
-    gaps.asked.length === 4 &&
-      /^Frames missing: 5\. Each gap shows the drawing before it\./.test(gaps.asked[0] ?? '') &&
-      /skips the gaps and their sound/.test(gaps.asked[1] ?? '') &&
-      /the sound plays without cuts/.test(gaps.asked[2] ?? '') &&
-      /skips the gaps and their sound/.test(gaps.asked[3] ?? ''),
+    'missing frames: each save asks first',
+    gaps.asked.length === 4 && gaps.asked.every((q) => q === 'Frames missing: 5. Continue?'),
     gaps.asked.join(' | '),
   );
   const [held, cutZip, straightZip] = await Promise.all(gaps.zips.map(unzipAll));
@@ -983,6 +976,28 @@ async function runFlow(
   // copia de referencia queda byte a byte como se escaneó y las demás no.
   if (tabs) {
     await screen('sheets');
+    // sin marcadores no se ofrecen QR ni tira; con las pocas hojas del
+    // ejemplo, el QR tampoco
+    const reg = await driver.run<{ off: string[]; on: string[] }>(
+      step(`
+      const label = (re) => [...document.querySelectorAll('#view-sheets label')].find((l) => re.test(l.textContent));
+      const seen = () => [/^Markers/, /Add a QR code/, /Gray strip/].filter((re) => label(re)?.getClientRects().length).map(String);
+      const box = label(/ArUco markers/).querySelector('input');
+      if (!box.checked) box.click();
+      await new Promise((r) => setTimeout(r, 300));
+      const on = seen();
+      box.click();
+      await new Promise((r) => setTimeout(r, 300));
+      const off = seen();
+      box.click();
+      await new Promise((r) => setTimeout(r, 300));
+      return { off, on };`),
+    );
+    check(
+      'registration: QR and gray strip only with the markers, and no QR for a few sheets',
+      reg.off.length === 0 && reg.on.join() === [/^Markers/, /Gray strip/].map(String).join(),
+      `markers off: ${reg.off.join(' ') || 'nothing'}; on: ${reg.on.join(' ')}`,
+    );
     const negatives = await driver.run<string>(
       step(`
       const label = (re) => [...document.querySelectorAll('#view-sheets label')].find((l) => re.test(l.textContent));
@@ -1035,8 +1050,8 @@ async function runFlow(
       offMs?: number;
       notes?: string[];
       frames?: number;
-      pairsOn?: string[];
-      tagsOff?: number;
+      viewOn?: string[];
+      viewOff?: string[];
     }>(
       step(`
       const sheets = ${JSON.stringify(pngs.slice(0, 2).map(([n, b]) => [n, b.toString('base64')]))};
@@ -1094,23 +1109,44 @@ async function runFlow(
       const onMs = await timed(() => box.click(), () => notes().some((n) => /Reference print./.test(n)) && notes().some((n) => /Matched to the reference/.test(n)));
       const options = [...sel.options].map((o) => o.textContent);
       const chosen = sel.value;
-      // antes y después: sólo en la copia que cambia, junto a «alignment»
-      const pairTags = () => [...document.querySelectorAll('#view-scans .report-thumbs .tag')].map((t) => t.textContent).filter((t) => t === 'before' || t === 'after');
-      const pairs = async () => {
-        const imgs = [...document.querySelectorAll('#view-scans .report-thumbs img')].filter((i) => i.alt === 'before' || i.alt === 'after');
-        await Promise.all(imgs.map((i) => i.decode().catch(() => {})));
-        const mean = (img) => {
-          const c = new OffscreenCanvas(64, 64);
-          const x = c.getContext('2d');
-          x.drawImage(img, 0, 0, 64, 64);
-          const d = x.getImageData(0, 0, 64, 64).data;
-          let r = 0, b = 0;
-          for (let i = 0; i < d.length; i += 4) { r += d[i]; b += d[i + 2]; }
-          return [Math.round(r / 4096), Math.round(b / 4096)];
-        };
-        return imgs.map((i) => i.alt + ' ' + mean(i).join('/'));
+      // en el visor, «Not normalized» sólo en la copia que cambia: para su
+      // overlay y sus recortes, y muestra otra imagen
+      const mean = (img) => {
+        const c = new OffscreenCanvas(64, 64);
+        const x = c.getContext('2d');
+        x.drawImage(img, 0, 0, 64, 64);
+        const d = x.getImageData(0, 0, 64, 64).data;
+        let r = 0, b = 0;
+        for (let i = 0; i < d.length; i += 4) { r += d[i]; b += d[i + 2]; }
+        return Math.round(r / 4096) + '/' + Math.round(b / 4096);
       };
-      const pairsOn = await pairs();
+      const viewer = async () => {
+        const out = [];
+        for (const row of document.querySelectorAll('#view-scans .report-thumbs')) {
+          for (const t of [...row.querySelectorAll('.thumb')].slice(0, 2)) {
+            t.click();
+            const lb = await ui.until(() => document.querySelector('.lightbox'), 5000, 'the viewer');
+            const img = lb.querySelector('img');
+            await img.decode();
+            const btn = lb.querySelector('.lb-alt');
+            const cap = lb.querySelector('figcaption').textContent.split(' · ')[0].split(':')[0];
+            const kind = t.querySelector('.tag').textContent === 'alignment' ? 'alignment' : 'frame';
+            if (btn.hidden) {
+              out.push(cap + ' ' + kind + ' none');
+            } else {
+              const a = mean(img);
+              const src = img.src;
+              btn.click();
+              await ui.until(() => img.src !== src, 5000, 'the raw image');
+              await img.decode();
+              out.push(cap + ' ' + kind + ' ' + a + '>' + mean(img) + ' ' + btn.getAttribute('aria-pressed'));
+            }
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+          }
+        }
+        return out;
+      };
+      const viewOn = await viewer();
       const on = await zip();
       const other = [...sel.options].find((o) => o.value !== chosen).value;
       const swapMs = await timed(() => { sel.value = other; sel.dispatchEvent(new Event('change')); },
@@ -1124,8 +1160,8 @@ async function runFlow(
       const swapped = await zip();
       const offMs = await timed(() => box.click(), () => !notes().some((n) => /Reference print.|Matched to the reference/.test(n)));
       const off = await zip();
-      const tagsOff = pairTags().length;
-      return { pairsOn, tagsOff, raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
+      const viewOff = await viewer();
+      return { viewOn, viewOff, raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
     );
     if (strip.error) {
       check('cyanotype gray strip', false, strip.error);
@@ -1163,15 +1199,21 @@ async function runFlow(
         swRef.every(Boolean) && swRef.length > 0 && !swOther.some(Boolean) && swOther.length > 0,
         `${swRef.filter(Boolean).length}/${swRef.length} new-reference frames untouched, ${swOther.filter((x) => !x).length}/${swOther.length} of the first recoloured, in ${s.swapMs} ms`,
       );
-      const po = s.pairsOn ?? [];
+      const vOn = s.viewOn ?? [];
+      const vOff = s.viewOff ?? [];
+      const changed = vOn.filter((v) => !v.endsWith(' none'));
       check(
-        'cyanotype strip on: before and after only for the print that changes, and they differ',
-        po.length === 2 &&
-          po[0].startsWith('before') &&
-          po[1].startsWith('after') &&
-          po[0].slice(7) !== po[1].slice(6) &&
-          s.tagsOff === 0,
-        `${po.join(' · ')} (mean red/blue); ${s.tagsOff} after turning it off`,
+        'cyanotype strip on: "Not normalized" in the viewer only for the print that changes, showing other colours',
+        vOn.length === 4 &&
+          changed.length === 2 &&
+          changed.every((v) => v.startsWith(s.other) && v.endsWith(' true')) &&
+          changed.every((v) => {
+            const [a, b] = v.split(' ')[2].split('>');
+            return a !== b;
+          }) &&
+          vOff.length === 4 &&
+          vOff.every((v) => v.endsWith(' none')),
+        `on: ${vOn.join(' · ')} (mean red/blue, normalized>raw); off: ${vOff.join(' · ')}`,
       );
       check(
         'cyanotype strip off: every frame back to its scan',
@@ -1184,17 +1226,30 @@ async function runFlow(
       );
     }
     await shot('gray-strip');
-    // la vista con la opción puesta: el antes y el después junto a «alignment»
+    // la vista con la opción puesta: la copia que cambia, en el visor sin normalizar
     await driver.run(
       step(`
       const box = [...document.querySelectorAll('#view-scans label')].find((l) => /Normalize colours with the gray strip/.test(l.textContent)).querySelector('input');
       box.click();
-      await ui.until(() => [...document.querySelectorAll('#view-scans .report-thumbs .tag')].some((t) => t.textContent === 'after'), 60000, 'before and after');
-      document.querySelector('#view-scans table.report').scrollIntoView();
-      await new Promise((r) => setTimeout(r, 400));
-      return true;`),
+      await ui.until(() => [...document.querySelectorAll('#view-scans td')].some((t) => /Matched to the reference/.test(t.textContent)), 60000, 'the matched print');
+      for (const t of document.querySelectorAll('#view-scans .report-thumbs .thumb')) {
+        if (t.querySelector('.tag').textContent === 'alignment') continue;
+        t.click();
+        const lb = await ui.until(() => document.querySelector('.lightbox'), 5000, 'the viewer');
+        const btn = lb.querySelector('.lb-alt');
+        if (!btn.hidden) {
+          btn.click();
+          await new Promise((r) => setTimeout(r, 400));
+          return true;
+        }
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      }
+      return false;`),
     );
     await shot('gray-strip-on');
+    await driver.run(
+      `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); return true;`,
+    );
   }
 
   await screen('calibration');

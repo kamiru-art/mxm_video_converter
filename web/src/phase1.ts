@@ -933,6 +933,9 @@ export function mountPhase1(root: HTMLElement): void {
       toast('There are no frames to print.', 'err');
       return;
     }
+    // un cambio de rejilla de hace un instante puede no haber pasado aún
+    // por la vista previa: el QR se decide con el número de hojas de ahora
+    await syncQr();
     const ctl = genCancel.arm();
     // TODO el panel bloqueado (formatos, rejilla, nombres, el video…) salvo
     // Cancel: nada de eso cambia la generación en curso, y otra extracción
@@ -1072,10 +1075,10 @@ export function mountPhase1(root: HTMLElement): void {
   }
 
   /** se define con el campo de marcadores, más abajo */
-  let syncCapHint: () => void = () => {};
+  let syncQr: () => Promise<void> = async () => {};
   async function refreshPreview(): Promise<void> {
     // cualquier ajuste pasa por aquí: también el registro y los QR
-    syncCapHint();
+    await syncQr();
     if (!project.frames.length) return;
     updateThumbLabels();
     if (previewBusy) {
@@ -1144,7 +1147,7 @@ export function mountPhase1(root: HTMLElement): void {
       const avisos = [...(info.avisos ?? [])];
       if (info.marker_capacity && plan.numPages > info.marker_capacity) {
         avisos.push(
-          `${plan.numPages} sheets exceed the ${info.marker_capacity} that marker identity can distinguish. Enable "Add a QR code per frame" in Registration: QRs identify any number of sheets.`,
+          `${plan.numPages} sheets exceed the ${info.marker_capacity} that the markers can tell apart. Turn on "Add a QR code per frame".`,
         );
       }
       warnBox.replaceChildren(...avisos.map((a) => el('li', {}, a)));
@@ -1298,32 +1301,90 @@ export function mountPhase1(root: HTMLElement): void {
     ],
     String(s.marker_count),
   );
-  // bajo la casilla de QR: hasta cuántas hojas bastan los marcadores. Lo
-  // calcula el núcleo (sheet::marker_capacity), que es quien reparte los IDs
-  const capHint = el('div', { class: 'hint' });
-  let capSeq = 0;
-  syncCapHint = (): void => {
-    const seq = ++capSeq;
-    void run('marker_capacity', { settings: settingsForCore(s) })
-      .then((cap) => {
-        if (seq !== capSeq) return;
-        capHint.textContent = cap == null ? '' : `Only needed above ${cap} sheets.`;
-        capHint.style.display = cap == null ? 'none' : '';
-      })
-      .catch((e) => console.error('marker capacity', e));
-  };
-  syncCapHint();
   markerCountSel.addEventListener('change', () => {
     const v = parseInt(markerCountSel.value, 10);
     if (!Number.isNaN(v)) s.marker_count = v;
-    syncCapHint();
     persist();
     void refreshPreview();
   });
   binds.push(() => {
-    syncCapHint();
     markerCountSel.value = String(s.marker_count);
   });
+
+  // El QR sólo hace falta cuando los marcadores no alcanzan a distinguir
+  // todas las hojas (sheet::marker_capacity, del núcleo): hasta entonces ni
+  // se ve, y al pasar el límite se activa solo
+  const qrRow = el(
+    'div',
+    { class: 'row' },
+    field('QR size (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
+  );
+  const qrCheck = check('Add a QR code per frame', !!s.qr_on);
+  const qrHint = el('div', { class: 'hint' });
+  const qrBox = el('div', { hidden: '' }, qrCheck.label, qrHint, qrRow);
+  const showQrRow = (): void => {
+    qrRow.style.display = s.qr_on ? '' : 'none';
+  };
+  qrCheck.input.addEventListener('change', () => {
+    s.qr_on = qrCheck.input.checked;
+    showQrRow();
+    persist();
+    void refreshPreview();
+  });
+  let qrNeeded = false;
+  let capSeq = 0;
+  syncQr = async (): Promise<void> => {
+    const seq = ++capSeq;
+    const cap = s.registration_on
+      ? await run('marker_capacity', { settings: settingsForCore({ ...s, qr_on: false }) }).catch(
+          (e) => {
+            console.error('marker capacity', e);
+            return null;
+          },
+        )
+      : null;
+    if (seq !== capSeq) return;
+    // dos hojas chocan si sus números caen en el mismo juego de IDs
+    const plan = computePlan();
+    const nums =
+      plan.pageNumbers ?? Array.from({ length: plan.numPages }, (_, k) => s.page_num_start + k);
+    const needed =
+      cap != null && new Set(nums.map((n) => (((n - 1) % cap) + cap) % cap)).size < nums.length;
+    const want = needed ? (qrNeeded ? !!s.qr_on : true) : false;
+    qrNeeded = needed;
+    if (want !== !!s.qr_on) {
+      s.qr_on = want;
+      persist();
+    }
+    qrCheck.input.checked = want;
+    qrHint.textContent = needed ? `More than ${cap} sheets.` : '';
+    qrBox.hidden = !needed;
+    showQrRow();
+  };
+  binds.push(() => void syncQr());
+
+  // sin marcadores no hay fase ②: ni QR ni tira de grises
+  const regCheck = check('ArUco markers (required for phase ②)', s.registration_on);
+  bindCheck('registration_on', regCheck);
+  const regBox = el(
+    'div',
+    {},
+    el(
+      'div',
+      { class: 'row' },
+      field('Markers', markerCountSel),
+      field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
+      field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
+    ),
+    qrBox,
+    bindCheck('gray_patch_on', check('Gray strip to match colours between scans', s.gray_patch_on)),
+  );
+  const showReg = (): void => {
+    regBox.hidden = !s.registration_on;
+  };
+  regCheck.input.addEventListener('change', showReg);
+  binds.push(showReg);
+  showReg();
 
   // ---------- montaje ----------
   const paper = el(
@@ -1409,39 +1470,8 @@ export function mountPhase1(root: HTMLElement): void {
     ),
 
     el('h3', {}, 'Registration (to scan back)'),
-    bindCheck('registration_on', check('ArUco markers (required for phase ②)', s.registration_on)),
-    el(
-      'div',
-      { class: 'row' },
-      field('Markers', markerCountSel),
-      field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
-      field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
-    ),
-    (() => {
-      const qrRow = el(
-        'div',
-        { class: 'row' },
-        field('QR size (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
-      );
-      const c = check('Add a QR code per frame', !!s.qr_on);
-      const sync = (): void => {
-        qrRow.style.display = s.qr_on ? '' : 'none';
-        syncCapHint();
-      };
-      c.input.addEventListener('change', () => {
-        s.qr_on = c.input.checked;
-        sync();
-        persist();
-        void refreshPreview();
-      });
-      binds.push(() => {
-        c.input.checked = !!s.qr_on;
-        sync();
-      });
-      sync();
-      return el('div', {}, c.label, capHint, qrRow);
-    })(),
-    bindCheck('gray_patch_on', check('Gray strip to match colours between scans', s.gray_patch_on)),
+    regCheck.label,
+    regBox,
 
     cyanBox,
 

@@ -455,6 +455,16 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .lb-nav.prev { left: 16px; }
 .lb-nav.next { right: 16px; }
 @media (max-width: 640px) { .lb-nav { width: 38px; height: 60px; font-size: 24px; } }
+/* ver el recorte sin la tira de grises: arriba, fuera de la imagen */
+.lb-alt {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  padding: 6px 14px; cursor: pointer; font: 600 13px var(--font-mono);
+  background: rgba(12, 27, 49, .7); color: var(--papel);
+  border: 1px solid var(--prusia-700); border-radius: 6px;
+}
+.lb-alt[hidden] { display: none; }
+.lb-alt[aria-pressed="true"] { background: var(--sol); color: var(--prusia-900); border-color: var(--sol); }
+.lb-alt:focus-visible { outline: 2px solid var(--sol); outline-offset: 2px; }
 
 /* tablas de informe */
 /* Una caja de scroll aporta 0 al ancho mínimo de quien la contiene, que es

@@ -366,14 +366,11 @@ export const EXACT: Record<string, string> = {
   'Original video (for its audio)': 'Video original (para su audio)',
   'Optional: the clip the frames came from, or an edited sound file. Only its sound is used.':
     'Opcional: el clip del que salieron los fotogramas, o un archivo de sonido editado. Solo se usa su sonido.',
-  'Skip the missing frames': 'Saltar los fotogramas que faltan',
-  'Cut their sound too': 'Cortar también su sonido',
-  'Each missing frame shows the drawing before it, so the video lasts as long as the original range and stays in sync with its sound.':
-    'Cada fotograma que falta muestra el dibujo anterior, así que el video dura lo mismo que el tramo original y sigue sincronizado con su sonido.',
-  'The missing frames and their sound are left out. Each drawing keeps its own sound, and the rest joins with no silent gaps.':
-    'Se quitan los fotogramas que faltan y su sonido. Cada dibujo conserva su propio sonido, y el resto se une sin silencios.',
-  'The missing frames are left out, and the sound plays without cuts. Use this when the sound was already edited without those frames.':
-    'Se quitan los fotogramas que faltan, y el sonido suena sin cortes. Úsalo cuando el sonido ya está editado sin esos fotogramas.',
+  'Missing frames': 'Fotogramas que faltan',
+  'Skip them and their sound': 'Saltarlos, con su sonido',
+  'Skip them, sound without cuts': 'Saltarlos, sonido sin cortes',
+  'Show the drawing before': 'Mostrar el dibujo anterior',
+  'Not normalized': 'Sin normalizar',
   'No original video at hand: drop it above to add its sound. The video comes out silent otherwise.':
     'No hay video original a mano: suéltalo arriba para agregar su sonido. De lo contrario, el video sale mudo.',
   '16 bits per channel': '16 bits por canal',
@@ -746,12 +743,10 @@ export const TEMPLATES: [string, string][] = [
   ['grid {#0}×{#1}', 'cuadrícula {#0}×{#1}'],
   ['{#0} frames on {#1} sheet(s)', '{#0} fotogramas en {#1} hoja(s)'],
   [
-    '{#0} sheets exceed the {#1} that marker identity can distinguish. Enable "Add a QR code per frame" in Registration: QRs identify any number of sheets.',
-    '{#0} hojas superan las {#1} que la identidad de los marcadores puede distinguir. Activa "Agregar un código QR por fotograma" en Registro: los QR identifican cualquier número de hojas.',
+    '{#0} sheets exceed the {#1} that the markers can tell apart. Turn on "Add a QR code per frame".',
+    '{#0} hojas superan las {#1} que los marcadores pueden distinguir. Activa "Agregar un código QR por fotograma".',
   ],
-  ['Only needed above {#0} sheets.', 'Solo hace falta con más de {#0} hojas.'],
-  ['{0}: before', '{0}: antes'],
-  ['{0}: after', '{0}: después'],
+  ['More than {#0} sheets.', 'Más de {#0} hojas.'],
   ['Missing frames: {#0}.', 'Fotogramas faltantes: {#0}.'],
   ['sheet {#0} · {1}', 'hoja {#0} · {1}'],
   ['matching colours: {#0}/{#1} frames', 'igualando colores: {#0}/{#1} fotogramas'],
@@ -965,18 +960,7 @@ export const TEMPLATES: [string, string][] = [
   ],
   ['Missing {#0}:', 'Faltan {#0}:'],
   ['All {#0} video positions have a frame.', 'Las {#0} posiciones del video tienen fotograma.'],
-  [
-    'Frames missing: {#0}. Each gap shows the drawing before it. Continue?',
-    'Fotogramas que faltan: {#0}. Cada hueco muestra el dibujo anterior. ¿Continuar?',
-  ],
-  [
-    'Frames missing: {#0}. The video skips the gaps and their sound. Continue?',
-    'Fotogramas que faltan: {#0}. El video salta los huecos y su sonido. ¿Continuar?',
-  ],
-  [
-    'Frames missing: {#0}. The video skips the gaps, and the sound plays without cuts. Continue?',
-    'Fotogramas que faltan: {#0}. El video salta los huecos y el sonido suena sin cortes. ¿Continuar?',
-  ],
+  ['Frames missing: {#0}. Continue?', 'Fotogramas que faltan: {#0}. ¿Continuar?'],
   ['Compressing one {#0}×{#1} frame', 'Comprimir un fotograma de {#0}×{#1}'],
   ['Converting one frame to {#0}×{#1}', 'Convertir un fotograma a {#0}×{#1}'],
   ['Converting one frame to {#0}×{#1} at 16 bits', 'Convertir un fotograma a {#0}×{#1} a 16 bits'],

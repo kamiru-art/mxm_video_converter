@@ -388,10 +388,6 @@ fn scan_output_to_js(out: crate::scanproc::ScanOutput, thumbs: bool) -> JsValue 
         unid.push(&f);
     }
     Reflect::set(&obj, &"sin_identificar".into(), &unid).ok();
-    if let Some(sp) = &out.sheet_preview {
-        let jpg = codecs::encode_jpeg_rgb(sp, 85);
-        Reflect::set(&obj, &"sheet".into(), &Uint8Array::from(jpg.as_slice())).ok();
-    }
     if let Some(ov) = out.overlay {
         let jpg = codecs::encode_jpeg_rgb(&ov, 82);
         Reflect::set(&obj, &"overlay".into(), &Uint8Array::from(jpg.as_slice())).ok();

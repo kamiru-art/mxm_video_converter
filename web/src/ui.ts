@@ -575,6 +575,8 @@ export function originalPageNumbers(positions: number[], perPage: number, start 
 
 export interface GalleryItem {
   data: Blob | string;
+  /** la misma imagen sin normalizar: el visor la muestra con un botón */
+  alt?: Blob;
   caption?: string;
 }
 
@@ -596,10 +598,13 @@ export function lightbox(
   const items: GalleryItem[] = gallery?.items?.length ? gallery.items : [{ data, caption }];
   let idx = Math.min(Math.max(gallery?.index ?? 0, 0), items.length - 1);
   let url: string | null = null;
+  // se mantiene al pasar de una imagen a otra: así se recorre el lote crudo
+  let showAlt = false;
 
   const img = el('img', {});
   const cap = el('figcaption', {});
-  const fig = el('figure', {}, img, cap);
+  const altBtn = el('button', { class: 'lb-alt', type: 'button' }, 'Not normalized');
+  const fig = el('figure', {}, img, cap, altBtn);
   const prevBtn = el('button', { class: 'lb-nav prev', 'aria-label': 'Previous image' }, '‹');
   const nextBtn = el('button', { class: 'lb-nav next', 'aria-label': 'Next image' }, '›');
   const box = el('div', { class: 'lightbox', role: 'dialog', 'aria-label': 'Image preview' }, fig);
@@ -608,8 +613,11 @@ export function lightbox(
   function render(): void {
     if (url) URL.revokeObjectURL(url);
     const it = items[idx];
-    url = it.data instanceof Blob ? URL.createObjectURL(it.data) : null;
-    img.src = url ?? (it.data as string);
+    const data = showAlt && it.alt ? it.alt : it.data;
+    url = data instanceof Blob ? URL.createObjectURL(data) : null;
+    img.src = url ?? (data as string);
+    altBtn.hidden = !it.alt;
+    altBtn.setAttribute('aria-pressed', String(showAlt));
     img.alt = it.caption ?? '';
     const pos = items.length > 1 ? ` · ${idx + 1} / ${items.length}` : '';
     cap.textContent = `${it.caption ?? ''}${pos}`;
@@ -646,6 +654,11 @@ export function lightbox(
       step(d);
     });
   }
+  altBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showAlt = !showAlt;
+    render();
+  });
   box.addEventListener('click', close);
   document.addEventListener('keydown', onKey);
   render();

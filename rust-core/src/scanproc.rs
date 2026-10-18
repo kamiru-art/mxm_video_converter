@@ -772,9 +772,6 @@ pub struct ScanOutput {
     pub unidentified: Vec<(String, DynImg)>,
     /// Miniatura de diagnóstico (alineación con rectángulos de colores).
     pub overlay: Option<Rgb>,
-    /// La hoja enderezada, limpia y reducida: el antes y el después de la
-    /// tira de grises. Sólo si la hoja lleva la tira.
-    pub sheet_preview: Option<Rgb>,
 }
 
 /// Marcadores del layout resueltos: mapa id→bbox (uniendo `ids_por_hoja` +
@@ -1286,10 +1283,6 @@ pub fn finish_scan(
         }
         None => markers.bboxes.clone(),
     };
-    let sheet_preview = layout
-        .get("parche_grises")
-        .filter(|v| !v.is_null())
-        .map(|_| warp.proxy_rgb8(1200).0);
     let overlay = build_overlay(
         &warp,
         s,
@@ -1330,7 +1323,6 @@ pub fn finish_scan(
                 frames: frames_out,
                 unidentified,
                 overlay,
-                sheet_preview,
             };
         }
     };
@@ -1383,7 +1375,6 @@ pub fn finish_scan(
         frames: frames_out,
         unidentified,
         overlay,
-        sheet_preview,
     }
 }
 
@@ -1406,7 +1397,6 @@ pub fn process_scan(
                 frames: Vec::new(),
                 unidentified: Vec::new(),
                 overlay: None,
-                sheet_preview: None,
             }
         }
     };
