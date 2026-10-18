@@ -99,8 +99,6 @@ export const EXACT: Record<string, string> = {
   Letter: 'Carta',
   Tabloid: 'Tabloide',
   Custom: 'Personalizado',
-  'analyzing repeated drawings…': 'analizando dibujos repetidos…',
-  'no repeated drawings in the selection.': 'no hay dibujos repetidos en la selección.',
   'No frames yet.': 'Aún no hay fotogramas.',
   end: 'fin',
   'ALL frames (frame by frame)': 'TODOS los fotogramas (fotograma a fotograma)',
@@ -125,8 +123,6 @@ export const EXACT: Record<string, string> = {
   'Sequential (1, 2, 3…)': 'Secuencial (1, 2, 3…)',
   'Original (position in the video)': 'Original (posición en el video)',
   'Original (based on the frames)': 'Original (según los fotogramas)',
-  'Detect repeated drawings (print each only once)':
-    'Detectar dibujos repetidos (imprimir cada uno una sola vez)',
   'Your settings will not be remembered for the next session.':
     'Tus ajustes no se recordarán para la próxima sesión.',
   'Width (mm)': 'Ancho (mm)',
@@ -193,8 +189,8 @@ export const EXACT: Record<string, string> = {
   Digits: 'Dígitos',
   From: 'Desde',
   'Label numbering': 'Numeración de etiquetas',
-  'Applies to auto-increment labels. Sequential counts the selected frames; Original uses each frame’s position in the whole video. A repeated drawing printed once keeps its number, so gaps are expected.':
-    'Se aplica a las etiquetas de autoincremento. Secuencial cuenta los fotogramas seleccionados; Original usa la posición de cada fotograma en todo el video. Un dibujo repetido impreso una vez conserva su número, así que se esperan saltos.',
+  'Applies to auto-increment labels. Sequential counts the selected frames; Original uses each frame’s position in the whole video.':
+    'Se aplica a las etiquetas de autoincremento. Secuencial cuenta los fotogramas seleccionados; Original usa la posición de cada fotograma en todo el video.',
   'Sheet & grid': 'Hoja y cuadrícula',
   Paper: 'Papel',
   Orientation: 'Orientación',
@@ -210,18 +206,10 @@ export const EXACT: Record<string, string> = {
   'Both start at “From”. Sequential numbers the sheets in output order. Original uses the position of each sheet’s first frame in the whole project, so excluded frames do not renumber later sheets.':
     'Ambas empiezan en “Desde”. Secuencial numera las hojas en el orden de salida. Original usa la posición del primer fotograma de cada hoja en todo el proyecto, así que los fotogramas excluidos no renumeran las hojas siguientes.',
   'Registration (to scan back)': 'Registro (para volver a escanear)',
-  'ArUco markers with per-sheet identity (required for phase ②)':
-    'Marcadores ArUco con identidad por hoja (necesarios para la fase ②)',
   Markers: 'Marcadores',
   'Size (mm)': 'Tamaño (mm)',
-  'Project name': 'Nombre del proyecto',
   '= output name': '= nombre de salida',
   'QR size (mm)': 'Tamaño del QR (mm)',
-  'Add a QR code per frame (for projects with MANY sheets)':
-    'Agregar un código QR por fotograma (para proyectos con MUCHAS hojas)',
-  'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets, at the cost of cell space.':
-    'La identidad de los marcadores cubre un número limitado de hojas; la vista previa avisa cuando un proyecto lo supera. Los QR identifican cualquier número de hojas, a costa de espacio en la celda.',
-  'Gray patch strip (scanner normalization)': 'Tira de parches grises (normalización del escáner)',
   Printer: 'Impresora',
   'Printer profile (Calibration tab)': 'Perfil de impresora (pestaña Calibración)',
   'Corrects the measured scale of your printer.': 'Corrige la escala medida de tu impresora.',
@@ -232,8 +220,6 @@ export const EXACT: Record<string, string> = {
   'Formats:': 'Formatos:',
   'layout.json, the map phase ② needs, is always included.':
     'layout.json, el mapa que necesita la fase ②, siempre se incluye.',
-  'Include the frames as image files (phase ② needs them for rescue sheets; also handy on their own)':
-    'Incluir los fotogramas como archivos de imagen (la fase ② los necesita para las hojas de rescate; también útiles por sí solos)',
   Presets: 'Preajustes',
   Preview: 'Vista previa',
   'Sheet generation cancelled.': 'Generación de hojas cancelada.',
@@ -291,23 +277,9 @@ export const EXACT: Record<string, string> = {
   'Two scans claim the same sheet:': 'Dos escaneos reclaman la misma hoja:',
   'Send the wrong one to another sheet with its selector, or set it back to automatic.':
     'Manda el equivocado a otra hoja con su selector, o vuelve a ponerlo en automático.',
-  'Use “Rescue sheets” below to reprint only these.':
-    'Usa “Hojas de rescate” abajo para reimprimir solo estos.',
   'No frames missing.': 'No falta ningún fotograma.',
   'Download frames + report (ZIP)': 'Descargar fotogramas + informe (ZIP)',
   'Clear results': 'Borrar resultados',
-  'Drop the project frames folder (…_frames/)':
-    'Suelta la carpeta de fotogramas del proyecto (…_frames/)',
-  'The copies phase ① saved next to the layout, to reprint only the failed frames.':
-    'Las copias que la fase ① guardó junto al layout, para reimprimir solo los fotogramas fallidos.',
-  'This layout has no generation settings (is it from v1?). Generate the sheets with MXM Studio to use rescue.':
-    'Este layout no tiene ajustes de generación (¿es de v1?). Genera las hojas con MXM Studio para usar el rescate.',
-  'No original copy found for any missing frame.':
-    'No se encontró copia original para ningún fotograma faltante.',
-  'One rescue sheet': 'Una hoja de rescate',
-  'Rescue sheets cancelled.': 'Hojas de rescate canceladas.',
-  'Generate rescue sheets': 'Generar hojas de rescate',
-  'Rescue sheets': 'Hojas de rescate',
   'No scans yet? Simulate them from this session’s sheets':
     '¿Aún no hay escaneos? Simúlalos con las hojas de esta sesión',
   'Generate the sheets in phase ① first.': 'Genera primero las hojas en la fase ①.',
@@ -419,8 +391,8 @@ export const EXACT: Record<string, string> = {
   'Video export cancelled.': 'Exportación de video cancelada.',
   'There are no frames to preview.': 'No hay fotogramas para la vista previa.',
   '③ Final video': '③ Video final',
-  'Rebuilds the video from the processed frames in their original order, reusing deduplicated drawings wherever they appear. The lossless files keep every pixel at full depth; the MP4 is a light copy to watch and share.':
-    'Reconstruye el video desde los fotogramas procesados en su orden original, reusando los dibujos deduplicados dondequiera que aparezcan. Los archivos sin pérdida conservan cada píxel a profundidad completa; el MP4 es una copia ligera para ver y compartir.',
+  'Rebuilds the video from the processed frames in their original order. The lossless files keep every pixel at full depth; the MP4 is a light copy to watch and share.':
+    'Reconstruye el video desde los fotogramas procesados en su orden original. Los archivos sin pérdida conservan cada píxel a profundidad completa; el MP4 es una copia ligera para ver y compartir.',
   'Project layout.json (optional if you come from phase ②)':
     'layout.json del proyecto (opcional si vienes de la fase ②)',
   'Add processed frames from files (optional)':
@@ -510,24 +482,24 @@ export const EXACT: Record<string, string> = {
     'Los marcadores detectados cubren poco de la hoja; la alineación puede perder precisión cerca de los bordes lejanos.',
   'Could not compute the homography (degenerate markers).':
     'No se pudo calcular la homografía (marcadores degenerados).',
-  'Levels normalized with the patch strip.': 'Niveles normalizados con la tira de parches.',
-  'Normalize levels with the gray strip': 'Normalizar niveles con la tira de grises',
-  'Colour reference print': 'Copia de referencia de color',
-  'Pick the print that came out best: the others are matched to it. Changing it, or the box above, only recolours the frames already cut; nothing is scanned again.':
-    'Elige la copia que salió mejor: las demás se igualan a ella. Cambiarla, o la casilla de arriba, solo recolorea los fotogramas ya recortados; no se vuelve a procesar ningún escaneo.',
-  'Every sheet of the project carries the strip, or none does (Registration, phase ①). In cyanotype, each print is matched to the reference print, which evens out differences in exposure and chemistry between prints.':
-    'O todas las hojas del proyecto llevan la tira, o ninguna (Registro, fase ①). En cianotipia, cada copia se iguala a la copia de referencia, así se emparejan las diferencias de exposición y de química entre copias.',
-  'The gray strip could not be read: this sheet keeps its scanned colours, unlike the rest.':
-    'No se pudo leer la tira de grises: esta hoja conserva los colores del escaneo, a diferencia del resto.',
-  'This print is the colour reference: the others are matched to it.':
-    'Esta copia es la referencia de color: las demás se igualan a ella.',
+  'Colours normalized.': 'Colores normalizados.',
+  'Normalize colours with the gray strip': 'Igualar colores con la tira de grises',
+  'Reference print': 'Copia de referencia',
+  'The others are matched to it.': 'Las demás se igualan a ella.',
+  'Include the frames as image files': 'Incluir los fotogramas como archivos de imagen',
+  'Add a QR code per frame': 'Agregar un código QR por fotograma',
+  'Gray strip to match colours between scans': 'Tira de grises para igualar colores entre escaneos',
+  'ArUco markers (required for phase ②)': 'Marcadores ArUco (necesarios para la fase ②)',
+  before: 'antes',
+  after: 'después',
+  'Gray strip unreadable: colours not matched.': 'Tira de grises ilegible: colores sin igualar.',
+  'Reference print.': 'Copia de referencia.',
   'process the scans first': 'procesa primero los escaneos',
   'The gray strip of this scan cannot be matched.':
     'La tira de grises de este escaneo no se puede igualar.',
   'The gray strip does not fit beside the markers, so no sheet will carry it. Use smaller markers or a larger page.':
     'La tira de grises no cabe junto a los marcadores, así que ninguna hoja la llevará. Usa marcadores más pequeños o una página más grande.',
-  'Colours matched to the reference print with the gray strip.':
-    'Colores igualados a la copia de referencia con la tira de grises.',
+  'Matched to the reference.': 'Igualada a la referencia.',
   'No marker identity or readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.':
     'Sin identidad de marcadores ni QR legible: hoja identificada por eliminación (el layout tiene una sola hoja). Verifica en el informe que este escaneo pertenece a este proyecto.',
   "Sheet not identified: crops saved as 'unidentified'.":
@@ -598,10 +570,6 @@ export const TEMPLATES: [string, string][] = [
     '{0} necesita unos {1} de memoria a la vez. Es mucho para un teléfono: el navegador puede cerrar esta pestaña antes del final, y entonces se pierde el trabajo en curso. Si termina, el resultado tiene la calidad completa. Una computadora lo hace sin riesgo.',
   ],
   // g2-phase1
-  [
-    '{#0} repeated frame(s): printed once and reused when the video is rebuilt.',
-    '{#0} fotograma(s) repetido(s): impresos una vez y reusados cuando se reconstruye el video.',
-  ],
   [
     'Extracting this {#0}×{#1} video with the built-in converter',
     'Extraer este video de {#0}×{#1} con el conversor integrado',
@@ -688,10 +656,6 @@ export const TEMPLATES: [string, string][] = [
     'Los fotogramas se cargaron, pero la vista previa falló: {0}',
   ],
   ['Could not refresh the frames: {0}', 'No se pudieron actualizar los fotogramas: {0}'],
-  [
-    'Could not analyze the repeated drawings: {0}',
-    'No se pudieron analizar los dibujos repetidos: {0}',
-  ],
   [
     'Your settings will not be remembered for the next session. {0}',
     'Tus ajustes no se recordarán para la próxima sesión. {0}',
@@ -785,10 +749,10 @@ export const TEMPLATES: [string, string][] = [
     '{#0} sheets exceed the {#1} that marker identity can distinguish. Enable "Add a QR code per frame" in Registration: QRs identify any number of sheets.',
     '{#0} hojas superan las {#1} que la identidad de los marcadores puede distinguir. Activa "Agregar un código QR por fotograma" en Registro: los QR identifican cualquier número de hojas.',
   ],
-  [
-    'With {#0} markers, up to {#1} sheets. For more, turn on "Add a QR code per frame".',
-    'Con {#0} marcadores, hasta {#1} hojas. Para más, activa "Agregar un código QR por fotograma".',
-  ],
+  ['Only needed above {#0} sheets.', 'Solo hace falta con más de {#0} hojas.'],
+  ['{0}: before', '{0}: antes'],
+  ['{0}: after', '{0}: después'],
+  ['Missing frames: {#0}.', 'Fotogramas faltantes: {#0}.'],
   ['sheet {#0} · {1}', 'hoja {#0} · {1}'],
   ['matching colours: {#0}/{#1} frames', 'igualando colores: {#0}/{#1} fotogramas'],
   ['Colours not matched: {0}', 'Colores sin igualar: {0}'],
@@ -911,22 +875,11 @@ export const TEMPLATES: [string, string][] = [
     'Sheet {#0}: {1} — only the frames of the last one are kept.',
     'Hoja {#0}: {1} — solo se conservan los fotogramas del último.',
   ],
-  ['Missing frames ({#0}):', 'Fotogramas faltantes ({#0}):'],
   [
     '{#0} recovered frames in memory (ready for the Video phase).',
     '{#0} fotogramas recuperados en memoria (listos para la fase Video).',
   ],
   ['Could not build the ZIP: {0}', 'No se pudo crear el ZIP: {0}'],
-  ['{#0} originals loaded.', '{#0} originales cargados.'],
-  [
-    'No original copy (cannot be reprinted): {0}',
-    'Sin copia original (no se puede reimprimir): {0}',
-  ],
-  [
-    'Rescue sheets generated with {#0} frame(s). Print, paint/expose, scan and process against the rescue layout.',
-    'Hojas de rescate generadas con {#0} fotograma(s). Imprime, pinta/expón, escanea y procesa con el layout de rescate.',
-  ],
-  ['Rescue failed: {0}', 'El rescate falló: {0}'],
   [
     '{#0} simulated scan(s): your sheets, printed and scanned back crooked.',
     '{#0} escaneo(s) simulado(s): tus hojas, impresas y vueltas a escanear torcidas.',

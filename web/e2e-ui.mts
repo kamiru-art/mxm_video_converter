@@ -987,7 +987,7 @@ async function runFlow(
       step(`
       const label = (re) => [...document.querySelectorAll('#view-sheets label')].find((l) => re.test(l.textContent));
       const box = (re) => label(re).querySelector('input[type=checkbox]');
-      for (const [re, on] of [[/CYANOTYPE MODE/, true], [/Gray patch strip/, true]]) {
+      for (const [re, on] of [[/CYANOTYPE MODE/, true], [/Gray strip/, true]]) {
         const b = box(re);
         if (b.checked !== on) b.click();
       }
@@ -1035,6 +1035,8 @@ async function runFlow(
       offMs?: number;
       notes?: string[];
       frames?: number;
+      pairsOn?: string[];
+      tagsOff?: number;
     }>(
       step(`
       const sheets = ${JSON.stringify(pngs.slice(0, 2).map(([n, b]) => [n, b.toString('base64')]))};
@@ -1066,7 +1068,7 @@ async function runFlow(
       const n0 = ui.toasts.length;
       ui.button(/Clear results/)?.click();
       ui.button(/Use the current project layout/).click();
-      const box = [...document.querySelectorAll('#view-scans label')].find((l) => /Normalize levels with the gray strip/.test(l.textContent)).querySelector('input');
+      const box = [...document.querySelectorAll('#view-scans label')].find((l) => /Normalize colours with the gray strip/.test(l.textContent)).querySelector('input');
       if (box.checked) box.click();
       const input = document.querySelector('#view-scans input[type=file][accept^=".tif"]');
       const dt = new DataTransfer();
@@ -1077,7 +1079,7 @@ async function runFlow(
       const notes = () => [...document.querySelectorAll('#view-scans table.report td .hint')].map((h) => h.textContent);
       const scansIn = [...document.querySelectorAll('#view-scans table.report td.mono, #view-scans table.report td')].map((t) => t.textContent);
       const zip = async () => { ${PROCESSED_ZIP.replace(/^const ui = window.__ui; /, '')} };
-      const sel = [...document.querySelectorAll('#view-scans label')].find((l) => /Colour reference print/.test(l.textContent)).querySelector('select');
+      const sel = [...document.querySelectorAll('#view-scans label')].find((l) => /Reference print/.test(l.textContent)).querySelector('select');
       const timed = async (act, done) => {
         const t0 = performance.now();
         act();
@@ -1089,9 +1091,26 @@ async function runFlow(
       };
       const raw = await zip();
       if (raw.error) return { error: raw.error };
-      const onMs = await timed(() => box.click(), () => notes().some((n) => /colour reference/.test(n)) && notes().some((n) => /matched to the reference/.test(n)));
+      const onMs = await timed(() => box.click(), () => notes().some((n) => /Reference print./.test(n)) && notes().some((n) => /Matched to the reference/.test(n)));
       const options = [...sel.options].map((o) => o.textContent);
       const chosen = sel.value;
+      // antes y después: sólo en la copia que cambia, junto a «alignment»
+      const pairTags = () => [...document.querySelectorAll('#view-scans .report-thumbs .tag')].map((t) => t.textContent).filter((t) => t === 'before' || t === 'after');
+      const pairs = async () => {
+        const imgs = [...document.querySelectorAll('#view-scans .report-thumbs img')].filter((i) => i.alt === 'before' || i.alt === 'after');
+        await Promise.all(imgs.map((i) => i.decode().catch(() => {})));
+        const mean = (img) => {
+          const c = new OffscreenCanvas(64, 64);
+          const x = c.getContext('2d');
+          x.drawImage(img, 0, 0, 64, 64);
+          const d = x.getImageData(0, 0, 64, 64).data;
+          let r = 0, b = 0;
+          for (let i = 0; i < d.length; i += 4) { r += d[i]; b += d[i + 2]; }
+          return [Math.round(r / 4096), Math.round(b / 4096)];
+        };
+        return imgs.map((i) => i.alt + ' ' + mean(i).join('/'));
+      };
+      const pairsOn = await pairs();
       const on = await zip();
       const other = [...sel.options].find((o) => o.value !== chosen).value;
       const swapMs = await timed(() => { sel.value = other; sel.dispatchEvent(new Event('change')); },
@@ -1100,12 +1119,13 @@ async function runFlow(
           // por la celda del escaneo: el selector de hoja de una fila nombra
           // también al otro escaneo ("already taken by …")
           const row = (scan) => rows.find((tr) => tr.cells[1]?.textContent === scan)?.textContent ?? '';
-          return /colour reference/.test(row(other)) && /matched to the reference/.test(row(chosen));
+          return /Reference print./.test(row(other)) && /Matched to the reference/.test(row(chosen));
         });
       const swapped = await zip();
-      const offMs = await timed(() => box.click(), () => !notes().some((n) => /colour reference|matched to the reference/.test(n)));
+      const offMs = await timed(() => box.click(), () => !notes().some((n) => /Reference print.|Matched to the reference/.test(n)));
       const off = await zip();
-      return { raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
+      const tagsOff = pairTags().length;
+      return { pairsOn, tagsOff, raw: raw.b64, on: on.b64, swapped: swapped.b64, off: off.b64, options, chosen, other, onMs, swapMs, offMs, notes: notes() };`),
     );
     if (strip.error) {
       check('cyanotype gray strip', false, strip.error);
@@ -1143,6 +1163,16 @@ async function runFlow(
         swRef.every(Boolean) && swRef.length > 0 && !swOther.some(Boolean) && swOther.length > 0,
         `${swRef.filter(Boolean).length}/${swRef.length} new-reference frames untouched, ${swOther.filter((x) => !x).length}/${swOther.length} of the first recoloured, in ${s.swapMs} ms`,
       );
+      const po = s.pairsOn ?? [];
+      check(
+        'cyanotype strip on: before and after only for the print that changes, and they differ',
+        po.length === 2 &&
+          po[0].startsWith('before') &&
+          po[1].startsWith('after') &&
+          po[0].slice(7) !== po[1].slice(6) &&
+          s.tagsOff === 0,
+        `${po.join(' · ')} (mean red/blue); ${s.tagsOff} after turning it off`,
+      );
       check(
         'cyanotype strip off: every frame back to its scan',
         offAll.length > 0 && offAll.every(Boolean),
@@ -1154,6 +1184,17 @@ async function runFlow(
       );
     }
     await shot('gray-strip');
+    // la vista con la opción puesta: el antes y el después junto a «alignment»
+    await driver.run(
+      step(`
+      const box = [...document.querySelectorAll('#view-scans label')].find((l) => /Normalize colours with the gray strip/.test(l.textContent)).querySelector('input');
+      box.click();
+      await ui.until(() => [...document.querySelectorAll('#view-scans .report-thumbs .tag')].some((t) => t.textContent === 'after'), 60000, 'before and after');
+      document.querySelector('#view-scans table.report').scrollIntoView();
+      await new Promise((r) => setTimeout(r, 400));
+      return true;`),
+    );
+    await shot('gray-strip-on');
   }
 
   await screen('calibration');

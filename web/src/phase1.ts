@@ -3,13 +3,7 @@
 import { confirmHeavyOnPhone } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
 import type { GenFrame, PackItem } from './gen.ts';
-import {
-  generateSheets,
-  packImageData,
-  packThumbs,
-  resolveCyanCurve,
-  settingsForCore,
-} from './gen.ts';
+import { generateSheets, packImageData, resolveCyanCurve, settingsForCore } from './gen.ts';
 import { imageInfo } from './imageinfo.ts';
 import { clearFrameCache, clearOutputs, opfsSupported, storeFrame } from './opfs.ts';
 import { run } from './pool.ts';
@@ -26,7 +20,6 @@ import { defaultSettings, isCyanotype, normalizeSettings } from './settings.ts';
 import * as store from './store.ts';
 import type {
   BooleanKeys,
-  DedupGroups,
   LayoutInfo,
   NumberKeys,
   Phase1Persist,
@@ -71,7 +64,9 @@ const CORNERS = ['Bottom right', 'Bottom left', 'Top right', 'Top left'];
 /** Lo mismo que normalizeSettings para el estado de la fase (numeración de
  *  etiquetas y de hojas). */
 function normalizePhase(fase: Partial<Phase1Persist>): Partial<Phase1Persist> {
-  const out: Partial<Phase1Persist> = { ...fase };
+  // los presets viejos guardan dedupOn: la detección de repetidos ya no existe
+  const { dedupOn: _gone, ...rest } = fase as Partial<Phase1Persist> & { dedupOn?: boolean };
+  const out: Partial<Phase1Persist> = rest;
   for (const k of ['numbering', 'pageNumbering'] as const) {
     if ((out[k] as string | undefined) === 'continua') out[k] = 'sequential';
   }
@@ -85,9 +80,6 @@ export interface Phase1State {
   naming: 'auto' | 'original'; // auto | original (nombre de archivo)
   numbering: 'sequential' | 'original'; // sequential | original
   pageNumbering: 'sequential' | 'original';
-  dedupOn: boolean;
-  dedupThreshold: number;
-  dedupGroups: DedupGroups | null; // {reps, rep_of} sobre la selección actual
   includeFrames: boolean;
   sheets_include: string;
   sheets_exclude: string;
@@ -104,9 +96,6 @@ export const ph1: Phase1State = {
   naming: 'auto',
   numbering: 'sequential',
   pageNumbering: 'sequential',
-  dedupOn: false,
-  dedupThreshold: 4,
-  dedupGroups: null,
   includeFrames: true,
   sheets_include: '',
   sheets_exclude: '',
@@ -149,7 +138,7 @@ export interface Plan {
   perPage: number;
 }
 
-/** Plan de impresión completo (selección → dedup → etiquetas → timeline). */
+/** Plan de impresión completo (selección → etiquetas → timeline). */
 export function computePlan(): Plan {
   const s = ph1.settings;
   const N = project.frames.length;
@@ -171,21 +160,15 @@ export function computePlan(): Plan {
   });
   rawLabels = uniquifyLabels(rawLabels);
 
-  let reps = positions.map((_, k) => k);
-  let repOf = reps.slice();
-  if (ph1.dedupOn && ph1.dedupGroups && ph1.dedupGroups.rep_of.length === positions.length) {
-    reps = ph1.dedupGroups.reps;
-    repOf = ph1.dedupGroups.rep_of;
-  }
-  const printed: PrintedFrame[] = reps.map((k) => ({
-    frameIdx: positions[k] - 1,
+  const printed: PrintedFrame[] = positions.map((pos, k) => ({
+    frameIdx: pos - 1,
     label: rawLabels[k],
-    pos: positions[k],
+    pos,
   }));
   const timeline = positions.map((_pos, k) => ({
     pos: k + 1,
     etiqueta: rawLabels[k],
-    rep: rawLabels[repOf[k]],
+    rep: rawLabels[k],
   }));
   const perPage = Math.max(1, s.cols * s.rows);
   const pageNumbers =
@@ -198,27 +181,6 @@ export function computePlan(): Plan {
       : null;
   const numPages = Math.max(printed.length ? 1 : 0, Math.ceil(printed.length / perPage));
   return { positions, rawLabels, printed, timeline, pageNumbers, numPages, perPage };
-}
-
-async function computeDedup(statusEl: HTMLElement): Promise<void> {
-  const positions = selectIndices(project.frames.length, ph1.include, ph1.exclude);
-  if (!positions.length) {
-    ph1.dedupGroups = null;
-    return;
-  }
-  statusEl.textContent = 'analyzing repeated drawings…';
-  const thumbs: OffscreenCanvas[] = [];
-  for (const pos of positions) thumbs.push(await ensureThumb(pos - 1));
-  const { meta, pixels } = packThumbs(thumbs);
-  const hashes = await run('dedup_hashes', { meta, pixels }, [pixels.buffer]);
-  const groups = JSON.parse(
-    await run('group_duplicates', { hashes, threshold: ph1.dedupThreshold }),
-  ) as DedupGroups;
-  ph1.dedupGroups = groups;
-  const dups = groups.rep_of.filter((r, i) => r !== i).length;
-  statusEl.textContent = dups
-    ? `${dups} repeated frame(s): printed once and reused when the video is rebuilt.`
-    : 'no repeated drawings in the selection.';
 }
 
 // ── Interfaz ──────────────────────────────────────────────────
@@ -505,7 +467,7 @@ export function mountPhase1(root: HTMLElement): void {
     },
   });
 
-  // ---------- selección, nombres, dedup ----------
+  // ---------- selección y nombres ----------
   // Refrescar la tira decodifica fotogramas, así que puede fallar (un archivo
   // ilegible, el núcleo sin memoria). Estos manejadores no los espera nadie:
   // sin catch, el cambio se quedaba a medias y en silencio.
@@ -564,27 +526,6 @@ export function mountPhase1(root: HTMLElement): void {
     ph1.pageNumbering = pageNumberingSel.value === 'original' ? 'original' : 'sequential';
     void refreshPreview();
   });
-
-  const dedupCheck = check('Detect repeated drawings (print each only once)', ph1.dedupOn);
-  const dedupStatus = el('div', { class: 'hint' });
-  dedupCheck.input.addEventListener('change', () => {
-    ph1.dedupOn = dedupCheck.input.checked;
-    void applyDedup();
-  });
-  /** Deja las miniaturas, la vista previa y el análisis de repetidos de
-   *  acuerdo con `ph1.dedupOn`. */
-  async function applyDedup(): Promise<void> {
-    try {
-      if (ph1.dedupOn) await computeDedup(dedupStatus);
-      else dedupStatus.textContent = '';
-      void refreshPreview();
-      await renderThumbs();
-    } catch (e) {
-      console.error(e);
-      dedupStatus.textContent = ''; // no dejar colgado el "analyzing…"
-      toast(`Could not analyze the repeated drawings: ${errMsg(e)}`, 'err');
-    }
-  }
 
   // ---------- ajustes de hoja (enlace genérico) ----------
   const binds: (() => void)[] = [];
@@ -840,15 +781,13 @@ export function mountPhase1(root: HTMLElement): void {
               Object.assign(ph1, normalizePhase(p.fase ?? {}));
               for (const b of binds) b();
               // lo que el preset guarda fuera de los ajustes también tiene
-              // que verse, y el análisis de repetidos rehacerse: si no, los
-              // controles enseñan lo de antes y el estado es otro
+              // que verse: si no, los controles enseñan lo de antes
               namingSel.value = ph1.naming;
               numberingSel.value = ph1.numbering;
               pageNumberingSel.value = ph1.pageNumbering;
-              dedupCheck.input.checked = ph1.dedupOn;
-              ph1.dedupGroups = null;
               persist();
-              void applyDedup();
+              void renderThumbs();
+              void refreshPreview();
               toast(`Preset “${presetSel.value}” loaded.`, 'ok');
             }
           },
@@ -891,7 +830,6 @@ export function mountPhase1(root: HTMLElement): void {
                   naming: ph1.naming,
                   numbering: ph1.numbering,
                   pageNumbering: ph1.pageNumbering,
-                  dedupOn: ph1.dedupOn,
                 },
               });
             } catch (e) {
@@ -1229,12 +1167,6 @@ export function mountPhase1(root: HTMLElement): void {
     const seq = ++thumbsSeq;
     thumbsGrid.replaceChildren();
     const plan = computePlan();
-    const dupSet = new Set<number>();
-    if (ph1.dedupOn && ph1.dedupGroups) {
-      ph1.dedupGroups.rep_of.forEach((r, i) => {
-        if (r !== i) dupSet.add(i);
-      });
-    }
     const max = Math.min(plan.positions.length, 400);
     for (let k = 0; k < max; k++) {
       const idx = plan.positions[k] - 1;
@@ -1243,20 +1175,13 @@ export function mountPhase1(root: HTMLElement): void {
       const img = el('canvas', { width: c.width, height: c.height });
       img.getContext('2d')?.drawImage(c, 0, 0);
       thumbsGrid.append(
-        el(
-          'div',
-          { class: `thumb${dupSet.has(k) ? ' dup' : ''}` },
-          img,
-          el('div', { class: 'tag' }, plan.rawLabels[k]),
-        ),
+        el('div', { class: 'thumb' }, img, el('div', { class: 'tag' }, plan.rawLabels[k])),
       );
     }
     framesInfo.textContent = `${project.frames.length} frames loaded · ${plan.positions.length} selected · ${plan.printed.length} to print`;
   }
 
   async function afterFramesChanged(): Promise<void> {
-    ph1.dedupGroups = null;
-    if (ph1.dedupOn && project.frames.length) await computeDedup(dedupStatus);
     await renderThumbs();
     void refreshPreview();
   }
@@ -1338,7 +1263,6 @@ export function mountPhase1(root: HTMLElement): void {
         rows: 2,
         base_name: 'demo',
         out_name: 'demo',
-        project_name: 'Demo',
       });
       ph1.include = '';
       ph1.exclude = '';
@@ -1374,8 +1298,8 @@ export function mountPhase1(root: HTMLElement): void {
     ],
     String(s.marker_count),
   );
-  // cuántas hojas distingue la identidad de los marcadores: lo calcula el
-  // núcleo (sheet::marker_capacity), que es quien reparte los IDs
+  // bajo la casilla de QR: hasta cuántas hojas bastan los marcadores. Lo
+  // calcula el núcleo (sheet::marker_capacity), que es quien reparte los IDs
   const capHint = el('div', { class: 'hint' });
   let capSeq = 0;
   syncCapHint = (): void => {
@@ -1383,10 +1307,7 @@ export function mountPhase1(root: HTMLElement): void {
     void run('marker_capacity', { settings: settingsForCore(s) })
       .then((cap) => {
         if (seq !== capSeq) return;
-        capHint.textContent =
-          cap == null
-            ? ''
-            : `With ${s.marker_count} markers, up to ${cap} sheets. For more, turn on "Add a QR code per frame".`;
+        capHint.textContent = cap == null ? '' : `Only needed above ${cap} sheets.`;
         capHint.style.display = cap == null ? 'none' : '';
       })
       .catch((e) => console.error('marker capacity', e));
@@ -1446,11 +1367,8 @@ export function mountPhase1(root: HTMLElement): void {
     field(
       'Label numbering',
       numberingSel,
-      'Applies to auto-increment labels. Sequential counts the selected frames; Original uses each frame’s ' +
-        'position in the whole video. A repeated drawing printed once keeps its number, so gaps are expected.',
+      'Applies to auto-increment labels. Sequential counts the selected frames; Original uses each frame’s position in the whole video.',
     ),
-    dedupCheck.label,
-    dedupStatus,
 
     el('h3', {}, 'Sheet & grid'),
     el(
@@ -1491,10 +1409,7 @@ export function mountPhase1(root: HTMLElement): void {
     ),
 
     el('h3', {}, 'Registration (to scan back)'),
-    bindCheck(
-      'registration_on',
-      check('ArUco markers with per-sheet identity (required for phase ②)', s.registration_on),
-    ),
+    bindCheck('registration_on', check('ArUco markers (required for phase ②)', s.registration_on)),
     el(
       'div',
       { class: 'row' },
@@ -1502,18 +1417,13 @@ export function mountPhase1(root: HTMLElement): void {
       field('Size (mm)', bindNum('marker_size_mm', numberInput(10, { min: 4, step: 0.5 }))),
       field('Margin (mm)', bindNum('marker_margin_mm', numberInput(4, { min: 1, step: 0.5 }))),
     ),
-    capHint,
-    field(
-      'Project name',
-      bindText('project_name', el('input', { type: 'text', placeholder: '= output name' })),
-    ),
     (() => {
       const qrRow = el(
         'div',
         { class: 'row' },
         field('QR size (mm)', bindNum('qr_size_mm', numberInput(10, { min: 6, step: 0.5 }))),
       );
-      const c = check('Add a QR code per frame (for projects with MANY sheets)', !!s.qr_on);
+      const c = check('Add a QR code per frame', !!s.qr_on);
       const sync = (): void => {
         qrRow.style.display = s.qr_on ? '' : 'none';
         syncCapHint();
@@ -1529,19 +1439,9 @@ export function mountPhase1(root: HTMLElement): void {
         sync();
       });
       sync();
-      return el(
-        'div',
-        {},
-        c.label,
-        el(
-          'div',
-          { class: 'hint' },
-          'Marker identity covers a limited number of sheets; the preview warns when a project exceeds it. QRs identify any number of sheets, at the cost of cell space.',
-        ),
-        qrRow,
-      );
+      return el('div', {}, c.label, capHint, qrRow);
     })(),
-    bindCheck('gray_patch_on', check('Gray patch strip (scanner normalization)', s.gray_patch_on)),
+    bindCheck('gray_patch_on', check('Gray strip to match colours between scans', s.gray_patch_on)),
 
     cyanBox,
 
@@ -1581,10 +1481,7 @@ export function mountPhase1(root: HTMLElement): void {
     (() => {
       // UNA opción, no dos: "keep originals" y "export frames" escribían los
       // mismos archivos en dos carpetas y nadie sabía cuál marcar
-      const c = check(
-        'Include the frames as image files (phase ② needs them for rescue sheets; also handy on their own)',
-        ph1.includeFrames,
-      );
+      const c = check('Include the frames as image files', ph1.includeFrames);
       c.input.addEventListener('change', () => {
         ph1.includeFrames = c.input.checked;
         void refreshSizeEstimate();

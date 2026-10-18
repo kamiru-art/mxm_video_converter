@@ -568,7 +568,7 @@ export function mountPhase4(root: HTMLElement): void {
     el(
       'div',
       { class: 'hint' },
-      'Rebuilds the video from the processed frames in their original order, reusing deduplicated drawings wherever they appear. The lossless files keep every pixel at full depth; the MP4 is a light copy to watch and share.',
+      'Rebuilds the video from the processed frames in their original order. The lossless files keep every pixel at full depth; the MP4 is a light copy to watch and share.',
     ),
     dropzone({
       label: 'Project layout.json (optional if you come from phase ②)',

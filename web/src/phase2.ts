@@ -1,17 +1,13 @@
 // Fase ② — Procesar escaneos: de la hoja pintada/expuesta a fotogramas.
 
 import { confirmHeavyOnPhone, deviceRamGb, isMobile } from './device.ts';
-import { errMsg, isCancelled } from './errors.ts';
-import type { GenFrame } from './gen.ts';
-import { generateSheets, resolveCyanCurve } from './gen.ts';
+import { errMsg } from './errors.ts';
 import { imageInfo } from './imageinfo.ts';
 import { clearProcessedCache, holdFrames, storeProcessedFrame } from './opfs.ts';
 import { poolSize, recycleIdle, run } from './pool.ts';
-import type { RgbaImage } from './project.ts';
 import { project } from './project.ts';
-import { defaultSettings } from './settings.ts';
 import { loadRam, saveRam } from './store.ts';
-import type { Bytes, DetectOutput, Layout, ScanOutput, ScanResult, Settings } from './types.ts';
+import type { Bytes, DetectOutput, Layout, ScanOutput, ScanResult } from './types.ts';
 import type { GalleryItem } from './ui.ts';
 import {
   cancelButton,
@@ -57,8 +53,12 @@ export interface ResultEntry {
   /** qué normalización llevan `frames` (ver levelsKey) */
   levelsKey?: string;
   levelNote?: { text: string; warn: boolean };
+  /** la hoja enderezada y reducida: el «antes» de la tira de grises */
+  sheet?: Blob;
+  /** la misma, normalizada: el «después» */
+  sheetAfter?: LabeledPng;
   /** juegos normalizados ya escritos, por clave */
-  levelCache?: Map<string, LabeledPng[]>;
+  levelCache?: Map<string, { frames: LabeledPng[]; sheet?: LabeledPng }>;
 }
 
 export interface Phase2State {
@@ -201,13 +201,9 @@ export function mountPhase2(root: HTMLElement): void {
     return { gb: deviceRamGb(), manual: false };
   }
   const resizeCheck = check('Resize each frame to its original digital size', false);
-  const patchesCheck = check('Normalize levels with the gray strip', false);
+  const patchesCheck = check('Normalize colours with the gray strip', false);
   const refSel = el('select') as HTMLSelectElement;
-  const refField = field(
-    'Colour reference print',
-    refSel,
-    'Pick the print that came out best: the others are matched to it. Changing it, or the box above, only recolours the frames already cut; nothing is scanned again.',
-  );
+  const refField = field('Reference print', refSel, 'The others are matched to it.');
   const fineCheck = check('Local correction for warped paper (recommended)', true);
 
   // procesamiento
@@ -504,6 +500,7 @@ export function mountPhase2(root: HTMLElement): void {
       })),
       overlay: r.overlay ? asBlob(r.overlay, 'image/jpeg') : null,
       overlayThumb: r.overlay_thumb ? asBlob(r.overlay_thumb, 'image/jpeg') : undefined,
+      sheet: r.sheet ? asBlob(r.sheet, 'image/jpeg') : undefined,
       raw: frames,
       levelsKey: 'raw',
     };
@@ -814,6 +811,32 @@ export function mountPhase2(root: HTMLElement): void {
       t.addEventListener('click', () => openInGallery(overlay, r.scan));
       thumbs.append(t);
     }
+    // antes y después de la tira, sólo con la normalización puesta: las
+    // flechas del visor pasan de uno a otro
+    const { sheet, sheetAfter } = entry;
+    if (sheet && sheetAfter) {
+      const pair = [
+        { data: sheet, caption: `${r.scan}: before` },
+        { data: sheetAfter.png, caption: `${r.scan}: after` },
+      ];
+      for (const [i, [img, tag]] of (
+        [
+          [sheet, 'before'],
+          [sheetAfter.thumb ?? sheetAfter.png, 'after'],
+        ] as const
+      ).entries()) {
+        const t = el(
+          'div',
+          { class: 'thumb clickable' },
+          el('img', { src: trackUrl(URL.createObjectURL(img)), alt: tag }),
+          el('div', { class: 'tag' }, tag),
+        );
+        t.addEventListener('click', () =>
+          lightbox(pair[i].data, pair[i].caption, { items: pair, index: i }),
+        );
+        thumbs.append(t);
+      }
+    }
     for (const f of shown) {
       const t = el(
         'div',
@@ -990,6 +1013,7 @@ export function mountPhase2(root: HTMLElement): void {
           if (levelsAgain) break; // las opciones cambiaron: se rehace todo
           const key = levelsKey(e, ref);
           const cached = e.levelCache?.get(key);
+          let sheetAfter: LabeledPng | undefined;
           const raw = e.raw ?? [];
           let frames = raw;
           let note: ResultEntry['levelNote'];
@@ -997,21 +1021,20 @@ export function mountPhase2(root: HTMLElement): void {
           if (key === 'unreadable') {
             unreadable.push(e.result.scan);
             note = {
-              text: 'The gray strip could not be read: this sheet keeps its scanned colours, unlike the rest.',
+              text: 'Gray strip unreadable: colours not matched.',
               warn: true,
             };
           } else if (key !== 'raw' && e === ref && key.startsWith('cyan')) {
             // la referencia contra sí misma es la identidad: sus recortes tal cual
             note = {
-              text: 'This print is the colour reference: the others are matched to it.',
+              text: 'Reference print.',
               warn: false,
             };
           } else if (cached) {
-            frames = cached;
+            frames = cached.frames;
+            sheetAfter = cached.sheet;
             note = {
-              text: key.startsWith('cyan')
-                ? 'Colours matched to the reference print with the gray strip.'
-                : 'Levels normalized with the patch strip.',
+              text: key.startsWith('cyan') ? 'Matched to the reference.' : 'Colours normalized.',
               warn: false,
             };
           } else if (key !== 'raw') {
@@ -1044,12 +1067,19 @@ export function mountPhase2(root: HTMLElement): void {
                 }),
               );
               frames = out;
+              if (e.sheet) {
+                const bytes = new Uint8Array(await e.sheet.arrayBuffer());
+                const r = await run('frame_levels', { bytes, ...args }, [bytes.buffer]);
+                sheetAfter = {
+                  label: 'after',
+                  png: new Blob([r.png], { type: 'image/png' }),
+                  thumb: new Blob([r.thumb], { type: 'image/jpeg' }),
+                };
+              }
               e.levelCache = e.levelCache ?? new Map();
-              e.levelCache.set(key, out);
+              e.levelCache.set(key, { frames: out, sheet: sheetAfter });
               note = {
-                text: cyan
-                  ? 'Colours matched to the reference print with the gray strip.'
-                  : 'Levels normalized with the patch strip.',
+                text: cyan ? 'Matched to the reference.' : 'Colours normalized.',
                 warn: false,
               };
             } catch (err) {
@@ -1063,6 +1093,7 @@ export function mountPhase2(root: HTMLElement): void {
           replaceResult(e, {
             ...e,
             frames,
+            sheetAfter,
             // un fallo queda como recortes crudos: la próxima pasada lo reintenta
             levelsKey: failed ? 'raw' : key,
             levelNote: note,
@@ -1192,18 +1223,11 @@ export function mountPhase2(root: HTMLElement): void {
           ? el(
               'div',
               { class: 'missing-box' },
-              el('strong', {}, `Missing frames (${missing.length}): `),
+              el('strong', {}, `Missing frames: ${missing.length}. `),
               missing.join(', '),
-              el(
-                'div',
-                { style: 'margin-top:6px' },
-                'Use “Rescue sheets” below to reprint only these.',
-              ),
             )
           : el('div', { class: 'allok-box' }, el('strong', {}, 'No frames missing.')),
       );
-      rescueSection.style.display = missing.length ? '' : 'none';
-      rescueMissing = missing;
     }
     renderAssignBox();
     framesState.textContent = project.processedFrames.size
@@ -1302,168 +1326,6 @@ export function mountPhase2(root: HTMLElement): void {
     return lines.join('\n');
   }
 
-  // ── hojas de rescate ─────────────────────────────────────────
-  let rescueMissing: string[] = [];
-  const rescueOriginals = new Map<string, File>(); // nombre → File
-  const rescueInfo = el('div', { class: 'hint' });
-  const rescueDz = dropzone({
-    label: 'Drop the project frames folder (…_frames/)',
-    sublabel: 'The copies phase ① saved next to the layout, to reprint only the failed frames.',
-    accept: 'image/*,.tif,.tiff',
-    multiple: true,
-    dark: true,
-    onFiles: (files) => {
-      for (const f of files) rescueOriginals.set(f.name.replace(/\.[^.]+$/, ''), f);
-      rescueInfo.textContent = `${rescueOriginals.size} originals loaded.`;
-    },
-  });
-  const rescueProg = progressBar();
-  rescueProg.hide();
-  const rescueCancel = cancelButton('Cancel');
-  const rescueBtn = el(
-    'button',
-    {
-      class: 'btn blue',
-      onclick: async () => {
-        if (!ph2.layout?.ajustes) {
-          toast(
-            'This layout has no generation settings (is it from v1?). Generate the sheets with MXM Studio to use rescue.',
-            'err',
-          );
-          return;
-        }
-        const found: { label: string; file: File }[] = [];
-        const sinOriginal: string[] = [];
-        for (const et of rescueMissing) {
-          const safe = sanitizeLabel(et);
-          let file = rescueOriginals.get(safe) ?? rescueOriginals.get(et);
-          // también: buscar por archivo_original del layout
-          if (!file) {
-            outer: for (const h of ph2.layout.hojas ?? []) {
-              for (const [key, info] of Object.entries(h.frames ?? {})) {
-                if ((info.etiqueta ?? key) === et && info.archivo_original) {
-                  const base = (info.archivo_original.split('/').pop() ?? '').replace(
-                    /\.[^.]+$/,
-                    '',
-                  );
-                  file = rescueOriginals.get(base);
-                  if (file) break outer;
-                }
-              }
-            }
-          }
-          if (file) found.push({ label: et, file });
-          else sinOriginal.push(et);
-        }
-        if (sinOriginal.length) {
-          toast(`No original copy (cannot be reprinted): ${sinOriginal.join(', ')}`, 'err');
-        }
-        if (!found.length) {
-          toast('No original copy found for any missing frame.', 'err');
-          return;
-        }
-        rescueBtn.disabled = true;
-        const ctl = rescueCancel.arm();
-        const unlock = lockControls(rescueSection, [rescueCancel.button]);
-        rescueProg.show();
-        try {
-          // un layout v2 trae el bloque de ajustes completo: los valores por
-          // defecto solo cubren claves que un layout real nunca deja vacías
-          const ajustes: Settings = { ...defaultSettings(), ...ph2.layout.ajustes };
-          let baseName = ajustes.out_name || 'hojas';
-          baseName = baseName.replace(/_rescate$/, '');
-          ajustes.out_name = `${baseName}_rescate`;
-          ajustes.registration_on = true;
-          ajustes.sheets_include = '';
-          ajustes.sheets_exclude = '';
-          ajustes.page_num_start = 1;
-          ajustes.page_num_prefix = `${ajustes.page_num_prefix || ''}R`;
-          const frames: GenFrame[] = [];
-          for (const { file } of found) {
-            const isTiff = /\.(tif|tiff)$/i.test(file.name);
-            let getImageData: (full: boolean) => Promise<RgbaImage>;
-            let w = 16,
-              h = 9,
-              hasAlpha = false,
-              sixteen = false;
-            const info = await imageInfo(file).catch(() => null);
-            if (info && (isTiff || info.sixteen)) {
-              // TIFF y 16 bits: el núcleo, y a la hoja en su profundidad
-              ({ w, h, sixteen } = info);
-              hasAlpha = info.alpha;
-              getImageData = async (full) => {
-                const bytes = new Uint8Array(await file.arrayBuffer());
-                if (full && sixteen) {
-                  const r = await run('decode_image16', { bytes }, [bytes.buffer]);
-                  return { data: r.rgba16, w: r.w, h: r.h, deep: true };
-                }
-                const r = await run('decode_image', { bytes }, [bytes.buffer]);
-                return { data: r.rgba, w: r.w, h: r.h };
-              };
-            } else {
-              const bmp = await createImageBitmap(file);
-              w = bmp.width;
-              h = bmp.height;
-              hasAlpha = /\.(png|webp)$/i.test(file.name);
-              bmp.close();
-              getImageData = async () => {
-                const b = await createImageBitmap(file);
-                const c = new OffscreenCanvas(b.width, b.height);
-                const ctx = context2d(c);
-                ctx.drawImage(b, 0, 0);
-                b.close();
-                const d = ctx.getImageData(0, 0, c.width, c.height);
-                return { data: new Uint8Array(d.data.buffer), w: c.width, h: c.height };
-              };
-            }
-            frames.push({ name: file.name, blob: file, w, h, hasAlpha, sixteen, getImageData });
-          }
-          const settings = await resolveCyanCurve(ajustes, []);
-          const out = await generateSheets({
-            settings,
-            frames,
-            labels: found.map((f) => f.label),
-            timeline: [],
-            videoMeta: ph2.layout.video ?? {},
-            includeFrames: true,
-            signal: ctl.signal,
-            confirmMemory: (b) => confirmHeavyOnPhone('One rescue sheet', b),
-            onProgress: (d, t, note) => rescueProg.set(d / t, note),
-          });
-          const zip = await makeZip(out.files);
-          download(zip, `${ajustes.out_name}.zip`, 'application/zip');
-          toast(
-            `Rescue sheets generated with ${found.length} frame(s). Print, paint/expose, scan and process against the rescue layout.`,
-            'ok',
-          );
-        } catch (e) {
-          if (isCancelled(e)) {
-            toast('Rescue sheets cancelled.');
-          } else {
-            console.error(e);
-            toast(`Rescue failed: ${errMsg(e)}`, 'err');
-          }
-        } finally {
-          rescueCancel.disarm();
-          unlock();
-          rescueBtn.disabled = false;
-          rescueProg.hide();
-        }
-      },
-    },
-    'Generate rescue sheets',
-  );
-
-  const rescueSection = el(
-    'div',
-    { style: 'display:none; margin-top:16px' },
-    el('h2', {}, 'Rescue sheets'),
-    rescueDz,
-    rescueInfo,
-    el('div', { class: 'btn-row' }, rescueBtn, rescueCancel.button),
-    rescueProg.root,
-  );
-
   // ── escaneos de demostración ─────────────────────────────────
   /** Convierte una hoja recién generada en un “escaneo”: la pega girada 2°
    *  sobre un fondo mayor, como saldría de un escáner de mesa. Recorre el
@@ -1551,11 +1413,6 @@ export function mountPhase2(root: HTMLElement): void {
     ),
     resizeCheck.label,
     patchesCheck.label,
-    el(
-      'div',
-      { class: 'hint' },
-      'Every sheet of the project carries the strip, or none does (Registration, phase ①). In cyanotype, each print is matched to the reference print, which evens out differences in exposure and chemistry between prints.',
-    ),
     refField,
     fineCheck.label,
     el('h3', {}, 'Scans'),
@@ -1573,7 +1430,6 @@ export function mountPhase2(root: HTMLElement): void {
     el('h2', {}, 'Processing report'),
     framesState,
     resultsBox,
-    rescueSection,
   );
 
   root.append(el('div', { class: 'workbench' }, paper, bench));

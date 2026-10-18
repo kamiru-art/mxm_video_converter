@@ -54,14 +54,11 @@ Between phase 1 and phase 2, you do the manual work:
   and how much the browser can keep on disk. The ZIP is written to disk
   sheet by sheet, so a long project does not fill the memory of the
   browser.
-- One option includes the frames as image files in the ZIP. Phase 2 needs
-  them for the rescue sheets, and you can use them for anything else.
+- One option includes the frames as image files in the ZIP.
 - You can set the grid, the paper size and the resolution in dots per inch.
 - The application selects the page orientation that fits best.
 - You can add labels and a sheet number.
 - You can select which frames and which sheets to print.
-- The application finds the drawings that are identical. It prints each
-  repeated frame one time only, and it uses that frame again for the video.
 - You can write the sheets as PNG, as TIFF, or as a PDF that is ready to
   print. If a frame has 16 bits for each channel, the sheets are 16-bit too,
   in all three formats: a TIFF is never less deep than what you loaded.
@@ -118,8 +115,9 @@ Between phase 1 and phase 2, you do the manual work:
   sheet or a video that needs very much memory, the application asks you
   first, because the phone can close the tab.
 - The application makes a report with thumbnails.
-- The application makes rescue sheets. A rescue sheet contains only the
-  frames that failed, thus you print again only what is necessary.
+- With the gray strip on the sheets, the application can match the
+  colours of the scans. In cyanotype, you pick the reference print and the
+  report shows each sheet before and after.
 
 ### Manual sheet assignment
 
@@ -144,7 +142,7 @@ without your own files and without a printer.
 ### The new video
 
 The application makes the video in your browser. It keeps the original
-sequence of the frames and the repeated frames, and you pick where the video
+sequence of the frames, and you pick where the video
 goes:
 
 - MOV, with one PNG image for each frame: for DaVinci Resolve, Premiere,
@@ -187,7 +185,7 @@ you turn off skipping, each gap shows the drawing before it, and the video
 keeps the length of the original stretch.
 
 Every long task has a Cancel button: extracting frames, generating the
-sheets, processing a batch of scans, the rescue sheets and the final video.
+sheets, processing a batch of scans and the final video.
 While one runs, the options of that panel are locked.
 
 The application reads MP4, WebM, AVI and MOV files. It decodes them with

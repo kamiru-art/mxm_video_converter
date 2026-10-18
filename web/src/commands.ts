@@ -89,8 +89,6 @@ export interface Commands {
     };
     result: string;
   };
-  dedup_hashes: { args: { meta: string; pixels: Bytes }; result: string };
-  group_duplicates: { args: { hashes: string; threshold?: number }; result: string };
   content_histogram: { args: { meta: string; pixels: Bytes }; result: string };
   effective_curve: {
     args: { lut?: string; strength?: number; adapt?: number; hist?: string };

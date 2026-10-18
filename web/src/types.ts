@@ -174,6 +174,8 @@ export interface ScanOutput {
   sin_identificar: CoreFrame[];
   overlay: Bytes | null;
   overlay_thumb?: Bytes;
+  /** la hoja enderezada y reducida, sólo si lleva la tira de grises */
+  sheet?: Bytes;
 }
 
 /** Salida (JSON) de scan_detect: la homografía para el warp en la GPU y el
@@ -217,12 +219,6 @@ export interface RenderSheetOutput {
   page_h: number;
 }
 
-/** Agrupación de dibujos repetidos sobre la selección actual. */
-export interface DedupGroups {
-  reps: number[];
-  rep_of: number[];
-}
-
 // ── calibración: perfiles guardados ─────────────────────────────
 
 export interface PrinterProfile {
@@ -252,7 +248,6 @@ export interface Phase1Persist {
   naming: 'auto' | 'original';
   numbering: 'sequential' | 'original';
   pageNumbering: 'sequential' | 'original';
-  dedupOn: boolean;
 }
 
 export interface PresetProfile {

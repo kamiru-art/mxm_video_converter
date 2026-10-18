@@ -43,7 +43,7 @@
 
 | Boundary | What belongs here | What must not be here |
 |----------|-------------------|------------------------|
-| `rust-core/src/` domain modules (`sheet`, `photo`, `scanproc`, `conform`, `cyanotype`, `aruco`, `qr`, `calib`, `geometry`, `img`, `imgproc`, `codecs`, `dedup`, `pdf`, `text`, `layoutfile`, `yuv`) | Pure image and geometry work. Plain Rust types. | `wasm_bindgen`, browser types, input and output. |
+| `rust-core/src/` domain modules (`sheet`, `photo`, `scanproc`, `conform`, `cyanotype`, `aruco`, `qr`, `calib`, `geometry`, `img`, `imgproc`, `codecs`, `pdf`, `text`, `layoutfile`, `yuv`) | Pure image and geometry work. Plain Rust types. | `wasm_bindgen`, browser types, input and output. |
 | `rust-core/src/api.rs` | The WebAssembly boundary: argument validation, JSON to typed values, `Result<_, JsValue>`. | Image algorithms. |
 | `web/src/pool.ts` | Worker lifetime, dispatch, memory recycling. | Anything about the interface. |
 | `web/src/device.ts` | What the page knows of the machine: phone or not (`isMobile`), the RAM to count on (`deviceRamGb`), and the question before a job too heavy for a phone (`confirmHeavyOnPhone`). | The memory estimate of each job (that stays next to the job). |

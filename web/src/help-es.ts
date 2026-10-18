@@ -20,9 +20,7 @@ ejemplo de 6 fotogramas&rdquo;</strong>. Crea una animación corta. Genera las
 hojas y luego, en ②, pulsa <strong>&ldquo;Simúlalos con las hojas de esta
 sesión&rdquo;</strong> para obtener escaneos falsos de ellas.</p>
 <p>Suelta un video o una carpeta de imágenes. Elige cuántos fotogramas por
-segundo quieres, o todos para animación fotograma a fotograma. Si activas
-<strong>Detectar dibujos repetidos</strong>, los fotogramas idénticos se imprimen
-una sola vez y se usan de nuevo dondequiera que aparecen en el video.</p>
+segundo quieres, o todos para animación fotograma a fotograma.</p>
 <p>Los videos de algunas cámaras traen detalle de color extra. La app lo
 conserva, pero en algunos navegadores eso hace que la carga sea lenta. Si es
 demasiado lenta, activa <strong>Decodificación rápida de 8 bits</strong>: es más
@@ -39,9 +37,7 @@ Registro.</p>
 <p>Puedes exportar las hojas como <strong>PNG</strong>, <strong>PDF</strong>
 (listo para imprimir), <strong>TIFF</strong>, o varios a la vez. La descarga
 siempre incluye un archivo que termina en <code>_layout.json</code>, que
-necesitarás en ②. Deja activado <strong>Incluir los fotogramas como archivos de imagen</strong>:
-necesitas esa copia de los fotogramas para hacer hojas de rescate más adelante.
-<strong>Imprime siempre al 100&nbsp;%</strong>, nunca &ldquo;ajustar a la página&rdquo;.</p>
+necesitarás en ②. <strong>Imprime siempre al 100&nbsp;%</strong>, nunca &ldquo;ajustar a la página&rdquo;.</p>
 
 <h3>Modo cianotipia</h3>
 <p>El modo cianotipia hace <strong>negativos para imprimir en película
@@ -93,15 +89,10 @@ hoja impreso en la página</strong> (abajo a la derecha, a menos que lo hayas mo
 los dibujos, y elige la hoja. La app entonces recorta sus fotogramas al
 momento. Cada fila del informe tiene el mismo menú en la columna <em>Asignar</em>,
 así que también puedes corregir una hoja en la que la app se equivocó.</p>
-<p>El informe muestra qué fotogramas se recuperaron y cuáles faltan. Para
-pintar de nuevo los que faltan, suelta la carpeta de fotogramas que vino con la descarga de tus
-hojas en <strong>Hojas de rescate</strong> y pulsa
-<strong>Generar hojas de rescate</strong>. Obtienes hojas nuevas solo con esos
-fotogramas.</p>
+<p>El informe muestra qué fotogramas se recuperaron y cuáles faltan.</p>
 
 <h3>③ Video</h3>
-<p>La app vuelve a poner los fotogramas en su orden original, con los dibujos
-repetidos en todos sus lugares. Para el sonido usa el video original. Si
+<p>La app vuelve a poner los fotogramas en su orden original. Para el sonido usa el video original. Si
 recargaste la página desde que hiciste las hojas, suelta otra vez el video en
 <strong>Video original (para su audio)</strong>. Luego elige cómo
 guardarlo:</p>

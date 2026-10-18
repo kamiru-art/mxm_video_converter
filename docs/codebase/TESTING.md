@@ -4,7 +4,7 @@
 
 | Layer | Tool | What it covers | Evidence |
 |-------|------|----------------|----------|
-| Rust unit | The built-in `#[test]` harness | 71 tests across the domain modules; those of `conform.rs`, `photo.rs` and `yuv.rs` (8, the twelve ways a 10-bit frame conversion can go wrong) are preceded by the list of the ways it could fail | `rust-core/src/*.rs` |
+| Rust unit | The built-in `#[test]` harness | 69 tests across the domain modules; those of `conform.rs`, `photo.rs` and `yuv.rs` (8, the twelve ways a 10-bit frame conversion can go wrong) are preceded by the list of the ways it could fail | `rust-core/src/*.rs` |
 | Rust integration | The same harness, in `tests/` | 8 end-to-end round trips: build a sheet, simulate a scan of it, recover the frames. One of them prints the same cyanotype sheet five ways (scanner cast, under- and overexposed, warmer paper, tea-toned) and requires the gray strip to bring each within 3 levels of the reference print, which must stay blue; then makes the underexposed print the reference and requires the first to follow it (1.9 levels), and in normal mode brings a tinted scan back to the digital colours (41.1 → 0.5). 2 for calibration, preceded by the ten ways they could fail: the EDN chart exposed with a hard process (about 40 % useful densities), its own uneven coating per print and a crooked scan; one print against three averaged against a second pass printed with the first curve, measured by how straight the tone comes out (and the same curve whatever the file order); the film dropped as one of three prints must be refused by name. Artifacts: `artifacts/calibration/*.json`, byte-identical from run to run | `rust-core/tests/pipeline.rs`, `rust-core/tests/calibration.rs` |
 | Rust lint and format | `cargo clippy -- -D warnings` (native and wasm32), `cargo fmt --check` | Every warning is an error; see `CONVENTIONS.md` §2 | `rust-core/Cargo.toml`, `rust-core/rustfmt.toml` |
 | Web lint and format | Biome (`npm run lint`) | `any`, `@ts-ignore`, default exports, non-null assertions, floating promises, formatting | `web/biome.jsonc` |
@@ -33,7 +33,7 @@ test passed in the three browsers at both sizes (the translator spent 6–9 ms
 in the whole Spanish run). On 2026-10-12, with the missing-frames options, the pipeline, interface and language tests passed in Chrome, Zen and Safari at both sizes. The Rust counts:
 
 ```
-Unit tests (src/lib.rs):          71 passed; 0 failed
+Unit tests (src/lib.rs):          69 passed; 0 failed
 Integration (tests/calibration.rs): 2 passed; 0 failed
 Integration (tests/pipeline.rs):   8 passed; 0 failed
 Doc-tests:                          0
@@ -86,8 +86,8 @@ The final video has a lossless master (MOV or PNG ZIP) and a compressed MP4;
 the lossless test is the hardest scenario in the suite. A sequence of five positions and three drawings: a 16-bit PNG of
 the majority size (it must be copied as it is), an 8-bit PNG of 322×179
 (centred on 320×180 without resampling and widened to 16 bits) and a 16-bit
-TIFF (turned into a 16-bit PNG by the core), with repeats, as deduplication
-leaves them. The page checks the plan (320×180, 16 bits, 1 copied, 2
+TIFF (turned into a 16-bit PNG by the core), with repeats, as held gaps
+leave them. The page checks the plan (320×180, 16 bits, 1 copied, 2
 conformed, none resized) and the sound: the stereo 44.1 kHz sample, cut from
 0.5 s, must be 2.5 s of PCM whose dominant frequency (zero crossings) is 440
 Hz before t = 1 s and 880 Hz after, which proves the cut and the re-timing
@@ -202,7 +202,7 @@ There is no coverage target, no coverage tool and no coverage gate.
 Known gaps, by size:
 
 - `rust-core/src/scanproc.rs`, the largest and most complex module, has no
-  unit tests. It is covered only indirectly by the 7 integration round trips.
+  unit tests. It is covered only indirectly by the 8 integration round trips.
 - `rust-core/src/api.rs`, the whole WebAssembly boundary, has no unit tests.
 - All of `web/src` has no unit tests. The interface test drives one path
   through each phase (the example project); the other options of phase 1
