@@ -247,8 +247,6 @@ export const EXACT: Record<string, string> = {
   'not detected': 'no detectada',
   'Resize each frame to its original digital size':
     'Redimensionar cada fotograma a su tamaño digital original',
-  'Normalize levels with the gray strip (if the sheet has one)':
-    'Normalizar niveles con la tira de grises (si la hoja tiene una)',
   'Local correction for warped paper (recommended)':
     'Corrección local para papel deformado (recomendada)',
   'Not reprocessed. The report stays as it was.': 'No se reprocesó. El informe queda como estaba.',
@@ -511,14 +509,23 @@ export const EXACT: Record<string, string> = {
   'Could not compute the homography (degenerate markers).':
     'No se pudo calcular la homografía (marcadores degenerados).',
   'Levels normalized with the patch strip.': 'Niveles normalizados con la tira de parches.',
+  'Normalize levels with the gray strip': 'Normalizar niveles con la tira de grises',
+  'Colour reference print': 'Copia de referencia de color',
+  'Pick the print that came out best: the others are matched to it. Changing it, or the box above, only recolours the frames already cut; nothing is scanned again.':
+    'Elige la copia que salió mejor: las demás se igualan a ella. Cambiarla, o la casilla de arriba, solo recolorea los fotogramas ya recortados; no se vuelve a procesar ningún escaneo.',
+  'Every sheet of the project carries the strip, or none does (Registration, phase ①). In cyanotype, each print is matched to the reference print, which evens out differences in exposure and chemistry between prints.':
+    'O todas las hojas del proyecto llevan la tira, o ninguna (Registro, fase ①). En cianotipia, cada copia se iguala a la copia de referencia, así se emparejan las diferencias de exposición y de química entre copias.',
+  'The gray strip could not be read: this sheet keeps its scanned colours, unlike the rest.':
+    'No se pudo leer la tira de grises: esta hoja conserva los colores del escaneo, a diferencia del resto.',
+  'This print is the colour reference: the others are matched to it.':
+    'Esta copia es la referencia de color: las demás se igualan a ella.',
+  'process the scans first': 'procesa primero los escaneos',
+  'The gray strip of this scan cannot be matched.':
+    'La tira de grises de este escaneo no se puede igualar.',
+  'The gray strip does not fit beside the markers, so no sheet will carry it. Use smaller markers or a larger page.':
+    'La tira de grises no cabe junto a los marcadores, así que ninguna hoja la llevará. Usa marcadores más pequeños o una página más grande.',
   'Colours matched to the reference print with the gray strip.':
     'Colores igualados a la copia de referencia con la tira de grises.',
-  'This print is the colour reference: the other prints of the batch are matched to it.':
-    'Esta copia es la referencia de color: las demás copias del lote se igualan a ella.',
-  'The gray strip could not be read: colours left as scanned.':
-    'No se pudo leer la tira de grises: los colores quedan como se escanearon.',
-  'In cyanotype, the first print read becomes the colour reference and the rest are matched to it, so differences in exposure and chemistry between prints even out.':
-    'En cianotipia, la primera copia leída se vuelve la referencia de color y las demás se igualan a ella, así se emparejan las diferencias de exposición y de química entre copias.',
   'No marker identity or readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.':
     'Sin identidad de marcadores ni QR legible: hoja identificada por eliminación (el layout tiene una sola hoja). Verifica en el informe que este escaneo pertenece a este proyecto.',
   "Sheet not identified: crops saved as 'unidentified'.":
@@ -779,6 +786,13 @@ export const TEMPLATES: [string, string][] = [
   [
     'With {#0} markers, up to {#1} sheets. For more, turn on "Add a QR code per frame".',
     'Con {#0} marcadores, hasta {#1} hojas. Para más, activa "Agregar un código QR por fotograma".',
+  ],
+  ['sheet {#0} · {1}', 'hoja {#0} · {1}'],
+  ['matching colours: {#0}/{#1} frames', 'igualando colores: {#0}/{#1} fotogramas'],
+  ['Colours not matched: {0}', 'Colores sin igualar: {0}'],
+  [
+    'The gray strip of {#0} scan(s) could not be read: those sheets keep their scanned colours. Check them in the report.',
+    'No se pudo leer la tira de grises de {#0} escaneo(s): esas hojas conservan los colores del escaneo. Revísalas en el informe.',
   ],
   ['{#0} frames loaded', '{#0} fotogramas cargados'],
   ['{#0} selected', '{#0} seleccionados'],

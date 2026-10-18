@@ -13,8 +13,8 @@ use crate::layoutfile;
 use crate::pdf::PdfBuilder;
 use crate::photo::FramePixels;
 use crate::scanproc::{
-    base_report, detect_scan, finish_scan, process_scan, resolve_markers, FinishInput, LocalShift,
-    ScanOptions, MAX_IMAGE_PIXELS,
+    apply_level_curves, base_report, detect_scan, finish_scan, patch_curves, process_scan,
+    resolve_markers, FinishInput, LocalShift, ScanOptions, MAX_IMAGE_PIXELS,
 };
 use crate::sheet::{self, FrameInput, Settings};
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -106,6 +106,14 @@ fn parse_frames(meta_json: &str, pixels: &[u8]) -> Result<Vec<FrameInput>, JsVal
 pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result<String, JsValue> {
     let s = parse_settings(settings_json)?;
     let l = sheet::build_layout(&s, (first_w, first_h)).map_err(err)?;
+    let mut avisos = sheet::cyanotype_size_warnings(&s);
+    // la tira va en todas las hojas o en ninguna: si no cabe, en ninguna
+    if s.gray_patch_on && l.patch_strip.is_none() {
+        avisos.push(
+            "The gray strip does not fit beside the markers, so no sheet will carry it. Use smaller markers or a larger page."
+                .to_string(),
+        );
+    }
     Ok(json!({
         "page_w": l.page_w,
         "page_h": l.page_h,
@@ -117,7 +125,7 @@ pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result
         "cell_h": l.cell_h,
         "img_area_h": l.img_area_h,
         "grid_swapped": (l.cols, l.rows) != (s.cols, s.rows),
-        "avisos": sheet::cyanotype_size_warnings(&s),
+        "avisos": avisos,
         "marker_capacity": sheet::marker_capacity(&s),
     })
     .to_string())
@@ -349,17 +357,11 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     if let Some(b) = opts_v.get("resize_to_original").and_then(|v| v.as_bool()) {
         opts.resize_to_original = b;
     }
-    if let Some(b) = opts_v.get("normalize_patches").and_then(|v| v.as_bool()) {
-        opts.normalize_patches = b;
-    }
     if let Some(b) = opts_v.get("fine_align").and_then(|v| v.as_bool()) {
         opts.fine_align = b;
     }
     // asignación manual de hoja (cuando el QR no se lee)
     opts.forced_sheet = opts_v.get("forced_sheet").and_then(|v| v.as_i64());
-    opts.patch_reference = opts_v
-        .get("patch_reference")
-        .and_then(|v| serde_json::from_value::<Vec<[f64; 3]>>(v.clone()).ok());
     opts
 }
 
@@ -471,6 +473,34 @@ pub fn scan_process(
     let (img, _alpha) = codecs::decode(scan_bytes).map_err(err)?;
     let out = process_scan(img, scan_name, &layout, &opts, &claims_map);
     Ok(scan_output_to_js(out, wants_thumbs(opts_json)))
+}
+
+/// Normaliza UN recorte ya guardado con la tira de grises de su escaneo:
+/// `measured` y `niveles` son los `parche_medido` / `parche_niveles` del
+/// informe; `reference_json`, en cianotipia, la tira de la copia de
+/// referencia (`null` en modo normal). Devuelve {png, thumb}. Es lo único que
+/// cuesta activar la opción o cambiar de referencia: ni detectar ni enderezar.
+#[wasm_bindgen]
+pub fn frame_levels(
+    png: &[u8],
+    measured_json: &str,
+    niveles_json: &str,
+    cyan: bool,
+    reference_json: &str,
+) -> Result<JsValue, JsValue> {
+    let measured: Vec<[f64; 3]> = serde_json::from_str(measured_json).map_err(err)?;
+    let niveles: Vec<i64> = serde_json::from_str(niveles_json).map_err(err)?;
+    let reference: Option<Vec<[f64; 3]>> = serde_json::from_str(reference_json).map_err(err)?;
+    let curves = patch_curves(&measured, &niveles, cyan, reference.as_deref())
+        .ok_or_else(|| err("The gray strip of this scan cannot be matched."))?;
+    let (mut img, _alpha) = codecs::decode(png).map_err(err)?;
+    apply_level_curves(&mut img, &curves);
+    let obj = Object::new();
+    let out = codecs::encode_png_dyn(&img);
+    Reflect::set(&obj, &"png".into(), &Uint8Array::from(out.as_slice())).ok();
+    let jpg = thumb_jpeg(&img);
+    Reflect::set(&obj, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
+    Ok(obj.into())
 }
 
 /// Fase de detección para el camino con warp por WebGPU: recibe el RGBA de

@@ -5,7 +5,7 @@ use mxm_core::cyanotype;
 use mxm_core::geometry::{apply_h, invert_h, Rng, H3};
 use mxm_core::img::{DynImg, Rgb};
 use mxm_core::photo::FramePixels;
-use mxm_core::scanproc::{process_scan, ScanOptions};
+use mxm_core::scanproc::{self, process_scan, ScanOptions};
 use mxm_core::sheet::{self, build_layout, build_layout_json, render_page, FrameInput, Settings};
 use serde_json::json;
 use std::collections::HashMap;
@@ -523,23 +523,37 @@ fn scanner(img: &Rgb, g: [f64; 3], o: [f64; 3]) -> Rgb {
     out
 }
 
+/// Procesa el escaneo y devuelve el color medio de cada recorte; con
+/// `matched`, lo normaliza antes con la tira (`Some(None)`: modo normal;
+/// `Some(Some(r))`: cianotipia, hacia la tira `r` de la copia de referencia).
 fn run_patch(
     scan: Rgb,
     layout: &serde_json::Value,
-    norm: bool,
-    reference: Option<Vec<[f64; 3]>>,
+    matched: Option<Option<&[[f64; 3]]>>,
 ) -> (Vec<[f64; 3]>, serde_json::Value) {
-    let opts = ScanOptions {
-        normalize_patches: norm,
-        patch_reference: reference,
-        ..Default::default()
-    };
-    let out = process_scan(DynImg::U8(scan), "s.png", layout, &opts, &HashMap::new());
+    let out = process_scan(
+        DynImg::U8(scan),
+        "s.png",
+        layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
     assert_eq!(out.result["ok"], json!(true), "{}", out.result);
+    let curves = matched.map(|reference| {
+        let m: Vec<[f64; 3]> =
+            serde_json::from_value(out.result["parche_medido"].clone()).expect("tira sin medir");
+        let n: Vec<i64> = serde_json::from_value(out.result["parche_niveles"].clone()).unwrap();
+        scanproc::patch_curves(&m, &n, reference.is_some(), reference).expect("tira ilegible")
+    });
     let mut v: Vec<_> = out
         .frames
-        .iter()
-        .map(|(l, f)| (l.clone(), mean_rgb(&f.to_rgb8())))
+        .into_iter()
+        .map(|(l, mut f)| {
+            if let Some(c) = &curves {
+                scanproc::apply_level_curves(&mut f, c);
+            }
+            (l, mean_rgb(&f.to_rgb8()))
+        })
         .collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     (v.into_iter().map(|x| x.1).collect(), out.result)
@@ -559,7 +573,7 @@ fn dist(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
 /// azul, papel, viraje, escáner) y la tira la lleva a los colores de la copia
 /// de referencia del lote, sin volverla gris.
 #[test]
-fn cyanotype_prints_are_matched_to_the_reference_print() {
+fn gray_strip_matches_prints_to_the_chosen_reference() {
     let mut s = base_settings();
     s.gray_patch_on = true;
     s.mode = "cianotipia".into();
@@ -612,20 +626,25 @@ fn cyanotype_prints_are_matched_to_the_reference_print() {
         ),
     ];
 
-    // la referencia: primera copia, escáner limpio, queda tal cual
-    let (truth, rref) = run_patch(simulate_scan(&ref_print, 1.3, 7), &layout, true, None);
-    assert_eq!(rref["parche_referencia"], json!(true), "{rref}");
+    // la referencia: la copia que el usuario elige; normalizada contra sí
+    // misma queda igual, y sigue azul (antes la tira forzaba el parche
+    // oscuro a negro neutro)
+    let (truth, rref) = run_patch(simulate_scan(&ref_print, 1.3, 7), &layout, None);
     let reference: Vec<[f64; 3]> = serde_json::from_value(rref["parche_medido"].clone()).unwrap();
-    let (raw_ref, _) = run_patch(simulate_scan(&ref_print, 1.3, 7), &layout, false, None);
-    assert!(dist(&truth, &raw_ref) < 0.5, "la referencia cambió");
-    // y sigue azul: antes la tira forzaba el parche oscuro a negro neutro
-    for p in &truth {
+    let (self_matched, _) = run_patch(
+        simulate_scan(&ref_print, 1.3, 7),
+        &layout,
+        Some(Some(&reference)),
+    );
+    assert!(dist(&truth, &self_matched) < 0.5, "la referencia cambió");
+    for p in &self_matched {
         assert!(p[2] > p[0] + 15.0, "la copia perdió el azul: {p:?}");
     }
+    let mut under = None;
     for (name, img, (g, o)) in cases {
         let scan = || simulate_scan(&scanner(&img, g, o), 1.3, 7);
-        let (raw, _) = run_patch(scan(), &layout, false, None);
-        let (fixed, _) = run_patch(scan(), &layout, true, Some(reference.clone()));
+        let (raw, r) = run_patch(scan(), &layout, None);
+        let (fixed, _) = run_patch(scan(), &layout, Some(Some(&reference)));
         let (d0, d1) = (dist(&raw, &truth), dist(&fixed, &truth));
         eprintln!("{name}: sin tira {d0:.1}, con tira {d1:.1}");
         assert!(
@@ -636,5 +655,45 @@ fn cyanotype_prints_are_matched_to_the_reference_print() {
             d1 < 3.0,
             "{name}: tras la tira sigue a {d1:.1} niveles de la referencia"
         );
+        if name.starts_with("subexpuesta") {
+            under = Some((raw, r));
+        }
     }
+    // el usuario cambia de referencia a la copia subexpuesta: la primera
+    // copia se recalcula hacia ella
+    let (under_raw, ur) = under.unwrap();
+    let new_ref: Vec<[f64; 3]> = serde_json::from_value(ur["parche_medido"].clone()).unwrap();
+    let (moved, _) = run_patch(
+        simulate_scan(&ref_print, 1.3, 7),
+        &layout,
+        Some(Some(&new_ref)),
+    );
+    let d = dist(&moved, &under_raw);
+    eprintln!("referencia cambiada a la subexpuesta: {d:.1}");
+    assert!(d < 3.0, "con la nueva referencia queda a {d:.1} niveles");
+
+    // modo normal: lo impreso es conocido y el escáner con dominante vuelve
+    // a los colores digitales
+    let mut s = base_settings();
+    s.gray_patch_on = true;
+    let l = build_layout(&s, (16.0, 9.0)).unwrap();
+    let page = render_page(&s, &l, &frames, &labels, 1, true);
+    let mut rec = page.record.unwrap();
+    rec["archivo_hoja"] = json!("d_p1.png");
+    let layout = build_layout_json(&s, &l, &[rec], json!([]), json!({}), None);
+    let img = page.image.unwrap();
+    let (digital, _) = run_patch(simulate_scan(&img, 1.3, 7), &layout, None);
+    let (raw, _) = run_patch(
+        simulate_scan(&scanner(&img, cast.0, cast.1), 1.3, 7),
+        &layout,
+        None,
+    );
+    let (fixed, _) = run_patch(
+        simulate_scan(&scanner(&img, cast.0, cast.1), 1.3, 7),
+        &layout,
+        Some(None),
+    );
+    let (d0, d1) = (dist(&raw, &digital), dist(&fixed, &digital));
+    eprintln!("modo normal, escáner con dominante: sin tira {d0:.1}, con tira {d1:.1}");
+    assert!(d0 > 20.0 && d1 < 3.0, "modo normal: {d0:.1} → {d1:.1}");
 }

@@ -140,6 +140,13 @@ const handlers: Handlers = {
     ) as ScanOutput;
     return { value: r, transfer: scanTransfer(r) };
   },
+  frame_levels: (a) => {
+    const r = core.frame_levels(a.bytes, a.measured, a.niveles, a.cyan, a.reference) as {
+      png: Bytes;
+      thumb: Bytes;
+    };
+    return { value: r, transfer: [r.png.buffer, r.thumb.buffer] };
+  },
   scan_detect: (a) => core.scan_detect(a.rgba, a.w, a.h, a.name, a.layout, a.opts ?? '{}'),
   scan_finish: (a) => {
     const r = core.scan_finish(

@@ -102,6 +102,10 @@ export interface Commands {
     args: { bytes: Bytes; name: string; layout: string; opts?: string; claims?: string };
     result: ScanOutput;
   };
+  frame_levels: {
+    args: { bytes: Bytes; measured: string; niveles: string; cyan: boolean; reference: string };
+    result: { png: Bytes; thumb: Bytes };
+  };
   scan_detect: {
     args: { rgba: Bytes; w: number; h: number; name: string; layout: string; opts?: string };
     result: string;
