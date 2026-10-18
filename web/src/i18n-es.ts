@@ -359,6 +359,8 @@ export const EXACT: Record<string, string> = {
   'Download chart (negative for film)': 'Descargar carta (negativo para película)',
   'Drop the SCAN of the blue print': 'Suelta el ESCANEO de la copia azul',
   'Advanced options': 'Opciones avanzadas',
+  'On by default: the printed side of the film goes against the paper, as with the calibration chart. Turn it off only if you expose with the film the other way round, and know that the curve was measured mirrored.':
+    'Activado por defecto: la cara impresa de la película va contra el papel, como en la carta de calibración. Desactívalo sólo si expones con la película al revés, y ten en cuenta que la curva se midió en espejo.',
   'Several prints: drop the scans of several prints of the same chart together and the app averages them. It helps when a print came out uneven.':
     'Varias copias: suelta juntos los escaneos de varias copias de la misma carta y la app las promedia. Ayuda cuando una copia salió despareja.',
   'The last chart you downloaded used a different “Curve already on the chart”. Pick the one it was printed with, or the curve will be wrong.':

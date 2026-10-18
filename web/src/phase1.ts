@@ -721,7 +721,6 @@ export function mountPhase1(root: HTMLElement): void {
   const cyanBody = el(
     'div',
     {},
-    bindCheck('cyan_mirror', check('Mirror (emulsion-to-emulsion printing)', s.cyan_mirror)),
     field('Ink color', bindColor('cyan_ink', el('input', { type: 'color' }))),
     field(
       'Compensation curve (cyanotype profile)',
@@ -768,6 +767,19 @@ export function mountPhase1(root: HTMLElement): void {
       field(
         'Blocking border (mm)',
         bindNum('cyan_frame_border_mm', numberInput(0.8, { min: 0, step: 0.1 })),
+      ),
+    ),
+    // plegado: la carta de calibración sale siempre espejada, y un negativo
+    // sin espejo ya no coincide con ella
+    el(
+      'details',
+      { class: 'adv' },
+      el('summary', {}, 'Advanced options'),
+      bindCheck('cyan_mirror', check('Mirror (emulsion-to-emulsion printing)', s.cyan_mirror)),
+      el(
+        'div',
+        { class: 'hint' },
+        'On by default: the printed side of the film goes against the paper, as with the calibration chart. Turn it off only if you expose with the film the other way round, and know that the curve was measured mirrored.',
       ),
     ),
   );

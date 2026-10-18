@@ -774,7 +774,10 @@ where
         y_u.push(acc / n);
     }
     let mut y_iso = isotonic(&smooth_adaptive(&y_u));
-    let epsy = ((y_iso[y_iso.len() - 1] - y_iso[0]) * 1e-4).max(1e-6);
+    // desempate mínimo: se acumula a lo largo de cada meseta, y con 1e-4 los
+    // ~135 parches de papel blanco de un proceso duro subían el blanco 2,7
+    // niveles e inclinaban toda la curva hacia las luces
+    let epsy = ((y_iso[y_iso.len() - 1] - y_iso[0]) * 1e-9).max(1e-12);
     for i in 1..y_iso.len() {
         if y_iso[i] <= y_iso[i - 1] {
             y_iso[i] = y_iso[i - 1] + epsy;

@@ -7,16 +7,7 @@ import type { ProfileKind, ProfileMap } from './store.ts';
 import * as store from './store.ts';
 import type { CyanProfile, PrinterProfile } from './types.ts';
 import type { Child, SelectOption } from './ui.ts';
-import {
-  download,
-  dropzone,
-  el,
-  field,
-  numberInput,
-  select,
-  setOptions,
-  toast,
-} from './ui.ts';
+import { download, dropzone, el, field, numberInput, select, setOptions, toast } from './ui.ts';
 
 const PAPERS = ['A4', 'A3', 'A5', 'Letter'];
 
