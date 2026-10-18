@@ -54,6 +54,9 @@ pub struct ScanOptions {
     /// Hoja asignada a mano: cuando el QR no se lee y los IDs de marcador no
     /// bastan, el usuario dice a qué hoja pertenece este escaneo.
     pub forced_sheet: Option<i64>,
+    /// Cianotipia: colores (8 bits) de la tira de la copia de referencia del
+    /// lote, en el orden del layout.
+    pub patch_reference: Option<Vec<[f64; 3]>>,
 }
 
 impl Default for ScanOptions {
@@ -66,6 +69,7 @@ impl Default for ScanOptions {
             normalize_patches: false,
             fine_align: true,
             forced_sheet: None,
+            patch_reference: None,
         }
     }
 }
@@ -1197,8 +1201,37 @@ pub fn finish_scan(
     // 5b. Normalización con la tira de grises (opcional).
     if opts.normalize_patches {
         if let Some(patch_info) = layout.get("parche_grises").filter(|v| !v.is_null()) {
-            if normalize_with_patches(&mut warp, patch_info, s, local.as_ref()) {
-                warn!("Levels normalized with the patch strip.");
+            let cyan = is_cyan_mode(layout.get("modo").and_then(|v| v.as_str()).unwrap_or(""));
+            let measured = |v: &[[f64; 3]]| -> Value {
+                json!(v
+                    .iter()
+                    .map(|p| p.map(|x| (x * 10.0).round() / 10.0))
+                    .collect::<Vec<_>>())
+            };
+            match normalize_with_patches(
+                &mut warp,
+                patch_info,
+                s,
+                local.as_ref(),
+                cyan,
+                opts.patch_reference.as_deref(),
+            ) {
+                PatchNorm::Applied(m) => {
+                    res["parche_medido"] = measured(&m);
+                    if cyan {
+                        warn!("Colours matched to the reference print with the gray strip.");
+                    } else {
+                        warn!("Levels normalized with the patch strip.");
+                    }
+                }
+                PatchNorm::Reference(m) => {
+                    res["parche_medido"] = measured(&m);
+                    res["parche_referencia"] = json!(true);
+                    warn!("This print is the colour reference: the other prints of the batch are matched to it.");
+                }
+                PatchNorm::Unreadable => {
+                    warn!("The gray strip could not be read: colours left as scanned.");
+                }
             }
         }
     }
@@ -1412,105 +1445,177 @@ pub fn process_scan(
     )
 }
 
+/// Resultado de leer la tira de grises de un escaneo.
+enum PatchNorm {
+    /// Ajustado; lleva el color medido de cada parche (en orden del layout).
+    Applied(Vec<[f64; 3]>),
+    /// Leída pero sin tocar la imagen: primera copia en cianotipia, que pasa
+    /// a ser la referencia del lote.
+    Reference(Vec<[f64; 3]>),
+    Unreadable,
+}
+
+/// Normaliza los niveles con la tira de grises.
+///
+/// Modo normal: el negro y el blanco medidos vuelven a sus grises impresos,
+/// canal a canal (lo que se imprimió es conocido).
+///
+/// Cianotipia: lo impreso NO es conocido. La tira es un negativo y su copia
+/// sale del azul y el papel de esa química, esa exposición y ese lavado, que
+/// cambian de una copia a otra. Forzar el parche oscuro a negro volvía gris la
+/// copia azul. Por eso cada copia se lleva a los colores de la tira de una
+/// copia de referencia del mismo lote (`reference`), con todos los parches
+/// legibles y no sólo los extremos: así también se igualan los medios tonos
+/// de una copia más o menos expuesta. Sin referencia no se toca nada y se
+/// devuelven los colores medidos para que lo sean.
 fn normalize_with_patches(
     warp: &mut DynImg,
     patch_info: &Value,
     s: f64,
     local: Option<&LocalShift>,
-) -> bool {
+    cyan: bool,
+    reference: Option<&[[f64; 3]]>,
+) -> PatchNorm {
     let bboxes = match patch_info.get("bboxes").and_then(|v| v.as_array()) {
         Some(b) => b,
-        None => return false,
+        None => return PatchNorm::Unreadable,
     };
     let niveles: Vec<i64> = match patch_info.get("niveles").and_then(|v| v.as_array()) {
         Some(n) => n.iter().filter_map(|x| x.as_i64()).collect(),
-        None => return false,
+        None => return PatchNorm::Unreadable,
     };
-    if niveles.is_empty() || bboxes.len() != niveles.len() {
-        return false;
+    if niveles.len() < 2 || bboxes.len() != niveles.len() {
+        return PatchNorm::Unreadable;
     }
-    let i_black = niveles
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, &n)| n)
-        .unwrap()
-        .0;
-    let i_white = niveles
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, &n)| n)
-        .unwrap()
-        .0;
     let maxv = match warp {
         DynImg::U8(_) => 255.0f64,
         DynImg::U16(_) => 65535.0,
     };
-    let mean_of = |b: &Value| -> Option<[f64; 3]> {
+    // mediana y no media: una pincelada o una mancha sobre el parche no lo
+    // arrastra mientras cubra menos de la mitad
+    let median_of = |b: &Value| -> Option<[f64; 3]> {
         let bb = layoutfile::bbox_of(b)?;
         let crop = crop_frame(warp, bb, s, 0.25, local)?;
-        let mut acc = [0.0f64; 3];
-        let mut n = 0.0;
+        let mut ch: [Vec<f64>; 3] = Default::default();
         match &crop {
             DynImg::U8(i) => {
                 for p in i.data.as_chunks::<3>().0 {
                     for c in 0..3 {
-                        acc[c] += p[c] as f64;
+                        ch[c].push(p[c] as f64);
                     }
-                    n += 1.0;
                 }
             }
             DynImg::U16(i) => {
                 for p in i.data.as_chunks::<3>().0 {
                     for c in 0..3 {
-                        acc[c] += p[c] as f64;
+                        ch[c].push(p[c] as f64);
                     }
-                    n += 1.0;
                 }
             }
         }
-        if n == 0.0 {
+        if ch[0].is_empty() {
             return None;
         }
-        Some([acc[0] / n, acc[1] / n, acc[2] / n])
+        let mut out = [0.0; 3];
+        for c in 0..3 {
+            let v = &mut ch[c];
+            v.sort_by(|a, b| a.total_cmp(b));
+            out[c] = v[v.len() / 2];
+        }
+        Some(out)
     };
-    let black = match mean_of(&bboxes[i_black]) {
-        Some(b) => b,
-        None => return false,
-    };
-    let white = match mean_of(&bboxes[i_white]) {
-        Some(w) => w,
-        None => return false,
-    };
-    let black_t = maxv * (*niveles.iter().min().unwrap() as f64 / 255.0);
-    let white_t = maxv * (*niveles.iter().max().unwrap() as f64 / 255.0);
-    for c in 0..3 {
-        if white[c] - black[c] < maxv * 0.05 {
-            return false; // parches ilegibles
+    let mut measured = Vec::with_capacity(niveles.len());
+    for b in bboxes {
+        match median_of(b) {
+            Some(m) => measured.push(m),
+            None => return PatchNorm::Unreadable,
         }
     }
+    // los colores viajan en 8 bits: una referencia sacada de un escaneo de 8
+    // bits sirve para uno de 16, y al revés
+    let to8 = |v: &[[f64; 3]]| -> Vec<[f64; 3]> {
+        v.iter().map(|p| p.map(|x| x * 255.0 / maxv)).collect()
+    };
+    let mut order: Vec<usize> = (0..niveles.len()).collect();
+    order.sort_by_key(|&i| niveles[i]);
+    let (lo, hi) = (measured[order[0]], measured[order[order.len() - 1]]);
+    if (0..3).any(|c| hi[c] - lo[c] < maxv * 0.05) {
+        return PatchNorm::Unreadable; // parches ilegibles
+    }
+
+    let target: Vec<[f64; 3]> = if cyan {
+        match reference {
+            Some(r) if r.len() == niveles.len() => {
+                r.iter().map(|p| p.map(|x| x * maxv / 255.0)).collect()
+            }
+            _ => return PatchNorm::Reference(to8(&measured)),
+        }
+    } else {
+        niveles
+            .iter()
+            .map(|&n| [maxv * n as f64 / 255.0; 3])
+            .collect()
+    };
+    // en modo normal sólo los extremos, como antes: los grises intermedios
+    // impresos llevan la ganancia de punto de la impresora y no son los
+    // digitales. En cianotipia la referencia es otra copia de la misma tira,
+    // así que todos los parches valen.
+    let usable: Vec<usize> = if cyan {
+        order.clone()
+    } else {
+        vec![order[0], order[order.len() - 1]]
+    };
+
+    // puntos de control por canal, medido → objetivo, sólo donde los dos
+    // suben: dos parches que salieron iguales (luces quemadas, sombras
+    // empastadas) o uno pintado encima no dan un tramo vertical ni invertido
+    let mut curves: [Vec<(f64, f64)>; 3] = Default::default();
+    for c in 0..3 {
+        let pts = &mut curves[c];
+        for &i in &usable {
+            let (x, y) = (measured[i][c], target[i][c]);
+            match pts.last() {
+                Some(&(px, py)) if x - px < maxv * 0.01 || y <= py => {}
+                _ => pts.push((x, y)),
+            }
+        }
+        if pts.len() < 2 {
+            return PatchNorm::Unreadable;
+        }
+    }
+    // tramos lineales; fuera de la tira sigue la pendiente del tramo extremo
+    let map = |c: usize, v: f64| -> f64 {
+        let pts = &curves[c];
+        let k = pts
+            .partition_point(|&(x, _)| x <= v)
+            .clamp(1, pts.len() - 1);
+        let ((x0, y0), (x1, y1)) = (pts[k - 1], pts[k]);
+        y0 + (v - x0) * (y1 - y0) / (x1 - x0)
+    };
     match warp {
         DynImg::U8(i) => {
+            let luts: Vec<Vec<u8>> = (0..3)
+                .map(|c| {
+                    (0..256)
+                        .map(|v| map(c, v as f64).round().clamp(0.0, 255.0) as u8)
+                        .collect()
+                })
+                .collect();
             for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
-                    let v = (p[c] as f64 - black[c])
-                        * ((white_t - black_t) / (white[c] - black[c]))
-                        + black_t;
-                    p[c] = v.round().clamp(0.0, 255.0) as u8;
+                    p[c] = luts[c][p[c] as usize];
                 }
             }
         }
         DynImg::U16(i) => {
             for p in i.data.as_chunks_mut::<3>().0 {
                 for c in 0..3 {
-                    let v = (p[c] as f64 - black[c])
-                        * ((white_t - black_t) / (white[c] - black[c]))
-                        + black_t;
-                    p[c] = v.round().clamp(0.0, 65535.0) as u16;
+                    p[c] = map(c, p[c] as f64).round().clamp(0.0, 65535.0) as u16;
                 }
             }
         }
     }
-    true
+    PatchNorm::Applied(to8(&measured))
 }
 
 /// Miniatura de diagnóstico: verde = marcador detectado, rojo = perdido,

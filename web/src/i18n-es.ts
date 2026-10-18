@@ -511,6 +511,14 @@ export const EXACT: Record<string, string> = {
   'Could not compute the homography (degenerate markers).':
     'No se pudo calcular la homografía (marcadores degenerados).',
   'Levels normalized with the patch strip.': 'Niveles normalizados con la tira de parches.',
+  'Colours matched to the reference print with the gray strip.':
+    'Colores igualados a la copia de referencia con la tira de grises.',
+  'This print is the colour reference: the other prints of the batch are matched to it.':
+    'Esta copia es la referencia de color: las demás copias del lote se igualan a ella.',
+  'The gray strip could not be read: colours left as scanned.':
+    'No se pudo leer la tira de grises: los colores quedan como se escanearon.',
+  'In cyanotype, the first print read becomes the colour reference and the rest are matched to it, so differences in exposure and chemistry between prints even out.':
+    'En cianotipia, la primera copia leída se vuelve la referencia de color y las demás se igualan a ella, así se emparejan las diferencias de exposición y de química entre copias.',
   'No marker identity or readable QR: sheet identified by elimination (the layout has a single sheet). Verify in the report that this scan belongs to this project.':
     'Sin identidad de marcadores ni QR legible: hoja identificada por eliminación (el layout tiene una sola hoja). Verifica en el informe que este escaneo pertenece a este proyecto.',
   "Sheet not identified: crops saved as 'unidentified'.":

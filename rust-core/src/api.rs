@@ -357,6 +357,9 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     }
     // asignación manual de hoja (cuando el QR no se lee)
     opts.forced_sheet = opts_v.get("forced_sheet").and_then(|v| v.as_i64());
+    opts.patch_reference = opts_v
+        .get("patch_reference")
+        .and_then(|v| serde_json::from_value::<Vec<[f64; 3]>>(v.clone()).ok());
     opts
 }
 

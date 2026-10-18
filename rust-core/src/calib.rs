@@ -241,7 +241,12 @@ fn align_to_canonical(mut img: DynImg, cal: &CalGeometry, mode: &str) -> Result<
     }
     let mut src = Vec::new();
     let mut dst = Vec::new();
-    for (mid, corners) in &refined {
+    // en orden de id: el de un HashMap cambia en cada ejecución, y con él los
+    // puntos que sortea el RANSAC y los últimos decimales de la curva
+    let mut ids: Vec<&u32> = refined.keys().collect();
+    ids.sort();
+    for mid in ids {
+        let corners = &refined[mid];
         if let Some(b) = cal.marker_bboxes.get(mid) {
             let bf = [b[0] as f64, b[1] as f64, b[2] as f64, b[3] as f64];
             let bc = bbox_corners(bf);

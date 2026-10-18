@@ -63,6 +63,9 @@ export interface Phase2State {
   claims: Record<number, string>;
   /** nombre de escaneo → nº de hoja puesto a mano */
   assign: Record<string, number>;
+  /** cianotipia: colores de la tira gris de la copia de referencia del lote
+   *  (la primera que se leyó); las demás se igualan a ella */
+  patchRef: number[][] | null;
 }
 
 export const ph2: Phase2State = {
@@ -71,6 +74,7 @@ export const ph2: Phase2State = {
   results: [],
   claims: {},
   assign: {},
+  patchRef: null,
 };
 
 /** Opciones de detección comunes a todo el lote (van al núcleo en JSON). */
@@ -83,6 +87,7 @@ interface ScanOpts {
   fine_align: boolean;
   thumbs: boolean;
   forced_sheet?: number;
+  patch_reference?: number[][];
 }
 
 interface BatchContext {
@@ -123,6 +128,7 @@ export function mountPhase2(root: HTMLElement): void {
     ph2.layout = layout;
     ph2.layoutName = name;
     ph2.assign = {};
+    ph2.patchRef = null;
     layoutInfo.textContent = info;
   }
 
@@ -416,6 +422,7 @@ export function mountPhase2(root: HTMLElement): void {
       // miniaturas pequeñas del núcleo para el informe: con los recortes
       // enteros (cientos de MB) Safari se congelaba al desplazarlo
       thumbs: true,
+      ...(ph2.patchRef ? { patch_reference: ph2.patchRef } : {}),
     };
   }
 
@@ -572,6 +579,24 @@ export function mountPhase2(root: HTMLElement): void {
       ctl.signal.addEventListener('abort', () => prog.set(done / files.length, note()), {
         once: true,
       });
+      // cianotipia con tira gris: la primera copia que se lea es la
+      // referencia de color del lote, así que va sola y antes que el resto
+      const needsRef = (): boolean =>
+        ctx.base.normalize_patches &&
+        !ph2.patchRef &&
+        // el núcleo decide por el modo del layout, que es como se imprimió la tira
+        /^(cyan|cian)/i.test(String(ph2.layout?.modo ?? ''));
+      while (needsRef() && queue.length && !ctl.signal.aborted) {
+        const f = queue.shift() as File;
+        try {
+          addResult(await runOne(f, ctx));
+        } catch (e) {
+          toast(`Error in one scan: ${errMsg(e)}`, 'err');
+        }
+        done++;
+        prog.set(done / files.length, note());
+        if (ph2.patchRef) ctx.base = { ...ctx.base, patch_reference: ph2.patchRef };
+      }
       await Promise.all(
         Array.from({ length: width }, async () => {
           for (let f = queue.shift(); f && !ctl.signal.aborted; f = queue.shift()) {
@@ -845,6 +870,10 @@ export function mountPhase2(root: HTMLElement): void {
    *  escaneo, así que dos filas con el mismo nombre harían que editar una
    *  cambiara la otra. Un archivo, una fila. */
   function addResult(entry: ResultEntry): void {
+    const r = entry.result;
+    if (!ph2.patchRef && r.parche_referencia && Array.isArray(r.parche_medido)) {
+      ph2.patchRef = r.parche_medido as number[][];
+    }
     const dup = ph2.results.find((e) => e.result.scan === entry.result.scan);
     if (dup) {
       replaceResult(dup, entry);
@@ -883,6 +912,8 @@ export function mountPhase2(root: HTMLElement): void {
   function clearReport(keepAssign = false): void {
     for (const e of ph2.results) dropRows(e);
     ph2.results = [];
+    // la referencia de color vuelve a salir del lote que se procese ahora
+    ph2.patchRef = null;
     void clearProcessedCache(); // sus archivos en disco ya no los mira nadie
     if (!keepAssign) ph2.assign = {};
     reportTable.replaceChildren(reportHeader);
@@ -1335,6 +1366,11 @@ export function mountPhase2(root: HTMLElement): void {
     ),
     resizeCheck.label,
     patchesCheck.label,
+    el(
+      'div',
+      { class: 'hint' },
+      'In cyanotype, the first print read becomes the colour reference and the rest are matched to it, so differences in exposure and chemistry between prints even out.',
+    ),
     fineCheck.label,
     el('h3', {}, 'Scans'),
     scansDz,
