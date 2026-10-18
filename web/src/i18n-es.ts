@@ -349,18 +349,33 @@ export const EXACT: Record<string, string> = {
     'Imprime la página al 100 % (sin “ajustar a la página”), escanéala entera y suéltala aquí.',
   'Download test page': 'Descargar página de prueba',
   'Drop the SCAN of the printed page': 'Suelta el ESCANEO de la página impresa',
-  '21-patch strip (quick)': 'Tira de 21 parches (rápida)',
-  'EDN 2.2 chart, 256 tones (fine)': 'Carta EDN 2.2, 256 tonos (fina)',
   'Mirrored (like your real negatives)': 'En espejo (como tus negativos reales)',
   'Cyanotype curve': 'Curva de cianotipia',
-  'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve (Easy Digital Negatives method). Expose the chart exactly as you expose your work.':
-    'Mide la respuesta de tu proceso (impresora, película, química, luz) y crea la curva de compensación (método Easy Digital Negatives). Expón la carta exactamente como expones tu obra.',
-  Chart: 'Carta',
+  'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve with the 256-tone chart of Easy Digital Negatives 2.2. Expose the chart exactly as you expose your work.':
+    'Mide la respuesta de tu proceso (impresora, película, química, luz) y crea la curva de compensación con la carta de 256 tonos de Easy Digital Negatives 2.2. Expón la carta exactamente como expones tu obra.',
+  'Curve already on the chart': 'Curva ya aplicada a la carta',
+  '(none: first pass)': '(ninguna: primera pasada)',
+  'Second pass: pick the curve you saved from the first chart. The chart prints with it, and the new analysis corrects what it left. Save the result and use it instead of the first curve.':
+    'Segunda pasada: elige la curva que guardaste de la primera carta. La carta se imprime con ella, y el nuevo análisis corrige lo que esa curva dejó. Guarda el resultado y úsalo en lugar de la primera curva.',
   'Negative ink': 'Tinta del negativo',
-  'Print on transparency film at 100 %, expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).':
-    'Imprime en película transparente al 100 %, expón tu cianotipo como siempre, revela, seca y escanea la COPIA AZUL (no la película).',
+  'Print on transparency film at 100 %, in colour mode (not grayscale), expose your cyanotype as usual, develop, dry and scan the BLUE PRINT (not the film).':
+    'Imprime en película transparente al 100 %, en modo color (no en escala de grises), expón tu cianotipo como siempre, revela, seca y escanea la COPIA AZUL (no la película).',
   'Download chart (negative for film)': 'Descargar carta (negativo para película)',
   'Drop the SCAN of the blue print': 'Suelta el ESCANEO de la copia azul',
+  'Drop the SCANS of the blue prints': 'Suelta los ESCANEOS de las copias azules',
+  'one or more prints of the same chart: they are averaged':
+    'una o varias copias de la misma carta: se promedian',
+  'The last chart you downloaded used a different “Curve already on the chart”. Pick the one it was printed with, or the curve will be wrong.':
+    'La última carta que descargaste usaba otra “Curva ya aplicada a la carta”. Elige aquella con la que se imprimió, o la curva saldrá mal.',
+  'Second pass: this curve already includes the first one. Save it and use it instead.':
+    'Segunda pasada: esta curva ya incluye la primera. Guárdala y úsala en su lugar.',
+  'Drop at least one scan of the chart.': 'Suelta al menos un escaneo de la carta.',
+  'The curve applied to the chart has invalid values.':
+    'La curva aplicada a la carta tiene valores no válidos.',
+  'The curve applied to the chart is not increasing.':
+    'La curva aplicada a la carta no es creciente.',
+  "No hue followed the chart's nominal order, so all of them were considered. Check that the scan is flat and evenly lit, and that the print was not over- or underexposed.":
+    'Ningún matiz siguió el orden nominal de la carta, así que se consideraron todos. Comprueba que el escaneo esté plano y con luz pareja, y que la copia no esté sobreexpuesta ni subexpuesta.',
   Mirrored: 'En espejo',
   'EDN ColorBlocker': 'EDN ColorBlocker',
   '36 hues × 21 variants: finds the ink color that blocks UV best on your printer (not always black) and builds a 3-stop gradient. Print at maximum quality: a draft setting ruins this chart.':
@@ -1173,8 +1188,18 @@ export const TEMPLATES: [string, string][] = [
     'En tu impresora, el color {0} bloquea el UV claramente mejor que el negro: úsalo como tinta de los negativos.',
   ],
   [
-    "{#0} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV). They are not discarded.",
-    '{#0} matiz(es) no siguieron el orden nominal de la carta (normal en colores que apenas bloquean el UV). No se descartan.',
+    "{#0} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV) and were left out.",
+    '{#0} matiz(es) no siguieron el orden nominal de la carta (normal en colores que apenas bloquean el UV) y quedaron fuera.',
+  ],
+  ['Scan {#0} of {#1}: {0}', 'Escaneo {#0} de {#1}: {0}'],
+  ['Average of {#0} prints.', 'Promedio de {#0} copias.'],
+  [
+    'The curve applied to the chart must have 256 points; it has {#0}.',
+    'La curva aplicada a la carta debe tener 256 puntos; tiene {#0}.',
+  ],
+  [
+    'Your {#0} prints differ by about {#1} % on average: the coating, the exposure or the development changed between them. The curve uses their average.',
+    'Tus {#0} copias difieren en promedio un {#1} %: la emulsión, la exposición o el revelado cambiaron entre ellas. La curva usa su promedio.',
   ],
   ['Unrecognized format: {0}', 'Formato no reconocido: {0}'],
   ['Could not decode the image: {0}', 'No se pudo decodificar la imagen: {0}'],

@@ -145,27 +145,29 @@ export interface Commands {
     args: { bytes: Bytes; paper: string; dpi: number; scanDpi?: number };
     result: string;
   };
-  cyan_strip_png: {
+  cyan_chart_png: {
     args: {
       paper: string;
       dpi: number;
       ink: string;
       mirror: boolean;
-      target: string;
       stops?: string;
       blockColor?: string;
+      /** JSON de la curva con la que se imprime la carta (segunda pasada). */
+      prior?: string;
     };
     result: Bytes;
   };
-  analyze_cyan_strip: {
+  analyze_cyan_chart: {
     args: {
-      bytes: Bytes;
+      /** Una copia escaneada de la carta por elemento; se promedian. */
+      scans: Bytes[];
       paper: string;
       dpi: number;
-      target: string;
       ink?: string;
       stops?: string;
       blockColor?: string;
+      prior?: string;
     };
     result: string;
   };

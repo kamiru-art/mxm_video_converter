@@ -176,29 +176,29 @@ const handlers: Handlers = {
     return { value: png, transfer: [png.buffer] };
   },
   analyze_printer_test: (a) => core.analyze_printer_test(a.bytes, a.paper, a.dpi, a.scanDpi ?? 0),
-  cyan_strip_png: (a) => {
+  cyan_chart_png: (a) => {
     const png = bytes(
-      core.cyan_strip_png(
+      core.cyan_chart_png(
         a.paper,
         a.dpi,
         a.ink,
         a.mirror,
-        a.target,
         a.stops ?? 'null',
         a.blockColor ?? '',
+        a.prior ?? 'null',
       ),
     );
     return { value: png, transfer: [png.buffer] };
   },
-  analyze_cyan_strip: (a) =>
-    core.analyze_cyan_strip(
-      a.bytes,
+  analyze_cyan_chart: (a) =>
+    core.analyze_cyan_chart(
+      a.scans,
       a.paper,
       a.dpi,
-      a.target,
       a.ink ?? '',
       a.stops ?? 'null',
       a.blockColor ?? '',
+      a.prior ?? 'null',
     ),
   colorblocker_png: (a) => {
     const png = bytes(core.colorblocker_png(a.paper, a.dpi, a.mirror, a.blockColor ?? ''));

@@ -7,7 +7,15 @@ import { generateSheets, packImageData, settingsForCore } from './gen.ts';
 import { run } from './pool.ts';
 import type { RgbaImage } from './project.ts';
 import { defaultSettings } from './settings.ts';
-import type { Bytes, DetectOutput, Layout, PrinterProfile, ScanResult, Settings } from './types.ts';
+import type {
+  Bytes,
+  CyanProfile,
+  DetectOutput,
+  Layout,
+  PrinterProfile,
+  ScanResult,
+  Settings,
+} from './types.ts';
 import { context2d } from './ui.ts';
 
 const logEl = document.getElementById('log');
@@ -684,6 +692,114 @@ async function main(): Promise<void> {
       `calibración: escala ${prof.scale_x}×${prof.scale_y}, marcador mín ${prof.marker_min_mm} mm, QR mín ${prof.qr_min_mm} mm`,
     );
     if (Math.abs(prof.scale_x - 1) > 0.01) throw new Error('escala de impresora incorrecta');
+
+    // fase ③: curva de cianotipia. La carta EDN pasa por el worker, se
+    // "expone" aquí con un proceso duro (gamma 2.2 sobre la exposición: los
+    // medios salen oscuros), una emulsión distinta por copia, y se escanea
+    // torcida. Dos copias se promedian y luego va la segunda pasada.
+    const procTone = (d: number): number => (1 - d / 255) ** 2.2 * 255; // 255 = azul pleno
+    const exposeChart = async (png: Bytes, gain: number): Promise<Bytes> => {
+      const bmp = await createImageBitmap(new Blob([png], { type: 'image/png' }));
+      const src = new OffscreenCanvas(bmp.width, bmp.height);
+      const sctx2 = context2d(src, { willReadFrequently: true });
+      // contacto: la película va espejada, la copia sale al derecho
+      sctx2.translate(bmp.width, 0);
+      sctx2.scale(-1, 1);
+      sctx2.drawImage(bmp, 0, 0);
+      const img = sctx2.getImageData(0, 0, bmp.width, bmp.height);
+      const px = img.data;
+      const paper = [245, 242, 230];
+      const blue = [23, 49, 92];
+      for (let i = 0; i < px.length; i += 4) {
+        const d =
+          255 - (0.299 * (px[i] ?? 0) + 0.587 * (px[i + 1] ?? 0) + 0.114 * (px[i + 2] ?? 0));
+        const e = Math.min(1, (procTone(d) / 255) * gain);
+        for (let c = 0; c < 3; c++) {
+          px[i + c] = Math.round((paper[c] ?? 0) + ((blue[c] ?? 0) - (paper[c] ?? 0)) * e);
+        }
+      }
+      sctx2.setTransform(1, 0, 0, 1, 0, 0);
+      sctx2.putImageData(img, 0, 0);
+      const out = new OffscreenCanvas(Math.round(bmp.width * 1.1), Math.round(bmp.height * 1.08));
+      const octx = context2d(out);
+      octx.fillStyle = '#c8c8c4';
+      octx.fillRect(0, 0, out.width, out.height);
+      octx.translate(out.width / 2, out.height / 2);
+      octx.rotate((1.2 * Math.PI) / 180);
+      octx.drawImage(src, -bmp.width / 2, -bmp.height / 2);
+      return new Uint8Array(await (await out.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    };
+    /** Error máximo, en % del rango, del tono que la curva da en este proceso. */
+    const lutLinearity = (lut: number[]): number => {
+      const tone = lut.map(procTone);
+      const t0 = tone[0] ?? 0;
+      const t1 = tone[255] ?? 0;
+      return Math.max(
+        ...tone.map(
+          (t, g) => (Math.abs(t - (t0 + ((t1 - t0) * g) / 255)) / Math.abs(t1 - t0)) * 100,
+        ),
+      );
+    };
+    const cyChart = { paper: 'A4', dpi: 150, ink: '#000000', mirror: true };
+    const chart1 = new Uint8Array(await run('cyan_chart_png', cyChart));
+    await digest('calibration/cyanotype_chart_A4_150.png', chart1);
+    const prints1 = [await exposeChart(chart1, 1.0), await exposeChart(chart1, 0.93)];
+    const cyProf = JSON.parse(
+      await run('analyze_cyan_chart', {
+        scans: prints1.map((b) => b.slice()),
+        paper: 'A4',
+        dpi: 150,
+        ink: '#000000',
+      }),
+    ) as CyanProfile;
+    const lin1 = lutLinearity(cyProf.lut);
+    log(
+      `curva de cianotipia: ${cyProf.escaneos} copias, pasada ${cyProf.pasada}, rango ${cyProf.rango_dinamico}, sin curva ${lutLinearity([...Array(256).keys()]).toFixed(1)} % → ${lin1.toFixed(2)} %`,
+    );
+    if (cyProf.escaneos !== 2 || cyProf.pasada !== 1 || cyProf.lut.length !== 256)
+      throw new Error(`curva de cianotipia: ${JSON.stringify(cyProf).slice(0, 200)}`);
+    if (lin1 > 3) throw new Error(`la curva no linealiza: ${lin1.toFixed(2)} %`);
+
+    // segunda pasada: la carta se imprime con la curva y se mide otra vez
+    const prior = JSON.stringify(cyProf.lut);
+    const chart2 = new Uint8Array(await run('cyan_chart_png', { ...cyChart, prior }));
+    await digest('calibration/cyanotype_chart_2nd_pass_A4_150.png', chart2);
+    const cyProf2 = JSON.parse(
+      await run('analyze_cyan_chart', {
+        scans: [await exposeChart(chart2, 1.0), await exposeChart(chart2, 0.93)],
+        paper: 'A4',
+        dpi: 150,
+        ink: '#000000',
+        prior,
+      }),
+    ) as CyanProfile;
+    const lin2 = lutLinearity(cyProf2.lut);
+    log(`segunda pasada: pasada ${cyProf2.pasada}, ${lin1.toFixed(2)} % → ${lin2.toFixed(2)} %`);
+    if (cyProf2.pasada !== 2) throw new Error('la segunda pasada no se reconoció');
+    // la respuesta va por la densidad impresa (lo que usa el soft-proof)
+    const off = (cyProf2.respuesta ?? []).findIndex(
+      (p, i) => Math.abs(p[0] - (cyProf.lut[i] ?? -1)) > 1e-6,
+    );
+    if ((cyProf2.respuesta ?? []).length !== 256 || off !== -1)
+      throw new Error(`respuesta de la segunda pasada fuera de la curva previa (parche ${off})`);
+    if (lin2 >= lin1) throw new Error(`la segunda pasada no mejoró: ${lin2} ≥ ${lin1}`);
+    await digest('calibration/cyanotype_profiles.json', JSON.stringify({ cyProf, cyProf2 }));
+
+    // la película como segunda "copia": error que nombra cuál
+    let filmErr = '';
+    try {
+      await run('analyze_cyan_chart', {
+        scans: [prints1[0] ?? new Uint8Array(0), chart1.slice()],
+        paper: 'A4',
+        dpi: 150,
+        ink: '#000000',
+      });
+    } catch (e) {
+      filmErr = errMsg(e);
+    }
+    if (!filmErr.startsWith('Scan 2 of 2: ') || !filmErr.includes('INVERTED'))
+      throw new Error(`película no rechazada por nombre: «${filmErr}»`);
+    log(`película como copia 2: rechazada («${filmErr.slice(0, 40)}…»)`);
 
     // ☀️ cianotipia: negativo → copia azul simulada → escaneo → procesado
     // (con QR activado: ejercita el camino LEGADO de identificación por QR)

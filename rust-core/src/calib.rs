@@ -20,7 +20,6 @@ pub const RAMP_STEPS: usize = 21;
 pub const SIZE_TEST_MM: [f64; 6] = [4.0, 5.0, 6.0, 8.0, 10.0, 12.0];
 pub const SIZE_TEST_IDS: [u32; 6] = [20, 21, 22, 23, 24, 25];
 pub const QR_TEST_MM: [f64; 3] = [8.0, 10.0, 12.0];
-pub const CYANO_STEPS: usize = 21;
 
 fn mm(v: f64, dpi: u32) -> i64 {
     mm_to_px(v, dpi)
@@ -453,76 +452,71 @@ pub fn analyze_printer_test(
 }
 
 // ────────────────────────────────────────────────────────────────
-// Cartas de cianotipia (tira 21 / EDN 256)
+// Carta de cianotipia: EDN 2.2, 256 tonos
 // ────────────────────────────────────────────────────────────────
+
+pub const CYANO_PATCHES: usize = 256;
 
 pub struct CyanoGeometry {
     pub cal: CalGeometry,
-    pub patches: Vec<([i64; 4], u32)>, // bbox, densidad
-    pub steps: usize,
-    pub target: String,
+    pub patches: Vec<([i64; 4], u32)>, // bbox, número de parche (= gris del positivo)
 }
 
-pub fn cyanotype_strip_geometry(
-    paper: &str,
-    dpi: u32,
-    steps: usize,
-    target: &str,
-) -> CyanoGeometry {
+pub fn cyanotype_chart_geometry(paper: &str, dpi: u32) -> CyanoGeometry {
     let cal = cal_frame(paper, dpi, false);
     let band = mm(CAL_MARGIN_MM, dpi) + cal.marker_side + 2 * cal.marker_quiet + mm(6.0, dpi);
     let (content_x1, content_x2) = (band, cal.page_w - band);
-    let mut patches = Vec::new();
-    let mut steps_out = steps;
-    if target == "edn256" {
-        let cols = 16i64;
-        let rows = 16i64;
-        let gap = mm(1.2, dpi);
-        let y0 = band + mm(20.0, dpi);
-        let avail_w = content_x2 - content_x1;
-        let avail_h = cal.page_h - band - y0;
-        let pitch =
-            (((avail_w - (cols - 1) * gap) / cols).min((avail_h - (rows - 1) * gap) / rows)).max(4);
-        for i in 0..256i64 {
-            let (row, col) = (i / cols, i % cols);
-            let x = content_x1 + col * (pitch + gap);
-            let y = y0 + row * (pitch + gap);
-            patches.push(([x, y, x + pitch, y + pitch], i as u32));
-        }
-        steps_out = 256;
-    } else {
-        let cols = 3i64;
-        let gap = mm(4.0, dpi);
-        let patch_w = (content_x2 - content_x1 - (cols - 1) * gap) / cols;
-        let patch_h = mm(16.0, dpi);
-        let y0 = band + mm(24.0, dpi);
-        for i in 0..steps as i64 {
-            let (row, col) = (i / cols, i % cols);
-            let x = content_x1 + col * (patch_w + gap);
-            let y = y0 + row * (patch_h + gap + mm(5.0, dpi));
-            let dens = (255.0 * i as f64 / (steps - 1) as f64).round() as u32;
-            patches.push(([x, y, x + patch_w, y + patch_h], dens));
-        }
+    let (cols, rows) = (16i64, 16i64);
+    let gap = mm(1.2, dpi);
+    let y0 = band + mm(20.0, dpi);
+    let avail_w = content_x2 - content_x1;
+    let avail_h = cal.page_h - band - y0;
+    let pitch =
+        (((avail_w - (cols - 1) * gap) / cols).min((avail_h - (rows - 1) * gap) / rows)).max(4);
+    let mut patches = Vec::with_capacity(CYANO_PATCHES);
+    for i in 0..CYANO_PATCHES as i64 {
+        let (row, col) = (i / cols, i % cols);
+        let x = content_x1 + col * (pitch + gap);
+        let y = y0 + row * (pitch + gap);
+        patches.push(([x, y, x + pitch, y + pitch], i as u32));
     }
-    CyanoGeometry {
-        cal,
-        patches,
-        steps: steps_out,
-        target: target.to_string(),
-    }
+    CyanoGeometry { cal, patches }
 }
 
-pub fn render_cyanotype_strip(
+/// Valida la curva con la que se imprime la carta de la segunda pasada: la
+/// carta de la primera pasada, ya corregida, que se mide otra vez.
+pub fn prior_curve(lut: &[f64]) -> Result<Vec<f64>, String> {
+    if lut.len() != 256 {
+        return Err(format!(
+            "The curve applied to the chart must have 256 points; it has {}.",
+            lut.len()
+        ));
+    }
+    if lut.iter().any(|v| !v.is_finite()) {
+        return Err("The curve applied to the chart has invalid values.".into());
+    }
+    let c: Vec<f64> = lut.iter().map(|v| v.clamp(0.0, 255.0)).collect();
+    // las curvas que construye el análisis son monótonas; una que no lo es no
+    // salió de aquí, y medirla daría densidades fuera de orden
+    if c.windows(2).any(|w| w[1] < w[0] - 0.5) {
+        return Err("The curve applied to the chart is not increasing.".into());
+    }
+    Ok(c)
+}
+
+/// La carta EDN. Con `prior`, cada parche `i` se imprime con la densidad
+/// `prior[i]` (tramada, como en las hojas: su media es la densidad exacta),
+/// para la segunda pasada. Los marcadores nunca pasan por la curva.
+pub fn render_cyanotype_chart(
     paper: &str,
     dpi: u32,
     ink_color: &str,
     mirror: bool,
-    steps: usize,
-    target: &str,
     ink_stops: Option<&[cyan::InkStop]>,
     block_color: Option<&str>,
+    prior: Option<&[f64]>,
 ) -> Rgb {
-    let g = cyanotype_strip_geometry(paper, dpi, steps, target);
+    let g = cyanotype_chart_geometry(paper, dpi);
     let ramp = cyan::ink_ramp(ink_color, ink_stops);
     let bg = match block_color {
         Some(c) if !c.is_empty() => cyan::hex_to_rgb(c),
@@ -548,10 +542,10 @@ pub fn render_cyanotype_strip(
         canvas.paste(&rgb, px, py);
     }
     let band = g.patches[0].0[0];
-    let titulo = if target == "edn256" {
-        "MXM Studio — Cyanotype calibration (EDN 2.2 chart, 256 tones)"
+    let titulo = if prior.is_some() {
+        "MXM Studio — Cyanotype calibration, 2nd pass (EDN 2.2 chart, your curve applied)"
     } else {
-        "MXM Studio — Cyanotype calibration (21-patch strip)"
+        "MXM Studio — Cyanotype calibration (EDN 2.2 chart, 256 tones)"
     };
     draw_text(
         &mut canvas,
@@ -569,18 +563,18 @@ pub fn render_cyanotype_strip(
         f_small,
         text_color,
     );
-    for (i, &(bbox, dens)) in g.patches.iter().enumerate() {
-        let color = ramp[dens as usize];
-        canvas.fill_rect(bbox[0], bbox[1], bbox[2], bbox[3], color);
-        if g.target != "edn256" {
-            draw_text(
-                &mut canvas,
-                &format!("{:02} · d={}", i + 1, dens),
-                bbox[0],
-                bbox[3] + mm(1.0, dpi),
-                f_small,
-                text_color,
-            );
+    for &(bbox, i) in &g.patches {
+        match prior {
+            None => canvas.fill_rect(bbox[0], bbox[1], bbox[2], bbox[3], ramp[i as usize]),
+            Some(p) => {
+                let (w, h) = ((bbox[2] - bbox[0]) as usize, (bbox[3] - bbox[1]) as usize);
+                let d = vec![p[i as usize] as f32; w * h];
+                canvas.paste(
+                    &crate::photo::ink8(&d, w, h, ink_color, ink_stops),
+                    bbox[0],
+                    bbox[1],
+                );
+            }
         }
     }
     if mirror {
@@ -684,32 +678,21 @@ fn pchip(x: &[f64], y: &[f64], xq: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-/// Analiza la CIANOTIPIA de la carta y construye la curva de compensación.
-pub fn analyze_cyanotype_strip(
-    img: DynImg,
-    paper: &str,
-    dpi: u32,
-    steps: usize,
-    target: &str,
-    ink_color: Option<&str>,
-    ink_stops: Option<&[cyan::InkStop]>,
-    block_color: Option<&str>,
-) -> Result<Value, String> {
-    let g = cyanotype_strip_geometry(paper, dpi, steps, target);
+/// Luminancia media de cada parche de un escaneo, en el orden de la geometría.
+fn measure_chart(img: DynImg, g: &CyanoGeometry) -> Result<Vec<Option<f64>>, String> {
     let (warp, s, _refined) = align_to_canonical(img, &g.cal, "cianotipia")?;
+    Ok(g.patches
+        .iter()
+        .map(|&(bbox, _)| patch_mean(&warp, bbox, s, 0.3))
+        .collect())
+}
 
-    let shrink = if g.target == "edn256" { 0.3 } else { 0.25 };
-    let mut respuesta: Vec<(f64, f64)> = Vec::new();
-    for &(bbox, dens) in &g.patches {
-        if let Some(m) = patch_mean(&warp, bbox, s, shrink) {
-            respuesta.push((dens as f64, (m * 10.0).round() / 10.0));
-        }
-    }
-    if respuesta.len() < 5.max(g.patches.len() / 2) {
+/// Comprueba la respuesta de una copia: la de un escaneo o la del promedio.
+fn check_response(respuesta: &[(f64, f64)]) -> Result<(), String> {
+    if respuesta.len() < CYANO_PATCHES / 2 {
         return Err("Not enough patches could be measured; check that the scan is complete, flat and well lit.".into());
     }
-
-    let (rango_d, invertida, plana) = cyan::response_summary(&respuesta);
+    let (rango_d, invertida, plana) = cyan::response_summary(respuesta);
     if invertida {
         return Err("The measured response is INVERTED: patches with more ink came out darker. Usually this means you scanned the FILM instead of the blue print; scan the dried cyanotype and analyze again.".into());
     }
@@ -719,6 +702,73 @@ pub fn analyze_cyanotype_strip(
             rango_d * 100.0
         ));
     }
+    Ok(())
+}
+
+/// Analiza la CIANOTIPIA de una o varias copias de la carta y construye la
+/// curva de compensación. Varias copias se promedian parche a parche (como
+/// EDN), cada una alineada con sus propios marcadores. Con `prior` (la curva
+/// con la que se imprimió la carta, segunda pasada) la respuesta se indexa
+/// por la densidad que de verdad se imprimió, así que la curva que sale ya es
+/// la corrección completa: no hay que componerla con la primera.
+pub fn analyze_cyanotype_chart<I>(
+    scans: I,
+    paper: &str,
+    dpi: u32,
+    ink_color: Option<&str>,
+    ink_stops: Option<&[cyan::InkStop]>,
+    block_color: Option<&str>,
+    prior: Option<&[f64]>,
+) -> Result<Value, String>
+where
+    // perezoso: cada escaneo se decodifica, se mide y se suelta antes del
+    // siguiente, así que varias páginas no ocupan la memoria a la vez
+    I: ExactSizeIterator<Item = Result<DynImg, String>>,
+{
+    if scans.len() == 0 {
+        return Err("Drop at least one scan of the chart.".into());
+    }
+    let g = cyanotype_chart_geometry(paper, dpi);
+    let density = |i: u32| prior.map_or(i as f64, |p| p[i as usize]);
+    let n_scans = scans.len();
+    let mut per_scan: Vec<Vec<Option<f64>>> = Vec::with_capacity(n_scans);
+    for (k, img) in scans.into_iter().enumerate() {
+        let which = |e: String| {
+            if n_scans > 1 {
+                format!("Scan {} of {}: {e}", k + 1, n_scans)
+            } else {
+                e
+            }
+        };
+        let m = img.and_then(|img| measure_chart(img, &g)).map_err(which)?;
+        let own: Vec<(f64, f64)> = g
+            .patches
+            .iter()
+            .zip(&m)
+            .filter_map(|(&(_, i), v)| v.map(|y| (density(i), y)))
+            .collect();
+        check_response(&own).map_err(which)?;
+        per_scan.push(m);
+    }
+
+    // Promedio por parche, sólo de las copias donde se pudo medir. Los valores
+    // se suman ordenados: el orden de los archivos no cambia ni un bit.
+    let mut respuesta: Vec<(f64, f64)> = Vec::new();
+    let (mut spread_acc, mut spread_n) = (0.0f64, 0usize);
+    for (pi, &(_, i)) in g.patches.iter().enumerate() {
+        let mut vals: Vec<f64> = per_scan.iter().filter_map(|m| m[pi]).collect();
+        if vals.is_empty() {
+            continue;
+        }
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+        if vals.len() > 1 {
+            spread_acc += vals.iter().map(|v| (v - mean).abs()).sum::<f64>() / vals.len() as f64;
+            spread_n += 1;
+        }
+        respuesta.push((density(i), (mean * 10.0).round() / 10.0));
+    }
+    check_response(&respuesta)?;
 
     // Curva suave sin escalones (promedio de duplicados → suavizado → PAVA →
     // PCHIP en malla fina → pulido → inversión numérica).
@@ -786,6 +836,14 @@ pub fn analyze_cyanotype_strip(
     if rango > 0.85 {
         notas.push("Excellent dynamic range. 💙".into());
     }
+    if spread_n > 0 {
+        let spread = spread_acc / spread_n as f64 / (y_max - y_min).max(1e-9) * 100.0;
+        if spread > 3.0 {
+            notas.push(format!(
+                "Your {n_scans} prints differ by about {spread:.0} % on average: the coating, the exposure or the development changed between them. The curve uses their average."
+            ));
+        }
+    }
 
     // LUT: inversión numérica y→densidad sobre la malla fina.
     let mut lut = Vec::with_capacity(256);
@@ -816,8 +874,10 @@ pub fn analyze_cyanotype_strip(
         "tipo": "cianotipia",
         "paper": paper,
         "dpi": dpi,
-        "steps": g.steps,
-        "target": g.target,
+        "steps": CYANO_PATCHES,
+        "target": "edn256",
+        "escaneos": n_scans,
+        "pasada": if prior.is_some() { 2 } else { 1 },
         "lut": lut,
         "respuesta": respuesta.iter().map(|&(d, y)| json!([d, y])).collect::<Vec<_>>(),
         "rango_dinamico": (rango * 1000.0).round() / 1000.0,
@@ -994,7 +1054,10 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         }
     }
 
-    // análisis por matiz
+    // análisis por matiz. Cada columna va del negro (fila 0, bloquea: copia
+    // clara) al blanco (fila 20, no bloquea: copia azul), así que su copia se
+    // OSCURECE fila a fila. Como en EDN, una que se aclara más de 10 niveles
+    // no sigue el orden de la carta, y los escalones son las bajadas ≥ 10.
     let mut monotona = [true; CB_COLS];
     let mut escalones = [0usize; CB_COLS];
     let mut suavidad = vec![0.0f64; CB_COLS];
@@ -1002,10 +1065,10 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         let colv = &v[k];
         for i in 1..CB_ROWS {
             let d = colv[i] - colv[i - 1];
-            if d < -10.0 {
+            if d > 10.0 {
                 monotona[k] = false;
             }
-            if d.abs() >= 10.0 {
+            if d <= -10.0 {
                 escalones[k] += 1;
             }
         }
@@ -1019,9 +1082,17 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         suavidad[k] = acc / (CB_ROWS - 1) as f64;
     }
 
+    // Los matices que no siguen el orden quedan fuera de la elección, como en
+    // EDN; si no sigue ninguno (escaneo muy ruidoso), se elige entre todos.
+    let mut candidatos: Vec<usize> = (0..CB_COLS).filter(|&k| monotona[k]).collect();
+    let todos_fuera = candidatos.is_empty();
+    if todos_fuera {
+        candidatos = (0..CB_COLS).collect();
+    }
+
     // 1) mejor bloqueador: el parche más claro
     let (mut best_col, mut best_row, mut best_v) = (0usize, 0usize, f64::MIN);
-    for col in 0..CB_COLS {
+    for &col in &candidatos {
         for row in 0..CB_ROWS {
             if v[col][row] > best_v {
                 best_v = v[col][row];
@@ -1033,7 +1104,7 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
     let mejor_hex = cyan::rgb_to_hex(cb_patch_rgb(best_col, best_row));
 
     // 2) matiz con mejor separación tonal: top-3 por escalones, gana el más suave
-    let mut orden: Vec<usize> = (0..CB_COLS).collect();
+    let mut orden = candidatos.clone();
     orden.sort_by(|&a, &b| escalones[b].cmp(&escalones[a]));
     let top3 = &orden[..3.min(orden.len())];
     let mejor_hue = *top3
@@ -1071,9 +1142,11 @@ pub fn analyze_colorblocker(img: DynImg, paper: &str, dpi: u32) -> Result<Value,
         );
     }
     let malos = monotona.iter().filter(|&&m| !m).count();
-    if malos > 0 {
+    if todos_fuera {
+        notas.push("No hue followed the chart's nominal order, so all of them were considered. Check that the scan is flat and evenly lit, and that the print was not over- or underexposed.".into());
+    } else if malos > 0 {
         notas.push(format!(
-            "{malos} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV). They are not discarded."
+            "{malos} hue(s) did not follow the chart's nominal order (normal for colors that barely block UV) and were left out."
         ));
     }
 
@@ -1143,69 +1216,6 @@ mod tests {
         // en un render perfecto, hasta el marcador de 4 mm debería detectarse
         assert!(out["marker_min_mm"].as_f64().unwrap() <= 6.0, "{out}");
         assert!(out["qr_min_mm"].as_f64().is_some(), "{out}");
-    }
-
-    #[test]
-    fn cyanotype_strip_roundtrip_builds_sane_lut() {
-        // Carta → copia azul simulada con una respuesta NO lineal conocida →
-        // análisis: la LUT resultante debe compensar esa respuesta.
-        let strip = render_cyanotype_strip(
-            "A4",
-            150,
-            "#000000",
-            true,
-            CYANO_STEPS,
-            "kamiru21",
-            None,
-            None,
-        );
-        // exposición de contacto: la copia queda al derecho
-        let derecha = strip.flip_horizontal();
-        // respuesta no lineal: gamma sobre la exposición
-        let g = cyanotype_strip_geometry("A4", 150, CYANO_STEPS, "kamiru21");
-        let mut azul = Rgb::new(derecha.w, derecha.h, [245, 242, 230]);
-        for y in 0..derecha.h {
-            for x in 0..derecha.w {
-                let p = derecha.px(x, y);
-                let dens =
-                    255.0 - (0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64);
-                let expo = (1.0 - dens / 255.0).powf(2.2); // proceso "duro"
-                let mut px = [0u8; 3];
-                let paper = [245.0, 242.0, 230.0];
-                let blue = [23.0, 49.0, 92.0];
-                for c in 0..3 {
-                    px[c] = (paper[c] + (blue[c] - paper[c]) * expo).round() as u8;
-                }
-                azul.set_px(x, y, px);
-            }
-        }
-        let _ = g;
-        let out = analyze_cyanotype_strip(
-            DynImg::U8(azul),
-            "A4",
-            150,
-            CYANO_STEPS,
-            "kamiru21",
-            Some("#000000"),
-            None,
-            None,
-        )
-        .unwrap();
-        let lut: Vec<f64> = out["lut"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
-        assert_eq!(lut.len(), 256);
-        // monótona no-decreciente (con tolerancia numérica)
-        for i in 1..256 {
-            assert!(lut[i] >= lut[i - 1] - 0.5, "lut no monótona en {i}");
-        }
-        // con gamma 2.2 la curva debe empujar los medios hacia abajo
-        // (densidad menor que la identidad en los medios)
-        assert!(lut[128] < 120.0, "lut[128]={}", lut[128]);
-        assert!(out["rango_dinamico"].as_f64().unwrap() > 0.5);
     }
 
     #[test]

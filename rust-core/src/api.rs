@@ -657,57 +657,68 @@ fn parse_stops(stops_json: &str) -> Option<Vec<cyan::InkStop>> {
     raw.map(|ss| ss.iter().map(|(d, c)| (*d, cyan::hex_to_rgb(c))).collect())
 }
 
+/// La curva con la que se imprime la carta de la segunda pasada ("null" o
+/// vacío: primera pasada).
+fn parse_prior(prior_json: &str) -> Result<Option<Vec<f64>>, JsValue> {
+    let raw: Option<Vec<f64>> = serde_json::from_str(prior_json).unwrap_or(None);
+    raw.map(|l| calib::prior_curve(&l)).transpose().map_err(err)
+}
+
 #[wasm_bindgen]
-pub fn cyan_strip_png(
+pub fn cyan_chart_png(
     paper: &str,
     dpi: u32,
     ink_color: &str,
     mirror: bool,
-    target: &str,
     stops_json: &str,
     block_color: &str,
-) -> Vec<u8> {
+    prior_json: &str,
+) -> Result<Vec<u8>, JsValue> {
     let stops = parse_stops(stops_json);
+    let prior = parse_prior(prior_json)?;
     let bc = if block_color.is_empty() {
         None
     } else {
         Some(block_color)
     };
-    codecs::encode_png_rgb(&calib::render_cyanotype_strip(
+    Ok(codecs::encode_png_rgb(&calib::render_cyanotype_chart(
         paper,
         dpi,
         ink_color,
         mirror,
-        calib::CYANO_STEPS,
-        target,
         stops.as_deref(),
         bc,
-    ))
+        prior.as_deref(),
+    )))
 }
 
+/// `scans`: un Uint8Array por copia escaneada de la carta; se promedian.
 #[wasm_bindgen]
-pub fn analyze_cyan_strip(
-    scan_bytes: &[u8],
+pub fn analyze_cyan_chart(
+    scans: Array,
     paper: &str,
     dpi: u32,
-    target: &str,
     ink_color: &str,
     stops_json: &str,
     block_color: &str,
+    prior_json: &str,
 ) -> Result<String, JsValue> {
-    let (img, _) = codecs::decode(scan_bytes).map_err(err)?;
     let stops = parse_stops(stops_json);
+    let prior = parse_prior(prior_json)?;
     let bc = if block_color.is_empty() {
         None
     } else {
         Some(block_color)
     };
-    calib::analyze_cyanotype_strip(
-        img,
+    let n = scans.length();
+    let imgs = (0..n).map(|k| {
+        let bytes = Uint8Array::new(&scans.get(k)).to_vec();
+        codecs::decode(&bytes).map(|(img, _)| img)
+    });
+    calib::analyze_cyanotype_chart(
+        imgs,
         paper,
         dpi,
-        calib::CYANO_STEPS,
-        target,
         if ink_color.is_empty() {
             None
         } else {
@@ -715,6 +726,7 @@ pub fn analyze_cyan_strip(
         },
         stops.as_deref(),
         bc,
+        prior.as_deref(),
     )
     .map(|v| v.to_string())
     .map_err(err)
