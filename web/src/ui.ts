@@ -300,7 +300,7 @@ async function collectEntries(entries: (FileSystemEntry | null)[]): Promise<Coll
 
 export interface DropzoneOptions {
   label: string;
-  sublabel?: string;
+  sublabel?: string | string[];
   accept?: string;
   multiple?: boolean;
   dark?: boolean;
@@ -385,7 +385,10 @@ export function dropzone({
       ...(describedBy ? { 'aria-describedby': describedBy } : {}),
     },
     el('div', {}, el('strong', {}, label)),
-    sublabel ? el('div', { class: 'hint', style: 'margin:4px 0 0' }, sublabel) : null,
+    ...[sublabel]
+      .flat()
+      .filter(Boolean)
+      .map((t) => el('div', { class: 'hint', style: 'margin:4px 0 0' }, t)),
     folderBtn,
     input,
     dirInput,

@@ -251,7 +251,10 @@ export function mountPhase2(root: HTMLElement): void {
 
   const scansDz = dropzone({
     label: 'Drop your scans here (any order, any orientation)',
-    sublabel: 'TIFF / PNG / JPG / WebP, 8 or 16 bit, any resolution. Several at once.',
+    sublabel: [
+      'TIFF / PNG / JPG / WebP, 8 or 16 bit, any resolution. Several at once.',
+      'All processed on your machine.',
+    ],
     accept: '.tif,.tiff,.png,.jpg,.jpeg,.webp,.bmp,image/*',
     multiple: true,
     onFiles: (files) => {
