@@ -111,8 +111,9 @@ export const EXACT: Record<string, string> = {
   'They keep every bit of the video: 16 bits per channel.':
     'Conservan todos los bits del video: 16 bits por canal.',
   'Drop your video or a folder of images here': 'Suelta tu video o una carpeta de imágenes aquí',
-  'MP4 / MOV / WebM / MKV / AVI / MPG / WMV, or PNG, JPG, TIFF, WebP (16-bit too). Nothing is uploaded.':
-    'MP4 / MOV / WebM / MKV / AVI / MPG / WMV, o PNG, JPG, TIFF, WebP (también de 16 bits). No se sube nada.',
+  'All main video and image formats supported (16-bit too).':
+    'Acepta los principales formatos de video e imagen (también de 16 bits).',
+  'All processed on your machine.': 'Todo se procesa en tu equipo.',
   'Reading the video…': 'Leyendo el video…',
   'None of those files could be read as an image.':
     'Ninguno de esos archivos se pudo leer como imagen.',

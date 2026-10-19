@@ -273,8 +273,13 @@ export function mountPhase3(root: HTMLElement): void {
     'Cyanotype curve',
     'Measures the response of your process (printer, film, chemistry, light) and builds the compensation curve ' +
       'with the 256-tone chart of Easy Digital Negatives 2.2. Expose the chart exactly as you expose your work.',
-    el('div', { class: 'row' }, field('Paper', bPaper), field('DPI', bDpi)),
-    field('Negative ink', bInk),
+    el(
+      'div',
+      { class: 'row' },
+      field('Paper', bPaper),
+      field('DPI', bDpi),
+      Object.assign(field('Negative ink', bInk), { style: 'flex: 0 0 auto' }),
+    ),
     // lo opcional va plegado: a la vista, la carta se ve como un solo paso
     el(
       'details',

@@ -346,8 +346,10 @@ export function mountPhase1(root: HTMLElement): void {
 
   const dz = dropzone({
     label: 'Drop your video or a folder of images here',
-    sublabel:
-      'MP4 / MOV / WebM / MKV / AVI / MPG / WMV, or PNG, JPG, TIFF, WebP (16-bit too). Nothing is uploaded.',
+    sublabel: [
+      'All main video and image formats supported (16-bit too).',
+      'All processed on your machine.',
+    ],
     accept: 'video/*,image/*,.tif,.tiff,.avi,.mpg,.mpeg,.wmv,.flv,.3gp',
     multiple: true,
     onFiles: async (fileList) => {
