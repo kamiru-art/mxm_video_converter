@@ -21,7 +21,11 @@
 # credentialless because Safari only knows the former. Every cross-origin
 # resource must then be CORS: the Google Fonts stylesheet is loaded with
 # crossorigin in index.html, and font files are always fetched with CORS.
+# Strict-Transport-Security: the zone serves plain http too, and over http
+# the page is not a secure context (no OPFS, WebCodecs, WebGPU, isolation).
+# Browsers only honour it over https; main.ts redirects the first visit.
 /*
+  Strict-Transport-Security: max-age=31536000
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data:
