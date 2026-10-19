@@ -54,7 +54,7 @@ export interface ResultEntry {
   levelsKey?: string;
   levelNote?: { text: string; warn: boolean };
   /** el overlay de alineación normalizado; el visor deja ver `overlay`, el
-   *  de antes, con el botón «Not normalized» */
+   *  de antes, con el botón «See original» */
   overlayAfter?: LabeledPng;
   /** juegos normalizados ya escritos, por clave */
   levelCache?: Map<string, { frames: LabeledPng[]; overlay?: LabeledPng }>;
@@ -1416,8 +1416,7 @@ export function mountPhase2(root: HTMLElement): void {
     el('h3', {}, 'Scans'),
     scansDz,
     demoBtn,
-    reprocessBtn,
-    clearBtn,
+    el('div', { class: 'scan-actions' }, reprocessBtn, clearBtn),
     el('div', { class: 'row tight', style: 'justify-content:center' }, batchCancel.button),
     specsInfo,
     prog.root,

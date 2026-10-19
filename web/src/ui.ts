@@ -603,7 +603,7 @@ export function lightbox(
 
   const img = el('img', {});
   const cap = el('figcaption', {});
-  const altBtn = el('button', { class: 'lb-alt', type: 'button' }, 'Not normalized');
+  const altBtn = el('button', { class: 'lb-alt', type: 'button' }, 'See original');
   const fig = el('figure', {}, img, cap, altBtn);
   const prevBtn = el('button', { class: 'lb-nav prev', 'aria-label': 'Previous image' }, '‹');
   const nextBtn = el('button', { class: 'lb-nav next', 'aria-label': 'Next image' }, '›');
@@ -618,6 +618,7 @@ export function lightbox(
     img.src = url ?? (data as string);
     altBtn.hidden = !it.alt;
     altBtn.setAttribute('aria-pressed', String(showAlt));
+    altBtn.textContent = showAlt ? 'See normalized' : 'See original';
     img.alt = it.caption ?? '';
     const pos = items.length > 1 ? ` · ${idx + 1} / ${items.length}` : '';
     cap.textContent = `${it.caption ?? ''}${pos}`;

@@ -6,12 +6,12 @@
 export const EXACT: Record<string, string> = {
   // g1-shell
   'MXM Studio: mixed media & cyanotype animation, free forever':
-    'MXM Studio: animación de técnica mixta y cianotipia, gratis para siempre',
+    'MXM Studio: animación mixed media y cianotipia, gratis para siempre',
   'Skip to the tools': 'Saltar a las herramientas',
   MXM: 'MXM',
   Studio: 'Studio',
   'mixed media & cyanotype animation, in your browser, free forever':
-    'animación de técnica mixta y cianotipia, en tu navegador, gratis para siempre',
+    'animación mixed media y cianotipia, en tu navegador, gratis para siempre',
   Phases: 'Fases',
   Sheets: 'Hojas',
   'video → paper': 'video → papel',
@@ -370,7 +370,8 @@ export const EXACT: Record<string, string> = {
   'Skip them and their sound': 'Saltarlos, con su sonido',
   'Skip them, sound without cuts': 'Saltarlos, sonido sin cortes',
   'Show the drawing before': 'Mostrar el dibujo anterior',
-  'Not normalized': 'Sin normalizar',
+  'See original': 'Ver original',
+  'See normalized': 'Ver normalizado',
   'Cyanotype prints: choose the reference print in Options. The others are matched to it.':
     'Copias de cianotipia: elige la copia de referencia en Opciones. Las demás se igualan a ella.',
   'Cyanotype prints: turn on “Normalize colours with the gray strip” and choose the reference print.':

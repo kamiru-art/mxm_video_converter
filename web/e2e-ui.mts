@@ -1114,7 +1114,7 @@ async function runFlow(
       const onMs = await timed(() => box.click(), () => notes().some((n) => /Reference print./.test(n)) && notes().some((n) => /Matched to the reference/.test(n)));
       const options = [...sel.options].map((o) => o.textContent);
       const chosen = sel.value;
-      // en el visor, «Not normalized» sólo en la copia que cambia: para su
+      // en el visor, «See original» sólo en la copia que cambia: para su
       // overlay y sus recortes, y muestra otra imagen
       const mean = (img) => {
         const c = new OffscreenCanvas(64, 64);
@@ -1213,7 +1213,7 @@ async function runFlow(
       const vOff = s.viewOff ?? [];
       const changed = vOn.filter((v) => !v.endsWith(' none'));
       check(
-        'cyanotype strip on: "Not normalized" in the viewer only for the print that changes, showing other colours',
+        'cyanotype strip on: "See original" in the viewer only for the print that changes, showing other colours',
         vOn.length === 4 &&
           changed.length === 2 &&
           changed.every((v) => v.startsWith(s.other) && v.endsWith(' true')) &&

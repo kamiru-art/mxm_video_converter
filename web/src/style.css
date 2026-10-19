@@ -346,6 +346,7 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .btn.ghost { background: transparent; color: var(--prusia-500); border: 1.5px solid var(--prusia-500); }
 .btn.ghost-light { background: transparent; color: var(--cian-200); border: 1.5px solid var(--prusia-500); }
 .btn.small { font-size: 12.5px; padding: 6px 12px; }
+.scan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .btn.danger { background: transparent; color: var(--quimico-error); border: 1.5px solid var(--quimico-error); }
 /* Botones en fila. El `display` vive en la clase y no en el atributo style
    porque quien enseña estas filas lo hace con `style.display = ''`, y eso
@@ -458,12 +459,13 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 /* ver el recorte sin la tira de grises: arriba, fuera de la imagen */
 .lb-alt {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
-  padding: 6px 14px; cursor: pointer; font: 600 13px var(--font-mono);
-  background: rgba(12, 27, 49, .7); color: var(--papel);
-  border: 1px solid var(--prusia-700); border-radius: 6px;
+  padding: 9px 18px; cursor: pointer; font: 600 14px var(--font-body);
+  background: var(--papel); color: var(--prusia-900);
+  border: none; border-radius: 999px; box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
 }
+.lb-alt:hover { filter: brightness(.94); }
 .lb-alt[hidden] { display: none; }
-.lb-alt[aria-pressed="true"] { background: var(--sol); color: var(--prusia-900); border-color: var(--sol); }
+.lb-alt[aria-pressed="true"] { background: var(--sol); }
 .lb-alt:focus-visible { outline: 2px solid var(--sol); outline-offset: 2px; }
 
 /* tablas de informe */
