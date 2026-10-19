@@ -8,7 +8,6 @@ pub mod calib;
 pub mod codecs;
 pub mod conform;
 pub mod cyanotype;
-pub mod dedup;
 pub mod geometry;
 pub mod img;
 pub mod imgproc;

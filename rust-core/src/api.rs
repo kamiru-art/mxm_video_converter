@@ -7,7 +7,6 @@
 use crate::calib;
 use crate::codecs;
 use crate::cyanotype as cyan;
-use crate::dedup;
 use crate::img::{DynImg, Rgb};
 use crate::layoutfile;
 use crate::pdf::PdfBuilder;
@@ -236,44 +235,6 @@ pub fn assemble_layout(
         Some(originales_dir)
     };
     Ok(sheet::build_layout_json(&s, &l, &records, timeline, video, dir).to_string())
-}
-
-/// dHash de una tanda de fotogramas (RGBA concatenado). Devuelve JSON
-/// [[u64;4], ...] como strings hexadecimales.
-#[wasm_bindgen]
-pub fn dedup_hashes(meta_json: &str, pixels: &[u8]) -> Result<String, JsValue> {
-    let frames = parse_frames(meta_json, pixels)?;
-    let mut out = Vec::new();
-    for f in frames {
-        let rgba = f.rgba.ok_or_else(|| err("Frame without pixels"))?;
-        // aplanar sobre blanco (lo que ve la impresión)
-        let rgb = rgba.rgb8_over_white();
-        let h = dedup::dhash(&Rgb {
-            w: f.w,
-            h: f.h,
-            data: rgb,
-        });
-        out.push(h.map(|x| format!("{x:016x}")));
-    }
-    Ok(serde_json::to_string(&out).unwrap())
-}
-
-/// Agrupa duplicados a partir de los hashes. Devuelve {reps, rep_of}.
-#[wasm_bindgen]
-pub fn group_duplicates(hashes_json: &str, threshold: u32) -> Result<String, JsValue> {
-    let hex: Vec<[String; 4]> = serde_json::from_str(hashes_json).map_err(err)?;
-    let hashes: Vec<[u64; 4]> = hex
-        .iter()
-        .map(|h| {
-            let mut out = [0u64; 4];
-            for i in 0..4 {
-                out[i] = u64::from_str_radix(&h[i], 16).unwrap_or(0);
-            }
-            out
-        })
-        .collect();
-    let (reps, rep_of) = dedup::find_duplicates(&hashes, threshold);
-    Ok(json!({ "reps": reps, "rep_of": rep_of }).to_string())
 }
 
 /// Histograma de contenido (para la adaptación de la curva de cianotipia).

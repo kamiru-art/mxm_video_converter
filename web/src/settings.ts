@@ -47,6 +47,8 @@ export function normalizeSettings<T extends Partial<Settings>>(settings: T): T {
   // su degradado y la interfaz no tendría cómo quitarlo
   if ('cyan_ink_stops' in out) out.cyan_ink_stops = null;
   if ('cyan_block_color' in out) out.cyan_block_color = null;
+  // ya no hay campo para el nombre del proyecto: manda el nombre de salida
+  if ('project_name' in out) out.project_name = '';
   return out;
 }
 

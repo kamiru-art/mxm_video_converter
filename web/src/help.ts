@@ -35,9 +35,7 @@ const HELP_EN = `
 sheets, then in ② press <strong>&ldquo;Simulate them from this session&rsquo;s
 sheets&rdquo;</strong> to get fake scans of them.</p>
 <p>Drop a video or a folder of images. Choose how many frames per second you
-want, or all of them for frame-by-frame animation. If you turn on
-<strong>Detect repeated drawings</strong>, identical frames are printed only
-once and used again wherever they appear in the video.</p>
+want, or all of them for frame-by-frame animation.</p>
 <p>Videos from some cameras carry extra colour detail. The app keeps it, but
 in some browsers that makes loading slow. If it is too slow, turn on
 <strong>Fast 8-bit decode</strong>: it is faster, with slightly less colour
@@ -47,16 +45,12 @@ squares around the edges of the sheet. The app uses them to straighten each
 scan and to know which sheet it is, so you can scan in any order. With 8
 markers you can paint over some of them: the app needs at least 3 clean ones
 to straighten the scan.</p>
-<p>The markers can tell apart up to 144 sheets with the default settings, and
-the preview warns you if you go over. For longer projects, turn on
-<strong>&ldquo;Add a QR code per frame&rdquo;</strong> in the Registration
-section.</p>
+<p>The markers can tell apart up to 144 sheets with the default settings.
+Above that, the app adds a QR code to each frame by itself.</p>
 <p>You can export the sheets as <strong>PNG</strong>, <strong>PDF</strong>
 (ready to print), <strong>TIFF</strong>, or several at once. The download
 always includes a file ending in <code>_layout.json</code>, which you will
-need in ②. Leave <strong>Include the frames as image files</strong> on: you
-need that copy of the frames to make rescue sheets later.
-<strong>Always print at 100&nbsp;%</strong>, never &ldquo;fit to page&rdquo;.</p>
+need in ②. <strong>Always print at 100&nbsp;%</strong>, never &ldquo;fit to page&rdquo;.</p>
 
 <h3>Cyanotype mode</h3>
 <p>Cyanotype mode makes <strong>negatives to print on transparency
@@ -108,15 +102,10 @@ number printed on the page</strong> (bottom right, unless you moved it), or
 at the drawings, and pick the sheet. The app then cuts out its frames right
 away. Every row of the report has the same menu in the <em>Assign</em>
 column, so you can also fix a sheet the app got wrong.</p>
-<p>The report shows which frames were recovered and which are missing. To
-paint the missing ones again, drop the frames folder that came with your
-sheets download under <strong>Rescue sheets</strong> and press
-<strong>Generate rescue sheets</strong>. You get new sheets with only those
-frames.</p>
+<p>The report shows which frames were recovered and which are missing.</p>
 
 <h3>③ Video</h3>
-<p>The app puts the frames back in their original order, with repeated
-drawings in all their places. For the sound it uses the original video. If
+<p>The app puts the frames back in their original order. For the sound it uses the original video. If
 you reloaded the page since making the sheets, drop the video again into
 <strong>Original video (for its audio)</strong>. Then choose how to save
 it:</p>
@@ -136,13 +125,11 @@ quality, so keep a lossless copy too.</li>
 </ul>
 <p>If a few frames come out a different size, the app fits them to the rest
 without stretching them.</p>
-<p>If some frames are missing, the video skips them and cuts out their
-sound, so each drawing keeps its own sound. This helps when you duplicated
-frames to cut them out and lay them over others. If your sound was already
-edited without those frames, untick <strong>Cut their sound too</strong> and
-it plays without cuts. You can drop a sound file in place of the video. If
-you untick <strong>Skip the missing frames</strong>, each gap shows the
-drawing before it, and the video keeps the length of the original.</p>
+<p>If some frames are missing, <strong>Missing frames</strong> chooses what
+happens: skip them and their sound, so each drawing keeps its own sound; skip
+them with the sound <em>without cuts</em>, for a sound already edited without
+those frames; or show the drawing before, so the video keeps the length of the
+original. You can drop a sound file in place of the video.</p>
 
 <h3>Calibration (when you need precision)</h3>
 <p>Each of these tools gives you a result. Give it a name, press <strong>Save

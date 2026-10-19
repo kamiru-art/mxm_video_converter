@@ -346,6 +346,7 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .btn.ghost { background: transparent; color: var(--prusia-500); border: 1.5px solid var(--prusia-500); }
 .btn.ghost-light { background: transparent; color: var(--cian-200); border: 1.5px solid var(--prusia-500); }
 .btn.small { font-size: 12.5px; padding: 6px 12px; }
+.scan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .btn.danger { background: transparent; color: var(--quimico-error); border: 1.5px solid var(--quimico-error); }
 /* Botones en fila. El `display` vive en la clase y no en el atributo style
    porque quien enseña estas filas lo hace con `style.display = ''`, y eso
@@ -455,6 +456,17 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 13px; pa
 .lb-nav.prev { left: 16px; }
 .lb-nav.next { right: 16px; }
 @media (max-width: 640px) { .lb-nav { width: 38px; height: 60px; font-size: 24px; } }
+/* ver el recorte sin la tira de grises: arriba, fuera de la imagen */
+.lb-alt {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  padding: 9px 18px; cursor: pointer; font: 600 14px var(--font-body);
+  background: var(--papel); color: var(--prusia-900);
+  border: none; border-radius: 999px; box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+}
+.lb-alt:hover { filter: brightness(.94); }
+.lb-alt[hidden] { display: none; }
+.lb-alt[aria-pressed="true"] { background: var(--sol); }
+.lb-alt:focus-visible { outline: 2px solid var(--sol); outline-offset: 2px; }
 
 /* tablas de informe */
 /* Una caja de scroll aporta 0 al ancho mínimo de quien la contiene, que es
@@ -468,8 +480,16 @@ table.report th { font-family: var(--font-display); font-size: 12px; text-transf
 table.report td.ok { color: var(--quimico-ok); }
 table.report td.bad { color: #E98C77; }
 table.report .mono { font-family: var(--font-mono); font-size: 12px; }
-.warnlist { font-size: 12.5px; line-height: 1.45; color: #D8B04C; margin: 4px 0; padding-left: 18px; }
-.paper .warnlist { color: #8a6d3b; }
+.warnlist {
+  font-size: 13.5px; line-height: 1.45; color: var(--papel); margin: 10px 0;
+  background: rgba(240,180,41,.14); border: 1px solid rgba(240,180,41,.5);
+  border-left: 4px solid var(--sol); border-radius: 8px; padding: 10px 14px 10px 32px;
+}
+.warnlist:empty { display: none; }
+.warnlist li + li { margin-top: 6px; }
+.warnlist li::marker { content: '⚠  '; color: var(--sol); }
+.paper .warnlist { color: var(--tinta); background: #FBEFC9; border-color: #E2C066; border-left-color: #C98A0B; }
+.paper .warnlist li::marker { color: #C98A0B; }
 .missing-box { background: rgba(196,83,58,.12); border: 1px solid rgba(196,83,58,.4); padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px; }
 .allok-box { background: rgba(63,158,110,.12); border: 1px solid rgba(63,158,110,.4); padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px; }
 /* sobre papel el texto de estas cajas es la tinta del panel, no el color
@@ -533,6 +553,7 @@ table.report td.assign-cell .assign-sel { width: 200px; }
 }
 .toast.err { border-left-color: var(--quimico-error); }
 .toast.ok { border-left-color: var(--quimico-ok); }
+.toast.warn { border-left-color: var(--sol); background: #FBEFC9; font-weight: 600; }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }

@@ -217,12 +217,6 @@ export interface RenderSheetOutput {
   page_h: number;
 }
 
-/** Agrupación de dibujos repetidos sobre la selección actual. */
-export interface DedupGroups {
-  reps: number[];
-  rep_of: number[];
-}
-
 // ── calibración: perfiles guardados ─────────────────────────────
 
 export interface PrinterProfile {
@@ -252,7 +246,6 @@ export interface Phase1Persist {
   naming: 'auto' | 'original';
   numbering: 'sequential' | 'original';
   pageNumbering: 'sequential' | 'original';
-  dedupOn: boolean;
 }
 
 export interface PresetProfile {

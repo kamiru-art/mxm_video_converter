@@ -118,8 +118,6 @@ const handlers: Handlers = {
       a.video,
       a.originalesDir ?? '',
     ),
-  dedup_hashes: (a) => core.dedup_hashes(a.meta, a.pixels),
-  group_duplicates: (a) => core.group_duplicates(a.hashes, a.threshold ?? 4),
   content_histogram: (a) => core.content_histogram(a.meta, a.pixels),
   effective_curve: (a) =>
     core.effective_curve(a.lut ?? 'null', a.strength ?? 100, a.adapt ?? 0, a.hist ?? 'null'),

@@ -14,6 +14,12 @@ import { run } from './pool.ts';
 import { toast } from './ui.ts';
 import { getGpuDevice } from './webgpu.ts';
 
+// Por http la página no es un contexto seguro y el navegador apaga OPFS,
+// WebCodecs, WebGPU y el aislamiento: carga, pero anda mal. La zona no
+// redirige sola; esto y el HSTS de _headers la llevan a https.
+if (location.protocol === 'http:' && location.hostname === 'mxmstudio.work')
+  location.replace(`https:${location.href.slice(5)}`);
+
 // Antes de leer la ruta o el almacén: un enlace del dominio viejo trae aquí
 // los datos guardados allí (migrate.ts)
 const migrationProblem = runMigration();
