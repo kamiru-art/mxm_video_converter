@@ -1181,10 +1181,61 @@ pub fn finish_scan(
     claimed_sheets: &HashMap<i64, String>,
     markers: &LayoutMarkers,
     fin: FinishInput,
-    mut res: Value,
+    res: Value,
 ) -> ScanOutput {
-    let mut frames_out: Vec<(String, DynImg)> = Vec::new();
+    let mut frames: Vec<(String, DynImg)> = Vec::new();
     let mut unidentified: Vec<(String, DynImg)> = Vec::new();
+    let mut out = finish_scan_with(
+        warp,
+        scan_name,
+        layout,
+        opts,
+        claimed_sheets,
+        markers,
+        fin,
+        res,
+        &mut |kind, label, crop| match kind {
+            CropKind::Frame => frames.push((label, crop)),
+            CropKind::Unidentified => unidentified.push((label, crop)),
+        },
+    );
+    out.frames = frames;
+    out.unidentified = unidentified;
+    out
+}
+
+/// Tipo de recorte que `finish_scan_with` entrega a su receptor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CropKind {
+    /// Fotograma de una hoja identificada.
+    Frame,
+    /// Celda de una hoja sin identificar (modo emergencia).
+    Unidentified,
+}
+
+/// Igual que `finish_scan`, pero entrega cada recorte a `sink` en cuanto lo
+/// corta, en vez de guardarlos todos. Con un bleed negativo grande (recortes
+/// que salen del panel, una técnica artística) cada recorte puede ocupar
+/// varias veces el área de su celda, y con todos vivos a la vez el pico de
+/// memoria superaba al de la hoja enderezada misma. Quien codifica cada
+/// recorte a PNG y lo suelta (la API wasm) mantiene así el pico en la hoja
+/// enderezada más UN recorte. Los campos `frames` y `unidentified` de la
+/// salida quedan vacíos.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_scan_with(
+    warp: DynImg,
+    scan_name: &str,
+    layout: &Value,
+    opts: &ScanOptions,
+    claimed_sheets: &HashMap<i64, String>,
+    markers: &LayoutMarkers,
+    fin: FinishInput,
+    mut res: Value,
+    sink: &mut dyn FnMut(CropKind, String, DynImg),
+) -> ScanOutput {
+    let frames_out: Vec<(String, DynImg)> = Vec::new();
+    let unidentified: Vec<(String, DynImg)> = Vec::new();
+    let mut n_frames = 0usize;
     let s = fin.s;
     let local = fin.local;
 
@@ -1310,7 +1361,11 @@ pub fn finish_scan(
                                     .rsplit_once('.')
                                     .map(|(a, _)| a)
                                     .unwrap_or(scan_name);
-                                unidentified.push((format!("{}_celda{}", stem, i + 1), crop));
+                                sink(
+                                    CropKind::Unidentified,
+                                    format!("{}_celda{}", stem, i + 1),
+                                    crop,
+                                );
                             }
                         }
                     }
@@ -1366,10 +1421,11 @@ pub fn finish_scan(
                     }
                 }
             }
-            frames_out.push((etiqueta.clone(), crop));
+            sink(CropKind::Frame, etiqueta.clone(), crop);
+            n_frames += 1;
         }
     }
-    res["ok"] = json!(!frames_out.is_empty());
+    res["ok"] = json!(n_frames > 0);
     ScanOutput {
         result: res,
         frames: frames_out,
@@ -1381,11 +1437,39 @@ pub fn finish_scan(
 /// Procesa UN escaneo contra un layout normalizado v2 (camino todo-en-WASM).
 /// `claimed_sheets`: hojas ya identificadas en el lote (nº → escaneo).
 pub fn process_scan(
+    img: DynImg,
+    scan_name: &str,
+    layout: &Value,
+    opts: &ScanOptions,
+    claimed_sheets: &HashMap<i64, String>,
+) -> ScanOutput {
+    let mut frames: Vec<(String, DynImg)> = Vec::new();
+    let mut unidentified: Vec<(String, DynImg)> = Vec::new();
+    let mut out = process_scan_with(
+        img,
+        scan_name,
+        layout,
+        opts,
+        claimed_sheets,
+        &mut |kind, label, crop| match kind {
+            CropKind::Frame => frames.push((label, crop)),
+            CropKind::Unidentified => unidentified.push((label, crop)),
+        },
+    );
+    out.frames = frames;
+    out.unidentified = unidentified;
+    out
+}
+
+/// `process_scan` que entrega cada recorte a `sink` en cuanto lo corta (ver
+/// `finish_scan_with`).
+pub fn process_scan_with(
     mut img: DynImg,
     scan_name: &str,
     layout: &Value,
     opts: &ScanOptions,
     claimed_sheets: &HashMap<i64, String>,
+    sink: &mut dyn FnMut(CropKind, String, DynImg),
 ) -> ScanOutput {
     let markers = resolve_markers(layout);
     let mut res = base_report(scan_name);
@@ -1407,7 +1491,7 @@ pub fn process_scan(
         refined_ids: det.refined.keys().cloned().collect(),
         local: det.local,
     };
-    finish_scan(
+    finish_scan_with(
         warp,
         scan_name,
         layout,
@@ -1416,6 +1500,7 @@ pub fn process_scan(
         &markers,
         fin,
         res,
+        sink,
     )
 }
 

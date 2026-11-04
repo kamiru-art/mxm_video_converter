@@ -697,3 +697,142 @@ fn gray_strip_matches_prints_to_the_chosen_reference() {
     eprintln!("modo normal, escáner con dominante: sin tira {d0:.1}, con tira {d1:.1}");
     assert!(d0 > 20.0 && d1 < 3.0, "modo normal: {d0:.1} → {d1:.1}");
 }
+
+/// Bleed negativo (recorte que sale del panel, una técnica artística): el
+/// recorte crece por igual en cada lado, la hoja se sigue identificando con
+/// el QR aunque los recortes se solapen con los QR vecinos, y el centro del
+/// recorte sigue siendo el fotograma. Lo que cae fuera de la hoja enderezada
+/// sale del color de relleno, sin hacer fallar el escaneo.
+#[test]
+fn negative_bleed_enlarges_the_crop_beyond_the_frame() {
+    let s = base_settings();
+    let l = build_layout(&s, (16.0, 9.0)).unwrap();
+    let mut frames = Vec::new();
+    let mut colors = Vec::new();
+    for base in [
+        [200u8, 60, 60],
+        [60, 180, 60],
+        [60, 60, 200],
+        [180, 160, 40],
+    ] {
+        let (f, c) = synth_frame(320, 180, base);
+        frames.push(f);
+        colors.push(c);
+    }
+    let labels: Vec<String> = (1..=4).map(|i| format!("demo_{:03}", i)).collect();
+    let page = render_page(&s, &l, &frames, &labels, 1, true);
+    let img = page.image.unwrap();
+    let mut record = page.record.unwrap();
+    record["archivo_hoja"] = json!("demo_p1.png");
+    let layout = build_layout_json(&s, &l, &[record], json!([]), json!({}), None);
+    let scan = simulate_scan(&img, 1.4, 99);
+
+    let run = |bleed: f64| {
+        let opts = ScanOptions {
+            bleed,
+            ..ScanOptions::default()
+        };
+        process_scan(
+            DynImg::U8(scan.clone()),
+            "scan1.png",
+            &layout,
+            &opts,
+            &HashMap::new(),
+        )
+    };
+    let flat = run(0.0);
+    assert_eq!(flat.frames.len(), 4, "{}", flat.result);
+    let (fw, fh) = flat.frames[0].1.size();
+    // -100 % por lado: el recorte triplica cada lado y sale de la hoja
+    for bleed in [-0.3, -1.0] {
+        let out = run(bleed);
+        assert_eq!(
+            out.result["ok"],
+            json!(true),
+            "bleed {bleed}: {}",
+            out.result
+        );
+        assert_eq!(out.result["hoja_numero"], json!(1));
+        assert_eq!(out.frames.len(), 4, "bleed {bleed}: {}", out.result);
+        for (label, crop) in &out.frames {
+            let (w, h) = crop.size();
+            let (ew, eh) = (
+                fw as f64 * (1.0 - 2.0 * bleed),
+                fh as f64 * (1.0 - 2.0 * bleed),
+            );
+            assert!(
+                (w as f64 - ew).abs() <= 2.0 && (h as f64 - eh).abs() <= 2.0,
+                "{label} bleed {bleed}: {w}×{h}, expected ≈{ew}×{eh}"
+            );
+            // el centro (la mitad del fotograma original) conserva su color
+            let rgb = crop.to_rgb8();
+            let (cw, ch) = (fw / 2, fh / 2);
+            let (x0, y0) = ((w - cw) / 2, (h - ch) / 2);
+            let mut center = Rgb::new(cw, ch, [0, 0, 0]);
+            for y in 0..ch {
+                for x in 0..cw {
+                    center.set_px(x, y, rgb.px(x0 + x, y0 + y));
+                }
+            }
+            let idx: usize = label[5..8].parse::<usize>().unwrap() - 1;
+            let m = mean_rgb(&center);
+            for c in 0..3 {
+                let expect = 0.8 * colors[idx][c] as f64 + 0.2 * 255.0;
+                assert!(
+                    (m[c] - expect).abs() < 30.0,
+                    "{label} bleed {bleed} canal {c}: {} vs {expect}",
+                    m[c]
+                );
+            }
+        }
+    }
+}
+
+/// El receptor de `process_scan_with` recibe los mismos recortes, en el mismo
+/// orden, que `process_scan` guarda en su salida.
+#[test]
+fn streaming_sink_gets_the_same_crops() {
+    let s = base_settings();
+    let l = build_layout(&s, (16.0, 9.0)).unwrap();
+    let frames: Vec<FrameInput> = (0..4)
+        .map(|i| synth_frame(320, 180, [40 + 50 * i as u8, 90, 150]).0)
+        .collect();
+    let labels: Vec<String> = (1..=4).map(|i| format!("demo_{:03}", i)).collect();
+    let page = render_page(&s, &l, &frames, &labels, 1, true);
+    let img = page.image.unwrap();
+    let mut record = page.record.unwrap();
+    record["archivo_hoja"] = json!("demo_p1.png");
+    let layout = build_layout_json(&s, &l, &[record], json!([]), json!({}), None);
+    let scan = simulate_scan(&img, 1.2, 7);
+    let opts = ScanOptions {
+        bleed: -0.2,
+        ..ScanOptions::default()
+    };
+    let whole = process_scan(
+        DynImg::U8(scan.clone()),
+        "s.png",
+        &layout,
+        &opts,
+        &HashMap::new(),
+    );
+    let mut got: Vec<(String, (usize, usize))> = Vec::new();
+    let streamed = scanproc::process_scan_with(
+        DynImg::U8(scan),
+        "s.png",
+        &layout,
+        &opts,
+        &HashMap::new(),
+        &mut |kind, label, crop| {
+            assert_eq!(kind, scanproc::CropKind::Frame);
+            got.push((label, crop.size()));
+        },
+    );
+    assert!(streamed.frames.is_empty());
+    assert_eq!(streamed.result["ok"], json!(true), "{}", streamed.result);
+    let want: Vec<(String, (usize, usize))> = whole
+        .frames
+        .iter()
+        .map(|(l, c)| (l.clone(), c.size()))
+        .collect();
+    assert_eq!(got, want);
+}

@@ -167,7 +167,11 @@ export function mountPhase2(root: HTMLElement): void {
   });
 
   // opciones
-  const bleedIn = numberInput(1.5, { min: 0, max: 20, step: 0.5 });
+  // bleed negativo: el recorte sale del panel y muestra el papel de
+  // alrededor (una técnica artística). -100 % triplica cada lado.
+  const BLEED_MIN = -100;
+  const BLEED_MAX = 20;
+  const bleedIn = numberInput(1.5, { min: BLEED_MIN, max: BLEED_MAX, step: 0.5 });
   const minMarkersIn = numberInput(3, { min: 2, max: 12 });
   const modeSel = select(
     [
@@ -353,7 +357,28 @@ export function mountPhase2(root: HTMLElement): void {
   function estimatePeakBytes(f: File, gpu: boolean): number {
     const name = f.name.toLowerCase();
     const ratio = /\.(jpe?g|webp)$/.test(name) ? 12 : /\.(tif|tiff)$/.test(name) ? 2.5 : 5;
-    return f.size * ratio * (gpu ? 2.2 : 3.5);
+    return f.size * ratio * (gpu ? 2.2 : 3.5) * bleedGrowth();
+  }
+
+  /** Cuánto crece el pico de un escaneo por el bleed negativo. El núcleo
+   *  codifica cada recorte en cuanto lo corta, pero los PNG de toda la hoja
+   *  viven juntos hasta que llegan al disco, y con -30 % por lado cada uno
+   *  ocupa 2,56 veces su celda. Un cuarto del área de más es lo que suman
+   *  esos PNG frente a la hoja enderezada (celdas ≈ mitad de la hoja, PNG ≈
+   *  mitad del crudo). */
+  function bleedGrowth(): number {
+    const b = currentBleed();
+    if (b >= 0) return 1;
+    const area = (1 - 2 * b) ** 2;
+    return 1 + 0.25 * (area - 1);
+  }
+
+  /** El bleed del campo como fracción por lado, dentro de su rango. */
+  function currentBleed(): number {
+    // Number.isFinite y no ||: el 0 es un valor válido de bleed
+    const v = parseFloat(bleedIn.value);
+    const pct = Number.isFinite(v) ? Math.min(BLEED_MAX, Math.max(BLEED_MIN, v)) : 1.5;
+    return pct / 100;
   }
 
   /** Pico de enderezar un escaneo, según su cabecera: dos copias (entrada y
@@ -366,7 +391,7 @@ export function mountPhase2(root: HTMLElement): void {
     const head = f.size > 1 << 20 ? f.slice(0, 1 << 20) : f;
     const info = await imageInfo(head).catch(() => null);
     if (!info) return estimatePeakBytes(f, false);
-    return info.w * info.h * (info.sixteen ? 6 : 3) * 2 * 1.25;
+    return info.w * info.h * (info.sixteen ? 6 : 3) * 2 * 1.25 * bleedGrowth();
   }
 
   // escaneos que el usuario ya aceptó en un teléfono: "Reprocess" no vuelve
@@ -429,11 +454,9 @@ export function mountPhase2(root: HTMLElement): void {
 
   /** Opciones de detección comunes a todo el lote. */
   function currentOpts(): ScanOpts {
-    // Number.isFinite y no ||: el 0 es un valor válido de bleed
-    const bleedVal = parseFloat(bleedIn.value);
     const minMarkersVal = parseInt(minMarkersIn.value, 10);
     return {
-      bleed: (Number.isFinite(bleedVal) ? bleedVal : 1.5) / 100,
+      bleed: currentBleed(),
       min_markers: Number.isFinite(minMarkersVal) ? minMarkersVal : 3,
       mode: modeSel.value,
       resize_to_original: resizeCheck.input.checked,
@@ -1404,7 +1427,11 @@ export function mountPhase2(root: HTMLElement): void {
     el('h3', {}, 'Options'),
     // campos apilados: con hints de largos distintos, en fila quedaban
     // desalineados en altura
-    field('Bleed (% per side)', bleedIn, 'Perimeter crop to avoid paper edges.'),
+    field(
+      'Bleed (% per side)',
+      bleedIn,
+      'Perimeter crop to avoid paper edges. A negative value enlarges the crop beyond the frame, down to -100 %, to show the paper around it.',
+    ),
     field('Minimum markers', minMarkersIn),
     field('Detection mode', modeSel),
     field(
