@@ -133,7 +133,13 @@ if (!existsSync(avi)) {
 // hardware y sin los 10 bits: obliga a ir por ffmpeg.wasm).
 const RAMP =
   "format=yuv420p10le,geq=lum='64+mod(X*876/W+T*200\\,876)':cb='if(lt(Y\\,H/2)\\,512\\,512+(X-W/2)*3)':cr='if(lt(Y\\,H/2)\\,512\\,512+(Y-3*H/4)*6)'";
-const rampSrc = ['-f', 'lavfi', '-i', 'nullsrc=s=320x180:r=10:d=1', '-vf', RAMP];
+// La matriz va también en los fotogramas (setparams): desde ffmpeg 8 las
+// propiedades del fotograma mandan sobre -colorspace & co., y sin ellas el
+// MOV salía sin átomo colr y el verificador leía la muestra como BT.601.
+const rampSrc = (m: string): string[] => [
+  ...['-f', 'lavfi', '-i', 'nullsrc=s=320x180:r=10:d=1'],
+  ...['-vf', `${RAMP},setparams=color_primaries=${m}:color_trc=${m}:colorspace=${m}:range=tv`],
+];
 // bitexact: sin el UID aleatorio ni la fecha que Matroska escribe en cada
 // archivo, así el SHA-256 de la muestra se repite de una corrida a otra
 const tags = (m: string): string[] => [
@@ -143,12 +149,15 @@ const tags = (m: string): string[] => [
 const deepSamples: [string, string[]][] = [
   [
     'e2e_sample_deep.webm',
-    [...rampSrc, '-c:v', 'libvpx-vp9', '-profile:v', '2', '-lossless', '1', ...tags('bt709')],
+    [
+      ...rampSrc('bt709'),
+      ...['-c:v', 'libvpx-vp9', '-profile:v', '2', '-lossless', '1', ...tags('bt709')],
+    ],
   ],
   [
     'e2e_sample_hevc10.mp4',
     [
-      ...rampSrc,
+      ...rampSrc('bt709'),
       ...['-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-tag:v', 'hvc1'],
       ...['-x265-params', 'lossless=1:log-level=error', ...tags('bt709')],
     ],
@@ -165,7 +174,7 @@ const mov = join(DIST, 'e2e_sample_prores.mov');
 if (!existsSync(mov)) {
   spawnSync(
     'ffmpeg',
-    [...rampSrc, '-c:v', 'prores_ks', '-profile:v', '2', ...tags('bt709'), '-y', mov],
+    [...rampSrc('bt709'), '-c:v', 'prores_ks', '-profile:v', '2', ...tags('bt709'), '-y', mov],
     { stdio: 'ignore' },
   );
 }
@@ -175,7 +184,7 @@ if (!existsSync(rot)) {
   spawnSync(
     'ffmpeg',
     [
-      ...rampSrc,
+      ...rampSrc('smpte170m'),
       ...['-c:v', 'libvpx-vp9', '-profile:v', '2', '-lossless', '1', ...tags('smpte170m')],
       ...['-y', pre],
     ],
