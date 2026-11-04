@@ -4,6 +4,7 @@
 pub mod api;
 pub mod aruco;
 pub mod aruco_dicts;
+pub mod bleedfill;
 pub mod calib;
 pub mod codecs;
 pub mod conform;

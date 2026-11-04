@@ -12,8 +12,9 @@ use crate::layoutfile;
 use crate::pdf::PdfBuilder;
 use crate::photo::FramePixels;
 use crate::scanproc::{
-    apply_level_curves, base_report, detect_scan, finish_scan, patch_curves, process_scan,
-    resolve_markers, FinishInput, LocalShift, ScanOptions, MAX_IMAGE_PIXELS,
+    apply_level_curves, base_report, detect_scan, finish_scan_with, patch_curves,
+    process_scan_with, resolve_markers, CropKind, FinishInput, LocalShift, ScanOptions,
+    MAX_IMAGE_PIXELS,
 };
 use crate::sheet::{self, FrameInput, Settings};
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -326,6 +327,12 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     if let Some(b) = opts_v.get("resize_to_original").and_then(|v| v.as_bool()) {
         opts.resize_to_original = b;
     }
+    if let Some(f) = opts_v.get("fill").and_then(|v| v.as_str()) {
+        opts.fill = crate::bleedfill::FillMode::parse(f);
+    }
+    if let Some(b) = opts_v.get("erase_markers").and_then(|v| v.as_bool()) {
+        opts.erase_markers = b;
+    }
     if let Some(b) = opts_v.get("fine_align").and_then(|v| v.as_bool()) {
         opts.fine_align = b;
     }
@@ -354,7 +361,45 @@ fn wants_thumbs(opts_json: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn scan_output_to_js(out: crate::scanproc::ScanOutput, thumbs: bool) -> JsValue {
+/// Arrays JS de recortes que se llenan uno a uno: cada recorte se codifica a
+/// PNG (y miniatura) en cuanto el núcleo lo corta, y sus píxeles se sueltan
+/// ahí mismo. Con un bleed negativo grande los recortes ocupan varias veces
+/// su celda, y guardarlos todos crudos hasta el final hacía crecer la memoria
+/// del worker más allá de la hoja enderezada (ver `finish_scan_with`).
+struct CropArrays {
+    frames: Array,
+    unidentified: Array,
+    thumbs: bool,
+}
+
+impl CropArrays {
+    fn new(thumbs: bool) -> Self {
+        CropArrays {
+            frames: Array::new(),
+            unidentified: Array::new(),
+            thumbs,
+        }
+    }
+
+    fn push(&self, kind: CropKind, label: String, crop: DynImg) {
+        let f = Object::new();
+        Reflect::set(&f, &"label".into(), &JsValue::from_str(&label)).ok();
+        let png = codecs::encode_png_dyn(&crop);
+        Reflect::set(&f, &"png".into(), &Uint8Array::from(png.as_slice())).ok();
+        drop(png);
+        if self.thumbs {
+            let jpg = thumb_jpeg(&crop);
+            Reflect::set(&f, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
+        }
+        match kind {
+            CropKind::Frame => self.frames.push(&f),
+            CropKind::Unidentified => self.unidentified.push(&f),
+        };
+    }
+}
+
+fn scan_output_to_js(out: crate::scanproc::ScanOutput, crops: CropArrays) -> JsValue {
+    let thumbs = crops.thumbs;
     let obj = Object::new();
     Reflect::set(
         &obj,
@@ -362,32 +407,15 @@ fn scan_output_to_js(out: crate::scanproc::ScanOutput, thumbs: bool) -> JsValue 
         &JsValue::from_str(&out.result.to_string()),
     )
     .ok();
-    let frames = Array::new();
-    for (label, crop) in &out.frames {
-        let f = Object::new();
-        Reflect::set(&f, &"label".into(), &JsValue::from_str(label)).ok();
-        let png = codecs::encode_png_dyn(crop);
-        Reflect::set(&f, &"png".into(), &Uint8Array::from(png.as_slice())).ok();
-        if thumbs {
-            let jpg = thumb_jpeg(crop);
-            Reflect::set(&f, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
-        }
-        frames.push(&f);
+    // por si algún camino dejó recortes en la salida en vez de en el receptor
+    for (label, crop) in out.frames {
+        crops.push(CropKind::Frame, label, crop);
     }
-    Reflect::set(&obj, &"frames".into(), &frames).ok();
-    let unid = Array::new();
-    for (name, crop) in &out.unidentified {
-        let f = Object::new();
-        Reflect::set(&f, &"label".into(), &JsValue::from_str(name)).ok();
-        let png = codecs::encode_png_dyn(crop);
-        Reflect::set(&f, &"png".into(), &Uint8Array::from(png.as_slice())).ok();
-        if thumbs {
-            let jpg = thumb_jpeg(crop);
-            Reflect::set(&f, &"thumb".into(), &Uint8Array::from(jpg.as_slice())).ok();
-        }
-        unid.push(&f);
+    for (label, crop) in out.unidentified {
+        crops.push(CropKind::Unidentified, label, crop);
     }
-    Reflect::set(&obj, &"sin_identificar".into(), &unid).ok();
+    Reflect::set(&obj, &"frames".into(), &crops.frames).ok();
+    Reflect::set(&obj, &"sin_identificar".into(), &crops.unidentified).ok();
     if let Some(ov) = out.overlay {
         let jpg = codecs::encode_jpeg_rgb(&ov, 82);
         Reflect::set(&obj, &"overlay".into(), &Uint8Array::from(jpg.as_slice())).ok();
@@ -440,8 +468,16 @@ pub fn scan_process(
         serde_json::from_str(claims_json).unwrap_or_default();
 
     let (img, _alpha) = codecs::decode(scan_bytes).map_err(err)?;
-    let out = process_scan(img, scan_name, &layout, &opts, &claims_map);
-    Ok(scan_output_to_js(out, wants_thumbs(opts_json)))
+    let crops = CropArrays::new(wants_thumbs(opts_json));
+    let out = process_scan_with(
+        img,
+        scan_name,
+        &layout,
+        &opts,
+        &claims_map,
+        &mut |kind, label, crop| crops.push(kind, label, crop),
+    );
+    Ok(scan_output_to_js(out, crops))
 }
 
 /// Normaliza UN recorte ya guardado con la tira de grises de su escaneo:
@@ -555,13 +591,28 @@ pub fn scan_finish(
         .get("local")
         .filter(|v| !v.is_null())
         .and_then(|v| serde_json::from_value(v.clone()).ok());
+    // qué parte de la hoja enderezada salió del escaneo: la homografía y el
+    // tamaño del escaneo, que el camino GPU pasa en el estado
+    let source = (|| {
+        let m: Vec<f64> = serde_json::from_value(state.get("m")?.clone()).ok()?;
+        let m: crate::geometry::H3 = m.try_into().ok()?;
+        let sw = state.get("src_w")?.as_f64()?;
+        let sh = state.get("src_h")?.as_f64()?;
+        Some(crate::bleedfill::SourceBounds {
+            minv: crate::geometry::invert_h(&m)?,
+            w: sw,
+            h: sh,
+        })
+    })();
     let warp = DynImg::U8(rgba_to_rgb(warped_rgba, w, h)?);
     let fin = FinishInput {
         s,
         refined_ids,
         local,
+        source,
     };
-    let out = finish_scan(
+    let crops = CropArrays::new(wants_thumbs(opts_json));
+    let out = finish_scan_with(
         warp,
         scan_name,
         &layout,
@@ -570,8 +621,9 @@ pub fn scan_finish(
         &markers,
         fin,
         res,
+        &mut |kind, label, crop| crops.push(kind, label, crop),
     );
-    Ok(scan_output_to_js(out, wants_thumbs(opts_json)))
+    Ok(scan_output_to_js(out, crops))
 }
 
 /// Codifica un buffer RGBA de 8 bits como PNG (sin pérdida). La fase de video
