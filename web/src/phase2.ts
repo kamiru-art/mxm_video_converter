@@ -92,6 +92,10 @@ interface ScanOpts {
   resize_to_original: boolean;
   fine_align: boolean;
   thumbs: boolean;
+  /** Solo con bleed negativo: relleno de lo que sale de la hoja. */
+  fill?: 'paper' | 'mirror' | 'tile';
+  /** Solo con bleed negativo: borrar los marcadores con el color del papel. */
+  erase_markers?: boolean;
   forced_sheet?: number;
 }
 
@@ -208,6 +212,27 @@ export function mountPhase2(root: HTMLElement): void {
   const refSel = el('select') as HTMLSelectElement;
   const refField = field('Reference print', refSel, 'The others are matched to it.');
   const fineCheck = check('Local correction for warped paper (recommended)', true);
+  // opciones del bleed negativo: solo se ven (y solo cuentan) con un valor
+  // por debajo de 0, cuando el recorte sale del panel
+  const fillSel = select(
+    [
+      ['paper', 'Paper colour'],
+      ['mirror', 'Mirror the page'],
+      ['tile', 'Repeat the page (mosaic)'],
+    ],
+    'paper',
+  );
+  const eraseCheck = check('Erase the markers (paint them with the paper colour)', false);
+  const negBox = el(
+    'div',
+    { style: 'display:none' },
+    field('Outside the page', fillSel, 'Fills what the crop takes beyond the page.'),
+    eraseCheck.label,
+  );
+  function refreshNegative(): void {
+    negBox.style.display = currentBleed() < 0 ? '' : 'none';
+  }
+  bleedIn.addEventListener('input', refreshNegative);
 
   // procesamiento
   const prog = progressBar();
@@ -335,6 +360,11 @@ export function mountPhase2(root: HTMLElement): void {
       s: det.s,
       refined_ids: det.refined_ids,
       local: det.local,
+      // homografía y tamaño del escaneo: el núcleo sabe así qué parte de la
+      // hoja enderezada no salió del escaneo (para rellenarla)
+      m: det.m,
+      src_w: bmp.width,
+      src_h: bmp.height,
     });
     return run(
       'scan_finish',
@@ -461,6 +491,12 @@ export function mountPhase2(root: HTMLElement): void {
       mode: modeSel.value,
       resize_to_original: resizeCheck.input.checked,
       fine_align: fineCheck.input.checked,
+      ...(currentBleed() < 0
+        ? {
+            fill: fillSel.value as 'paper' | 'mirror' | 'tile',
+            erase_markers: eraseCheck.input.checked,
+          }
+        : {}),
       // miniaturas pequeñas del núcleo para el informe: con los recortes
       // enteros (cientos de MB) Safari se congelaba al desplazarlo
       thumbs: true,
@@ -1430,8 +1466,9 @@ export function mountPhase2(root: HTMLElement): void {
     field(
       'Bleed (% per side)',
       bleedIn,
-      'Perimeter crop to avoid paper edges. A negative value enlarges the crop beyond the frame, down to -100 %, to show the paper around it.',
+      'Perimeter crop to avoid paper edges. Negative values show more of the page around each frame.',
     ),
+    negBox,
     field('Minimum markers', minMarkersIn),
     field('Detection mode', modeSel),
     field(

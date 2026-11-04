@@ -836,3 +836,90 @@ fn streaming_sink_gets_the_same_crops() {
         .collect();
     assert_eq!(got, want);
 }
+
+/// Píxeles casi negros de un recorte (lo que el enderezado deja donde el
+/// escáner no llegó, y los marcadores y el QR impresos).
+fn dark_pixels(img: &DynImg) -> usize {
+    img.to_rgb8()
+        .data
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|p| p.iter().all(|&c| c < 40))
+        .count()
+}
+
+/// Bleed negativo con relleno: en un escaneo al que le falta una franja de
+/// la hoja, el relleno quita el negro de lo no escaneado en los tres modos,
+/// y borrar los marcadores quita además buena parte de lo oscuro impreso.
+#[test]
+fn negative_bleed_fill_modes_and_erased_markers() {
+    use mxm_core::bleedfill::FillMode;
+    let s = base_settings();
+    let l = build_layout(&s, (16.0, 9.0)).unwrap();
+    let frames: Vec<FrameInput> = [
+        [200u8, 60, 60],
+        [60, 180, 60],
+        [60, 60, 200],
+        [180, 160, 40],
+    ]
+    .iter()
+    .map(|&b| synth_frame(320, 180, b).0)
+    .collect();
+    let labels: Vec<String> = (1..=4).map(|i| format!("demo_{:03}", i)).collect();
+    let page = render_page(&s, &l, &frames, &labels, 1, true);
+    let img = page.image.unwrap();
+    let mut record = page.record.unwrap();
+    record["archivo_hoja"] = json!("demo_p1.png");
+    let layout = build_layout_json(&s, &l, &[record], json!([]), json!({}), None);
+    let full = simulate_scan(&img, 1.4, 99);
+    // el escáner no llegó al último 30 % de la derecha del escaneo
+    let keep = full.w * 70 / 100;
+    let scan = full.crop(0, 0, keep, full.h);
+
+    let run = |scan: &Rgb, fill: FillMode, erase: bool| {
+        let opts = ScanOptions {
+            bleed: -1.0,
+            fill,
+            erase_markers: erase,
+            ..ScanOptions::default()
+        };
+        let out = process_scan(
+            DynImg::U8(scan.clone()),
+            "cut.png",
+            &layout,
+            &opts,
+            &HashMap::new(),
+        );
+        assert_eq!(out.frames.len(), 4, "{fill:?}: {}", out.result);
+        let dark: usize = out.frames.iter().map(|(_, c)| dark_pixels(c)).sum();
+        (out, dark)
+    };
+    let (legacy, dark_legacy) = run(&scan, FillMode::Legacy, false);
+    let (_, dark_legacy_full) = run(&full, FillMode::Legacy, false);
+    // sin relleno, la franja no escaneada sale negra en los recortes
+    assert!(
+        dark_legacy > dark_legacy_full + 100_000,
+        "cut {dark_legacy} vs whole {dark_legacy_full}"
+    );
+    let sizes: Vec<_> = legacy.frames.iter().map(|(_, c)| c.size()).collect();
+    for mode in [FillMode::Paper, FillMode::Mirror, FillMode::Tile] {
+        let (out, dark) = run(&scan, mode, false);
+        let (_, dark_full) = run(&full, mode, false);
+        // el relleno no cambia el tamaño de los recortes
+        let got: Vec<_> = out.frames.iter().map(|(_, c)| c.size()).collect();
+        assert_eq!(got, sizes, "{mode:?}");
+        // con relleno, lo oscuro es solo lo impreso (marcadores, QR, texto):
+        // no más que en el escaneo entero con el mismo modo
+        assert!(
+            dark as f64 <= dark_full as f64 * 1.05 + 200.0,
+            "{mode:?}: cut {dark} dark px vs whole {dark_full}"
+        );
+    }
+    let (_, dark_paper) = run(&full, FillMode::Paper, false);
+    let (_, dark_erased) = run(&full, FillMode::Paper, true);
+    assert!(
+        (dark_erased as f64) < dark_paper as f64 * 0.8,
+        "erased markers: {dark_erased} dark px vs {dark_paper} with them"
+    );
+}

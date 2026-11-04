@@ -289,8 +289,16 @@ export const EXACT: Record<string, string> = {
     'Endereza cada hoja con sus marcadores, la identifica por los IDs de los marcadores y recorta cada fotograma. Una hoja que nada identifica se puede asignar a mano en el informe.',
   Options: 'Opciones',
   'Bleed (% per side)': 'Sangrado (% por lado)',
-  'Perimeter crop to avoid paper edges. A negative value enlarges the crop beyond the frame, down to -100 %, to show the paper around it.':
-    'Recorte perimetral para evitar los bordes del papel. Un valor negativo amplía el recorte más allá del fotograma, hasta -100 %, para mostrar el papel que lo rodea.',
+  'Perimeter crop to avoid paper edges. Negative values show more of the page around each frame.':
+    'Recorte perimetral para evitar los bordes del papel. Con valores negativos se ve más de la hoja alrededor de cada fotograma.',
+  'Outside the page': 'Fuera de la hoja',
+  'Fills what the crop takes beyond the page.':
+    'Rellena lo que el recorte toma más allá de la hoja.',
+  'Paper colour': 'Color del papel',
+  'Mirror the page': 'Reflejar la hoja',
+  'Repeat the page (mosaic)': 'Repetir la hoja (mosaico)',
+  'Erase the markers (paint them with the paper colour)':
+    'Borrar los marcadores (pintarlos del color del papel)',
   'Minimum markers': 'Mínimo de marcadores',
   'Detection mode': 'Modo de detección',
   'Machine RAM (GB)': 'RAM de la máquina (GB)',

@@ -3,6 +3,7 @@
 //! polaridad automáticos), lo identifica por QR y recorta cada fotograma.
 
 use crate::aruco::{detect_markers, params_for_mode, Dict};
+use crate::bleedfill::{self, FillCtx, FillMode, SourceBounds};
 use crate::geometry::{apply_h, find_homography_ransac, Pt, H3};
 use crate::img::{DynImg, Gray, Rgb};
 use crate::imgproc::{clahe, flat_field, normalize_minmax};
@@ -53,6 +54,11 @@ pub struct ScanOptions {
     /// Hoja asignada a mano: cuando el QR no se lee y los IDs de marcador no
     /// bastan, el usuario dice a qué hoja pertenece este escaneo.
     pub forced_sheet: Option<i64>,
+    /// Relleno de lo que un recorte con bleed negativo saca de la hoja.
+    pub fill: FillMode,
+    /// Pintar los marcadores de registro con el papel que los rodea antes
+    /// de recortar (para recortes que salen del panel y los alcanzan).
+    pub erase_markers: bool,
 }
 
 impl Default for ScanOptions {
@@ -64,6 +70,8 @@ impl Default for ScanOptions {
             resize_to_original: false,
             fine_align: true,
             forced_sheet: None,
+            fill: FillMode::Legacy,
+            erase_markers: false,
         }
     }
 }
@@ -653,13 +661,15 @@ pub fn aplicar_bleed(x1: f64, y1: f64, x2: f64, y2: f64, factor: f64) -> (f64, f
     (x1 + rx, y1 + ry, x2 - rx, y2 - ry)
 }
 
-fn crop_frame(
+/// Esquina y tamaño del recorte de `bbox` en la hoja enderezada, o None si
+/// queda vacío, no cabe en el tope de memoria o cae del todo fuera de la hoja.
+fn crop_rect(
     warp: &DynImg,
     bbox: [f64; 4],
     s: f64,
     bleed: f64,
     local: Option<&LocalShift>,
-) -> Option<DynImg> {
+) -> Option<(i64, i64, usize, usize)> {
     let mut fx1 = bbox[0] * s;
     let mut fy1 = bbox[1] * s;
     if let Some(ls) = local {
@@ -686,7 +696,35 @@ fn crop_frame(
     if ox >= iw as i64 || oy >= ih as i64 || ox + cw as i64 <= 0 || oy + ch as i64 <= 0 {
         return None;
     }
-    Some(warp.crop_fixed(ox, oy, cw as usize, ch as usize))
+    Some((ox, oy, cw as usize, ch as usize))
+}
+
+fn crop_frame(
+    warp: &DynImg,
+    bbox: [f64; 4],
+    s: f64,
+    bleed: f64,
+    local: Option<&LocalShift>,
+) -> Option<DynImg> {
+    let (ox, oy, cw, ch) = crop_rect(warp, bbox, s, bleed, local)?;
+    Some(warp.crop_fixed(ox, oy, cw, ch))
+}
+
+/// `crop_frame` para los fotogramas: lo que sale de la hoja, o no se
+/// escaneó, se rellena según `fill` (sin él, como `crop_frame`).
+fn crop_frame_filled(
+    warp: &DynImg,
+    bbox: [f64; 4],
+    s: f64,
+    bleed: f64,
+    local: Option<&LocalShift>,
+    fill: Option<&FillCtx>,
+) -> Option<DynImg> {
+    let (ox, oy, cw, ch) = crop_rect(warp, bbox, s, bleed, local)?;
+    Some(match fill {
+        Some(ctx) => bleedfill::crop_filled(warp, ox, oy, cw, ch, ctx),
+        None => warp.crop_fixed(ox, oy, cw, ch),
+    })
 }
 
 fn crop_frame_rgb8(
@@ -1169,6 +1207,10 @@ pub struct FinishInput {
     pub s: f64,
     pub refined_ids: HashSet<u32>,
     pub local: Option<LocalShift>,
+    /// Qué parte de la hoja enderezada salió del escaneo (para rellenar lo
+    /// que no). None: toda la hoja cuenta como escaneada.
+    #[serde(default)]
+    pub source: Option<SourceBounds>,
 }
 
 /// Fase final sobre la hoja YA enderezada: normalización opcional,
@@ -1223,7 +1265,7 @@ pub enum CropKind {
 /// salida quedan vacíos.
 #[allow(clippy::too_many_arguments)]
 pub fn finish_scan_with(
-    warp: DynImg,
+    mut warp: DynImg,
     scan_name: &str,
     layout: &Value,
     opts: &ScanOptions,
@@ -1238,6 +1280,7 @@ pub fn finish_scan_with(
     let mut n_frames = 0usize;
     let s = fin.s;
     let local = fin.local;
+    let source = fin.source;
 
     macro_rules! warn {
         ($($arg:tt)*) => { warn_res!(res, $($arg)*) };
@@ -1343,6 +1386,32 @@ pub fn finish_scan_with(
         local.as_ref(),
     );
 
+    // Relleno y borrado de marcadores: después del overlay (que muestra los
+    // marcadores tal como se escanearon) y de identificar la hoja, antes de
+    // recortar. El color del papel solo se mide si alguna opción lo usa.
+    let fill_ctx: Option<FillCtx> = if opts.fill != FillMode::Legacy || opts.erase_markers {
+        let paper = bleedfill::paper_colour(&warp, source.as_ref());
+        if opts.erase_markers {
+            let rects: Vec<[f64; 4]> = overlay_bboxes
+                .as_object()
+                .map(|o| {
+                    o.values()
+                        .filter_map(layoutfile::bbox_of)
+                        .map(|b| [b[0] * s, b[1] * s, b[2] * s, b[3] * s])
+                        .collect()
+                })
+                .unwrap_or_default();
+            bleedfill::erase_rects(&mut warp, &rects, source.as_ref(), paper);
+        }
+        (opts.fill != FillMode::Legacy).then(|| FillCtx {
+            mode: opts.fill,
+            paper,
+            source: source.clone(),
+        })
+    } else {
+        None
+    };
+
     let (hoja, via) = match hoja {
         Some(hv) => hv,
         None => {
@@ -1355,8 +1424,14 @@ pub fn finish_scan_with(
                     });
                     for (i, (_lab, info)) in items.iter().enumerate() {
                         if let Some(b) = layoutfile::bbox_of(&info["bbox"]) {
-                            if let Some(crop) = crop_frame(&warp, b, s, opts.bleed, local.as_ref())
-                            {
+                            if let Some(crop) = crop_frame_filled(
+                                &warp,
+                                b,
+                                s,
+                                opts.bleed,
+                                local.as_ref(),
+                                fill_ctx.as_ref(),
+                            ) {
                                 let stem = scan_name
                                     .rsplit_once('.')
                                     .map(|(a, _)| a)
@@ -1393,13 +1468,15 @@ pub fn finish_scan_with(
                 Some(b) => b,
                 None => continue,
             };
-            let mut crop = match crop_frame(&warp, b, s, opts.bleed, local.as_ref()) {
-                Some(c) => c,
-                None => {
-                    warn!("Empty crop for '{etiqueta}'.");
-                    continue;
-                }
-            };
+            let mut crop =
+                match crop_frame_filled(&warp, b, s, opts.bleed, local.as_ref(), fill_ctx.as_ref())
+                {
+                    Some(c) => c,
+                    None => {
+                        warn!("Empty crop for '{etiqueta}'.");
+                        continue;
+                    }
+                };
             if opts.resize_to_original {
                 if let Some(op) = info.get("orig_px").and_then(|v| v.as_array()) {
                     if op.len() == 2 {
@@ -1485,11 +1562,17 @@ pub fn process_scan_with(
         }
     };
     let warp = crate::geometry::warp_perspective(&img, &det.m, det.out_w, det.out_h);
+    let (sw, sh) = img.size();
     drop(img);
     let fin = FinishInput {
         s: det.s,
         refined_ids: det.refined.keys().cloned().collect(),
         local: det.local,
+        source: crate::geometry::invert_h(&det.m).map(|minv| SourceBounds {
+            minv,
+            w: sw as f64,
+            h: sh as f64,
+        }),
     };
     finish_scan_with(
         warp,

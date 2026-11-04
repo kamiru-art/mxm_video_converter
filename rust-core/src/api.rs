@@ -327,6 +327,12 @@ fn parse_scan_options(opts_json: &str) -> ScanOptions {
     if let Some(b) = opts_v.get("resize_to_original").and_then(|v| v.as_bool()) {
         opts.resize_to_original = b;
     }
+    if let Some(f) = opts_v.get("fill").and_then(|v| v.as_str()) {
+        opts.fill = crate::bleedfill::FillMode::parse(f);
+    }
+    if let Some(b) = opts_v.get("erase_markers").and_then(|v| v.as_bool()) {
+        opts.erase_markers = b;
+    }
     if let Some(b) = opts_v.get("fine_align").and_then(|v| v.as_bool()) {
         opts.fine_align = b;
     }
@@ -585,11 +591,25 @@ pub fn scan_finish(
         .get("local")
         .filter(|v| !v.is_null())
         .and_then(|v| serde_json::from_value(v.clone()).ok());
+    // qué parte de la hoja enderezada salió del escaneo: la homografía y el
+    // tamaño del escaneo, que el camino GPU pasa en el estado
+    let source = (|| {
+        let m: Vec<f64> = serde_json::from_value(state.get("m")?.clone()).ok()?;
+        let m: crate::geometry::H3 = m.try_into().ok()?;
+        let sw = state.get("src_w")?.as_f64()?;
+        let sh = state.get("src_h")?.as_f64()?;
+        Some(crate::bleedfill::SourceBounds {
+            minv: crate::geometry::invert_h(&m)?,
+            w: sw,
+            h: sh,
+        })
+    })();
     let warp = DynImg::U8(rgba_to_rgb(warped_rgba, w, h)?);
     let fin = FinishInput {
         s,
         refined_ids,
         local,
+        source,
     };
     let crops = CropArrays::new(wants_thumbs(opts_json));
     let out = finish_scan_with(
