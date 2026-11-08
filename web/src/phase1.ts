@@ -913,7 +913,7 @@ export function mountPhase1(root: HTMLElement): void {
     field(
       'Typeface',
       fontSel,
-      'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.',
+      'For labels and the sheet number. Upload or drop TTF, OTF, ZIP or a folder. Stays in this browser.',
     ),
     el('div', { class: 'btn-row' }, fontUploadBtn, fontRemoveBtn, fontInput),
     fontManage,

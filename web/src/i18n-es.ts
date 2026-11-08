@@ -201,8 +201,8 @@ export const EXACT: Record<string, string> = {
   'Gutter (mm)': 'Separación (mm)',
   'Font (pt)': 'Fuente (pt)',
   Typeface: 'Tipografía',
-  'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.':
-    'Para las etiquetas de los fotogramas y el número de hoja. Sube tus TTF u OTF, o el ZIP en que vinieron, o suéltalos aquí (también una carpeta entera): se quedan en este navegador.',
+  'For labels and the sheet number. Upload or drop TTF, OTF, ZIP or a folder. Stays in this browser.':
+    'Para etiquetas y número de hoja. Sube o suelta TTF, OTF, ZIP o una carpeta. Se queda en este navegador.',
   'Upload fonts…': 'Subir fuentes…',
   'Select all': 'Marcar todas',
   'Delete selected': 'Borrar las marcadas',
