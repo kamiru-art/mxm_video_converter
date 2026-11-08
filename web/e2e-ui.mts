@@ -1461,6 +1461,7 @@ async function runFlow(
     // el ZIP tal como se descarga, soltado junto con una TTF suelta y un
     // «.zip» que no lo es
     const bulk = await driver.run<{
+      storedMagic: string;
       woff2SameAsTtf: boolean;
       toasts: string[];
       selected: string;
@@ -1495,9 +1496,21 @@ async function runFlow(
       const hBack = await pick('custom:Mono Regular.ttf', hWoff2);
       const hTtf = await pick('custom:Serif.ttf', hBack);
       await pick('custom:Mono Regular.ttf', hTtf);
+      // lo guardado de la WOFF2 es ya un TTF (empieza por 00 01 00 00), para
+      // no descomprimirla en cada vista previa
+      const stored = await new Promise((res, rej) => {
+        const req = indexedDB.open('mxm-fonts');
+        req.onerror = () => rej(req.error);
+        req.onsuccess = () => {
+          const get = req.result.transaction('fonts').objectStore('fonts').get('Serif Web.woff2');
+          get.onsuccess = () => { res(new Uint8Array(get.result.bytes.slice(0, 4))); req.result.close(); };
+          get.onerror = () => rej(get.error);
+        };
+      });
       manage.open = true;
       manage.scrollIntoView({ block: 'center' });
       return {
+        storedMagic: [...stored].map((b) => b.toString(16).padStart(2, '0')).join(''),
         woff2SameAsTtf: hTtf === hWoff2 && hBack === h1,
         toasts: ui.toasts.slice(before),
         selected: fontSel.value,
@@ -1525,9 +1538,9 @@ async function runFlow(
       `${bulk.selected}; ${bulk.summary}; ${bulk.boxes.join(', ')}`,
     );
     check(
-      'a WOFF2 draws the sheet exactly like the TTF it came from',
-      bulk.woff2SameAsTtf,
-      String(bulk.woff2SameAsTtf),
+      'a WOFF2 is stored unpacked and draws the sheet exactly like the TTF it came from',
+      bulk.woff2SameAsTtf && bulk.storedMagic === '00010000',
+      `same preview: ${bulk.woff2SameAsTtf}; stored file starts with ${bulk.storedMagic}`,
     );
     check(
       'the refusals name every bad file, one warning per reason',

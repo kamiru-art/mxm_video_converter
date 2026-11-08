@@ -121,18 +121,23 @@ function sizeMessage(name: string, size: number): string {
 }
 
 /**
- * Comprueba un archivo con el núcleo y lo guarda. Devuelve el id. Lanza con
+ * Comprueba un archivo con el núcleo y lo guarda (como TTF/OTF). Devuelve el id. Lanza con
  * el motivo si no es una fuente que sirva (sin letras, cortada…).
  */
 export async function addCustomFont(file: File): Promise<string> {
   if (file.size > MAX_FONT_BYTES) throw new Error(sizeMessage(file.name, file.size));
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  await run('check_font', { bytes: bytes.slice() });
+  // se guarda lo que devuelve el núcleo: un WOFF ya descomprimido, para no
+  // descomprimirlo en cada vista previa
+  const bytes = await run('check_font', { bytes: new Uint8Array(await file.arrayBuffer()) });
   const name = file.name;
   const id = customFontId(name);
   try {
     await tx('readwrite', (s) =>
-      s.put({ name, bytes: bytes.buffer, added: new Date().toISOString() } satisfies StoredFont),
+      s.put({
+        name,
+        bytes: bytes.slice().buffer,
+        added: new Date().toISOString(),
+      } satisfies StoredFont),
     );
   } catch {
     // sin almacenamiento sirve para esta sesión: queda en memoria

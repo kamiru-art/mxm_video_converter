@@ -92,7 +92,8 @@ export interface Commands {
     result: string;
   };
   /** Lanza con el motivo si los bytes no son una fuente para etiquetas. */
-  check_font: { args: { bytes: Bytes }; result: undefined };
+  /** La fuente como TTF/OTF (un WOFF, descomprimido): lo que se guarda. */
+  check_font: { args: { bytes: Bytes }; result: Bytes };
   /** Los caracteres de `text` que la fuente no tiene, juntos. */
   missing_glyphs: { args: { font: Bytes; text: string }; result: string };
   content_histogram: { args: { meta: string; pixels: Bytes }; result: string };

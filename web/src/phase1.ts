@@ -774,7 +774,8 @@ export function mountPhase1(root: HTMLElement): void {
   fontSel.setAttribute('aria-label', 'Typeface');
   const fontInput = el('input', {
     type: 'file',
-    accept: '.ttf,.otf,.ttc,.woff,.woff2,.zip,font/*,application/zip',
+    accept:
+      '.ttf,.otf,.ttc,.woff,.woff2,.zip,font/ttf,font/otf,font/collection,font/woff,font/woff2,application/zip',
     multiple: '',
     hidden: '',
   });

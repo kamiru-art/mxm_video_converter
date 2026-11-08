@@ -208,8 +208,7 @@ export const EXACT: Record<string, string> = {
   'Delete selected': 'Borrar las marcadas',
   'Your fonts': 'Tus fuentes',
   'There are no fonts in what you chose.': 'No hay fuentes en lo que elegiste.',
-  'This web font (WOFF) is damaged and cannot be read.':
-    'Esta fuente web (WOFF) está dañada y no se puede leer.',
+  'This web font is damaged and cannot be read.': 'Esta fuente web está dañada y no se puede leer.',
   'Remove font': 'Quitar fuente',
   'DejaVu Sans (default)': 'DejaVu Sans (predeterminada)',
   'Size (pt)': 'Tamaño (pt)',

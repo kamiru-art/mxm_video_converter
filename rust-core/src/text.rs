@@ -18,8 +18,12 @@
 //!     las letras salen deformes o en blanco: tiene que dibujar píxel a
 //!     píxel lo mismo que el TTF del que salió. (b) El WOFF (zlib) de un OTF
 //!     CFF: lo mismo frente a su OTF. (c) Un WOFF cortado o con basura: error
-//!     con mensaje, sin panic. (d) Una «bomba»: la cabecera declara cientos
-//!     de MB descomprimidos; se rechaza antes de descomprimir.
+//!     con mensaje, sin panic. (d) Una «bomba»: el archivo pide cientos de
+//!     MB descomprimidos. En WOFF lo que cuenta no es la cabecera (wuff no
+//!     la mira) sino el tamaño que declara cada tabla, con el que wuff
+//!     reserva memoria: se suman y se rechaza antes de descomprimir.
+//!     (e) Descomprimir en cada vista previa: la interfaz guarda lo que
+//!     devuelve `sfnt_bytes` al subir, así que el WOFF se abre una vez.
 //!  3. Un OTF con contornos CFF (como vienen muchas fuentes comerciales) se
 //!     lee mal o sale en blanco.
 //!  4. A la fuente le faltan caracteres (una etiqueta con ñ, o la elipsis
@@ -84,16 +88,35 @@ fn unwrap_web_font(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, String> {
     if !woff1 && !bytes.starts_with(b"wOF2") {
         return Ok(bytes.into());
     }
-    let damaged = || "This web font (WOFF) is damaged and cannot be read.".to_string();
-    // las dos cabeceras guardan en el byte 16 el tamaño descomprimido
-    let declared = bytes
-        .get(16..20)
-        .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
-        .ok_or_else(damaged)?;
+    let damaged = || "This web font is damaged and cannot be read.".to_string();
+    let u32_at = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
+            .ok_or_else(damaged)
+    };
+    // WOFF2: wuff ya limita lo que descomprime (128 MB); la cabecera (byte
+    // 16) basta para rechazar antes lo que pase del límite propio.
+    // WOFF: wuff reserva cada tabla con su origLength sin comprobarlo, así
+    // que se suman todas (directorio desde el byte 44, 20 bytes por tabla).
+    let declared = if woff1 {
+        let n = bytes
+            .get(12..14)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize);
+        let n = n.ok_or_else(damaged)?;
+        let mut total = 12 + 16 * n;
+        for i in 0..n {
+            let orig = u32_at(44 + 20 * i + 12)?;
+            total = total.saturating_add(orig.saturating_add(3) & !3);
+        }
+        total
+    } else {
+        u32_at(16)?
+    };
     if declared > MAX_SFNT {
         return Err(format!(
             "This web font says it holds {} MB once unpacked; fonts for labels must be under {} MB.",
-            declared / (1024 * 1024),
+            declared.div_ceil(1024 * 1024),
             MAX_SFNT / (1024 * 1024)
         ));
     }
@@ -108,8 +131,20 @@ fn unwrap_web_font(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, String> {
 /// Lee una fuente (TTF, OTF, WOFF o WOFF2) y comprueba que sirva para
 /// etiquetas.
 pub fn parse_font(bytes: &[u8]) -> Result<Font, String> {
+    font_from_sfnt(&unwrap_web_font(bytes)?)
+}
+
+/// Comprueba la fuente y devuelve sus bytes como TTF/OTF (un WOFF,
+/// descomprimido): lo que conviene guardar, para no descomprimir en cada
+/// llamada.
+pub fn sfnt_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let sfnt = unwrap_web_font(bytes)?;
-    let font = Font::from_bytes(&*sfnt, FontSettings::default())
+    font_from_sfnt(&sfnt)?;
+    Ok(sfnt.into_owned())
+}
+
+fn font_from_sfnt(sfnt: &[u8]) -> Result<Font, String> {
+    let font = Font::from_bytes(sfnt, FontSettings::default())
         .map_err(|e| format!("This file is not a font that can be read: {e}"))?;
     // una de símbolos no tiene ni cifras ni letras, y un archivo cortado
     // las tiene en la tabla pero sin contorno: en ambos casos no dibujan
@@ -366,19 +401,45 @@ mod tests {
             &garbled[..],
         ] {
             let e = with_font(bytes, || ()).expect_err("debía rechazarse");
-            assert!(e.contains("web font") || e.contains("letters"), "{e}");
+            assert!(e.contains("web font is damaged"), "{e}");
         }
-        // 2d: una cabecera que declara 500 MB descomprimidos
-        for magic in [b"wOFF", b"wOF2"] {
-            let mut bomb = if magic == b"wOFF" {
-                CFF_WOFF.to_vec()
-            } else {
-                SERIF_WOFF2.to_vec()
-            };
-            bomb[16..20].copy_from_slice(&500_000_000u32.to_be_bytes());
-            let e = with_font(&bomb, || ()).expect_err("debía rechazarse");
-            assert!(e.contains("MB"), "{e}");
+        // 2d, WOFF: la cabecera dice la verdad, pero la primera tabla pide
+        // 2 GB (lo que wuff reservaría); y otra con 40 MB en cada una de
+        // dos tablas, que sólo juntas pasan del límite
+        let mut bomb = CFF_WOFF.to_vec();
+        let orig = 44 + 12;
+        bomb[orig..orig + 4].copy_from_slice(&0x7fff_fff0u32.to_be_bytes());
+        let e = with_font(&bomb, || ()).expect_err("debía rechazarse");
+        let mb: usize = e
+            .split_whitespace()
+            .find_map(|w| w.parse().ok())
+            .expect("dice cuántos MB");
+        assert!(mb >= 2048 && e.contains("once unpacked"), "{e}");
+        let mut two = CFF_WOFF.to_vec();
+        for t in 0..2 {
+            let at = 44 + 20 * t + 12;
+            two[at..at + 4].copy_from_slice(&(40u32 << 20).to_be_bytes());
         }
+        let e = with_font(&two, || ()).expect_err("debía rechazarse");
+        assert!(e.contains("MB once unpacked"), "{e}");
+        // 2d, WOFF2: una cabecera que declara un byte más que el límite
+        let mut big = SERIF_WOFF2.to_vec();
+        big[16..20].copy_from_slice(&((MAX_SFNT + 1) as u32).to_be_bytes());
+        let e = with_font(&big, || ()).expect_err("debía rechazarse");
+        assert!(e.contains("65 MB"), "{e}");
+    }
+
+    #[test]
+    fn web_fonts_are_unwrapped_once_for_storage() {
+        // 2e: lo que se guarda es el TTF/OTF, que ya no es WOFF y dibuja igual
+        let ttf = sfnt_bytes(SERIF_WOFF2).expect("WOFF2 válida");
+        assert!(!ttf.starts_with(b"wOF"));
+        assert!(drawn_with(&ttf) == drawn_with(SERIF));
+        let otf = sfnt_bytes(CFF_WOFF).expect("WOFF válido");
+        assert!(otf.starts_with(b"OTTO"));
+        // y una fuente que ya es TTF sale tal cual
+        assert!(sfnt_bytes(SERIF).expect("TTF válido") == SERIF);
+        assert!(sfnt_bytes(&SERIF_WOFF2[..2000]).is_err());
     }
 
     #[test]
