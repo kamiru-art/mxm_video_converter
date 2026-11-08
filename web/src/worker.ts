@@ -123,7 +123,7 @@ const handlers: Handlers = {
     ),
   missing_glyphs: (a) => core.missing_glyphs(a.font, a.text),
   check_font: (a) => {
-    const sfnt = core.check_font(a.bytes);
+    const sfnt = core.check_font(a.bytes) as Bytes;
     return { value: sfnt, transfer: [sfnt.buffer] };
   },
   content_histogram: (a) => core.content_histogram(a.meta, a.pixels),
