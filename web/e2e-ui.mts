@@ -93,12 +93,16 @@ const FONT_UI = `
   const view = document.getElementById('view-sheets');
   const fontSel = view.querySelector('select[aria-label="Typeface"]');
   const fontInput = view.querySelector('input[type=file][accept*=".otf"]');
-  const putFont = (file) => {
+  const fontDirInput = view.querySelector('input[data-role="font-folder"]');
+  const putFiles = (input, files) => {
     const dt = new DataTransfer();
-    dt.items.add(file);
-    fontInput.files = dt.files;
-    fontInput.dispatchEvent(new Event('change'));
+    for (const f of files) dt.items.add(f);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change'));
   };
+  const putFont = (file) => putFiles(fontInput, [file]);
+  const manage = view.querySelector('details.font-manage');
+  const manageBoxes = () => [...manage.querySelectorAll('.font-list input[type=checkbox]')];
   const previewHash = async () => {
     const img = view.querySelector('img[alt="Sheet preview"]');
     if (!img?.src) return '';
@@ -334,7 +338,7 @@ async function runFlow(
     const h0 = await ui.until(previewHash, 60000, 'the first preview');
     // un WOFF (lo que da una web de fuentes) se rechaza diciendo por qué
     putFont(new File([new Uint8Array([0x77, 0x4f, 0x46, 0x46, 0, 1, 0, 0, 1, 2, 3, 4])], 'brand.woff'));
-    await ui.until(() => ui.toasts.some((t) => /Could not use that font.*WOFF/.test(t)), 15000, 'the WOFF refusal');
+    await ui.until(() => ui.toasts.some((t) => /Could not use “brand.woff”: .*WOFF/.test(t)), 15000, 'the WOFF refusal');
     const woffKeptDefault = fontSel.value === '';
     // el OTF de verdad
     const otf = Uint8Array.from(atob('${OTF_B64}'), (c) => c.charCodeAt(0));
@@ -1404,6 +1408,101 @@ async function runFlow(
         !after.includes(`custom:${OTF_NAME}`) &&
         after.includes('builtin:IBMPlexMono-Regular.ttf'),
       `after reload: ${after.join(', ')}`,
+    );
+
+    // una carpeta como las del escritorio: tres fuentes buenas, una cortada,
+    // dos WOFF, la basura «._» que macOS deja en discos externos y un texto
+    const bulk = await driver.run<{
+      toasts: string[];
+      selected: string;
+      options: string[];
+      summary: string;
+      boxes: string[];
+      previewChanged: boolean;
+      buttonBack: boolean;
+    }>(
+      step(`${FONT_UI}
+      const h0 = await ui.until(previewHash, 60000, 'the preview before the folder');
+      const get = async (f) => new Uint8Array(await (await fetch('/fonts/' + f)).arrayBuffer());
+      const mono = await get('IBMPlexMono-Regular.ttf');
+      const serif = await get('PTSerif-Regular.ttf');
+      const courier = await get('CourierPrime-Regular.ttf');
+      const before = ui.toasts.length;
+      putFiles(fontDirInput, [
+        new File([mono], 'Mono.ttf'),
+        new File([serif], 'Serif.ttf'),
+        new File([serif.slice(0, 3000)], 'Broken.ttf'),
+        new File([new Uint8Array(4096)], '._Mono.ttf'),
+        new File([new Uint8Array([0x77, 0x4f, 0x46, 0x46, 0, 1, 0, 0])], 'web1.woff'),
+        new File([new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1, 0, 0])], 'web2.woff2'),
+        new File(['license text'], 'OFL.txt'),
+        new File([courier], 'Courier.ttf'),
+      ]);
+      await ui.until(() => ui.toasts.slice(before).some((t) => /3 fonts added/.test(t)), 30000, 'the folder added');
+      const h1 = await ui.until(async () => { const h = await previewHash(); return h && h !== h0 ? h : null; }, 30000, 'the preview in the first font of the folder');
+      await ui.until(() => ui.toasts.slice(before).filter((t) => /Could not use/.test(t)).length >= 2, 15000, 'the refusals');
+      manage.open = true;
+      manage.scrollIntoView({ block: 'center' });
+      return {
+        toasts: ui.toasts.slice(before),
+        selected: fontSel.value,
+        options: [...fontSel.options].map((o) => o.value),
+        summary: manage.querySelector('summary').textContent,
+        boxes: manageBoxes().map((b) => b.value),
+        previewChanged: !!h1,
+        buttonBack: ui.button(/Upload folder/)?.textContent === 'Upload folder…',
+      };`),
+    );
+    await shot('sheets-fonts-bulk');
+    const refusals = bulk.toasts.filter((t) => /Could not use/.test(t));
+    check(
+      'a folder of fonts goes in at once, skipping what is not a font',
+      bulk.selected === 'custom:Mono.ttf' &&
+        ['custom:Courier.ttf', 'custom:Mono.ttf', 'custom:Serif.ttf'].every((id) =>
+          bulk.options.includes(id),
+        ) &&
+        !bulk.options.some((o) => /Broken|\._Mono|woff|OFL/.test(o)) &&
+        bulk.summary === 'Your fonts (3)' &&
+        bulk.boxes.join() === 'custom:Courier.ttf,custom:Mono.ttf,custom:Serif.ttf' &&
+        bulk.previewChanged &&
+        bulk.buttonBack,
+      `${bulk.selected}; ${bulk.summary}; ${bulk.boxes.join(', ')}`,
+    );
+    check(
+      'the refusals name every bad file, one warning per reason',
+      refusals.length === 2 &&
+        refusals.some((t) => t.includes('“web1.woff”, “web2.woff2”') && /WOFF/.test(t)) &&
+        refusals.some((t) => t.includes('“Broken.ttf”') && !/WOFF/.test(t)) &&
+        !bulk.toasts.some((t) => /\._Mono|OFL\.txt/.test(t)),
+      refusals.join(' | '),
+    );
+
+    // borrar en bulk: todas menos Serif; la elegida (Mono) cae, vuelve DejaVu
+    const bulkDel = await driver.run<{ toast: string; selected: string; boxes: string[] }>(
+      step(`${FONT_UI}
+      manage.open = true;
+      const all = manage.querySelector(':scope > label.check input');
+      all.click();
+      manageBoxes().find((b) => b.value === 'custom:Serif.ttf').click();
+      const del = ui.button(/Delete selected/);
+      const label = del.textContent;
+      del.click();
+      const toast = await ui.until(() => ui.toasts.find((t) => /2 fonts removed/.test(t)), 15000, 'the bulk removal');
+      return { toast: label + ' → ' + toast, selected: fontSel.value, boxes: manageBoxes().map((b) => b.value) };`),
+    );
+    await openApp(driver, port, 'sheets');
+    const afterDel = await driver.run<string[]>(
+      step(`${FONT_UI}
+      await ui.until(() => manageBoxes().length, 15000, 'the font list');
+      return [...fontSel.options].map((o) => o.value).filter((v) => v.startsWith('custom:'));`),
+    );
+    check(
+      'deleting several fonts at once keeps only the unmarked one',
+      /Delete selected \(2\)/.test(bulkDel.toast) &&
+        bulkDel.selected === '' &&
+        bulkDel.boxes.join() === 'custom:Serif.ttf' &&
+        afterDel.join() === 'custom:Serif.ttf',
+      `${bulkDel.toast}; after reload: ${afterDel.join(', ')}`,
     );
   }
   return { checks, mov: movBytes, mp4: Buffer.from(mp4.b64, 'base64') };

@@ -3,10 +3,10 @@
 import { confirmHeavyOnPhone } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
 import {
-  addCustomFont,
+  addCustomFonts,
   BUILTIN_FONTS,
   customFontId,
-  deleteCustomFont,
+  deleteCustomFonts,
   fontArg,
   fontName,
   listCustomFonts,
@@ -774,14 +774,60 @@ export function mountPhase1(root: HTMLElement): void {
   const fontInput = el('input', {
     type: 'file',
     accept: '.ttf,.otf,.ttc,font/ttf,font/otf,font/collection',
+    multiple: '',
+    hidden: '',
+  });
+  // una carpeta entera (con subcarpetas): lo que no es fuente se ignora
+  const fontDirInput = el('input', {
+    type: 'file',
+    webkitdirectory: '',
+    'data-role': 'font-folder',
     hidden: '',
   });
   const fontUploadBtn = el(
     'button',
     { class: 'btn ghost small', type: 'button', onclick: () => fontInput.click() },
-    'Upload font…',
+    'Upload fonts…',
+  );
+  const fontDirBtn = el(
+    'button',
+    { class: 'btn ghost small', type: 'button', onclick: () => fontDirInput.click() },
+    'Upload folder…',
   );
   const fontRemoveBtn = el('button', { class: 'btn ghost small', type: 'button' }, 'Remove font');
+  // las subidas, con casillas para borrar varias de una vez
+  const fontManageList = el('div', { class: 'font-list' });
+  const fontManageAll = check('Select all');
+  const fontManageDel = el(
+    'button',
+    { class: 'btn ghost small', type: 'button', disabled: '' },
+    'Delete selected',
+  );
+  const fontManageSummary = el('summary', {}, 'Your fonts');
+  const fontManage = el(
+    'details',
+    { class: 'adv font-manage', hidden: '' },
+    fontManageSummary,
+    fontManageAll.label,
+    fontManageList,
+    el('div', { class: 'btn-row' }, fontManageDel),
+  );
+  const fontChecks = (): HTMLInputElement[] => [
+    ...fontManageList.querySelectorAll<HTMLInputElement>('input[type=checkbox]'),
+  ];
+  function syncFontManage(): void {
+    const boxes = fontChecks();
+    const n = boxes.filter((b) => b.checked).length;
+    fontManageDel.disabled = n === 0;
+    fontManageDel.textContent = n ? `Delete selected (${n})` : 'Delete selected';
+    fontManageAll.input.checked = n > 0 && n === boxes.length;
+    fontManageAll.input.indeterminate = n > 0 && n < boxes.length;
+  }
+  fontManageAll.input.addEventListener('change', () => {
+    for (const b of fontChecks()) b.checked = fontManageAll.input.checked;
+    syncFontManage();
+  });
+  fontManageList.addEventListener('change', syncFontManage);
   let fontSeq = 0;
   /** Lo último que se avisó que faltaba en la fuente: el aviso salta al
    *  cambiar, no en cada vista previa. */
@@ -800,6 +846,27 @@ export function mountPhase1(root: HTMLElement): void {
     setOptions(fontSel, opts);
     fontSel.value = s.label_font ?? '';
     fontRemoveBtn.hidden = !s.label_font?.startsWith('custom:');
+    // la lista de borrar conserva lo marcado de las que siguen
+    const marked = new Set(
+      fontChecks()
+        .filter((b) => b.checked)
+        .map((b) => b.value),
+    );
+    fontManageList.replaceChildren(
+      ...custom.map((n) => {
+        const c = check('', marked.has(customFontId(n)));
+        c.input.value = customFontId(n);
+        const span = c.label.querySelector('span');
+        if (span) {
+          span.textContent = n;
+          span.dataset.i18n = 'skip';
+        }
+        return c.label;
+      }),
+    );
+    fontManage.hidden = custom.length === 0;
+    fontManageSummary.textContent = `Your fonts (${custom.length})`;
+    syncFontManage();
   }
   fontSel.addEventListener('change', () => {
     s.label_font = fontSel.value;
@@ -807,32 +874,77 @@ export function mountPhase1(root: HTMLElement): void {
     persist();
     void refreshPreview();
   });
-  fontInput.addEventListener('change', async () => {
-    const file = fontInput.files?.[0];
-    fontInput.value = '';
-    if (!file) return;
-    fontUploadBtn.disabled = true;
+  async function uploadFonts(files: File[], btn: HTMLButtonElement): Promise<void> {
+    if (!files.length) return;
+    // el texto original en inglés (el traductor lo pasa al idioma de la página)
+    const label = btn === fontDirBtn ? 'Upload folder…' : 'Upload fonts…';
+    fontUploadBtn.disabled = fontDirBtn.disabled = true;
     try {
-      s.label_font = await addCustomFont(file);
+      const res = await addCustomFonts(files, (done, total) => {
+        if (total > 1) btn.textContent = `Adding ${done}/${total}…`;
+      });
+      // la primera que entró queda elegida, para ver el cambio en la hoja
+      if (res.added.length) s.label_font = res.added[0];
       await refreshFontList();
       persist();
       void refreshPreview();
-      toast(`Font “${file.name}” added. Labels and the sheet number now use it.`, 'ok');
-    } catch (e) {
-      toast(`Could not use that font: ${errMsg(e)}`, 'err');
+      if (res.added.length === 1 && !res.failed.length)
+        toast(
+          `Font “${fontName(res.added[0])}” added. Labels and the sheet number now use it.`,
+          'ok',
+        );
+      else if (res.added.length)
+        toast(
+          `${res.added.length} fonts added; “${fontName(res.added[0])}” is now in use. Pick another one in Typeface.`,
+          'ok',
+        );
+      // un aviso por motivo, con todos los archivos que lo comparten: una
+      // carpeta de WOFF no debe dar cincuenta avisos
+      const byReason = new Map<string, string[]>();
+      for (const f of res.failed)
+        byReason.set(f.reason, [...(byReason.get(f.reason) ?? []), f.name]);
+      for (const [reason, names] of byReason)
+        toast(`Could not use ${names.map((n) => `“${n}”`).join(', ')}: ${reason}`, 'err');
+      if (!res.added.length && !res.failed.length)
+        toast('There are no TTF or OTF files in what you chose.', 'warn');
     } finally {
-      fontUploadBtn.disabled = false;
+      btn.textContent = label;
+      fontUploadBtn.disabled = fontDirBtn.disabled = false;
     }
+  }
+  fontInput.addEventListener('change', () => {
+    const files = [...(fontInput.files ?? [])];
+    fontInput.value = '';
+    void uploadFonts(files, fontUploadBtn);
   });
-  fontRemoveBtn.addEventListener('click', async () => {
-    const id = s.label_font;
-    if (!id.startsWith('custom:')) return;
-    await deleteCustomFont(id);
-    s.label_font = '';
+  fontDirInput.addEventListener('change', () => {
+    const files = [...(fontDirInput.files ?? [])];
+    fontDirInput.value = '';
+    void uploadFonts(files, fontDirBtn);
+  });
+  async function dropFonts(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await deleteCustomFonts(ids);
+    if (ids.includes(s.label_font)) s.label_font = '';
     await refreshFontList();
     persist();
     void refreshPreview();
-    toast(`Font “${fontName(id)}” removed from this browser.`, 'ok');
+    toast(
+      ids.length === 1
+        ? `Font “${fontName(ids[0])}” removed from this browser.`
+        : `${ids.length} fonts removed from this browser.`,
+      'ok',
+    );
+  }
+  fontRemoveBtn.addEventListener('click', () => {
+    if (s.label_font.startsWith('custom:')) void dropFonts([s.label_font]);
+  });
+  fontManageDel.addEventListener('click', () => {
+    void dropFonts(
+      fontChecks()
+        .filter((b) => b.checked)
+        .map((b) => b.value),
+    );
   });
   binds.push(() => {
     void refreshFontList();
@@ -1242,7 +1354,7 @@ export function mountPhase1(root: HTMLElement): void {
       const fontBytesNow = await fontArg(fontId);
       if (fontId && !fontBytesNow)
         avisos.push(
-          `The font “${fontName(fontId)}” is not in this browser, so labels and the sheet number use DejaVu Sans. Upload it again with “Upload font…”.`,
+          `The font “${fontName(fontId)}” is not in this browser, so labels and the sheet number use DejaVu Sans. Upload it again with “Upload fonts…”.`,
         );
       // todas las etiquetas y números del proyecto, no sólo los de esta hoja
       let missing = '';
@@ -1579,9 +1691,18 @@ export function mountPhase1(root: HTMLElement): void {
     field(
       'Typeface',
       fontSel,
-      'For the frame labels and the sheet number. Upload your own TTF or OTF: it stays in this browser.',
+      'For the frame labels and the sheet number. Upload your own TTF or OTF, one by one or a whole folder: they stay in this browser.',
     ),
-    el('div', { class: 'btn-row' }, fontUploadBtn, fontRemoveBtn, fontInput),
+    el(
+      'div',
+      { class: 'btn-row' },
+      fontUploadBtn,
+      fontDirBtn,
+      fontRemoveBtn,
+      fontInput,
+      fontDirInput,
+    ),
+    fontManage,
 
     el('h3', {}, 'Sheet number'),
     el(
