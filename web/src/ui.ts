@@ -298,6 +298,23 @@ async function collectEntries(entries: (FileSystemEntry | null)[]): Promise<Coll
   return out;
 }
 
+/** Lo soltado en un `drop`, con las carpetas abiertas (recursivo, sin lo
+ *  oculto). Hay que llamarla dentro del manejador, sin await antes: las
+ *  entradas sólo valen mientras dura el evento. */
+export function droppedFiles(e: DragEvent): Promise<File[]> {
+  const items = e.dataTransfer?.items;
+  const entries: (FileSystemEntry | null)[] = [];
+  for (let i = 0; items && i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'file' && typeof it.webkitGetAsEntry === 'function')
+      entries.push(it.webkitGetAsEntry());
+  }
+  const plain = [...(e.dataTransfer?.files ?? [])];
+  if (entries.some((en) => en?.isDirectory))
+    return collectEntries(entries).then((c) => c.map((x) => x.file));
+  return Promise.resolve(plain);
+}
+
 export interface DropzoneOptions {
   label: string;
   sublabel?: string | string[];

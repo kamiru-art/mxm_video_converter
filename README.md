@@ -60,8 +60,12 @@ Between phase 1 and phase 2, you do the manual work:
 - You can add labels and a sheet number.
 - The labels and the sheet number can use another typeface: one of the
   four that come with the site (Archivo Black, IBM Plex Mono, Courier Prime,
-  PT Serif) or your own TTF or OTF file. An uploaded font stays in your
-  browser and is never sent anywhere. If the font lacks a character that a
+  PT Serif) or your own TTF or OTF files. "Upload fonts…" takes several
+  files at once, and also the ZIP a font comes in. You can also drop fonts,
+  ZIPs or whole folders on the Typeface field. Files that are not fonts are
+  skipped, and each font that cannot be used is named with the reason. Uploaded fonts stay in
+  your browser and are never sent anywhere. "Your fonts" lists them, with
+  boxes to delete several at once. If the font lacks a character that a
   label or the sheet number needs, a warning names each missing character,
   and the sheet draws those characters in DejaVu Sans.
 - You can select which frames and which sheets to print.

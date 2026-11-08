@@ -7,7 +7,7 @@
 | `rust-core/` | The image processing core. Rust, compiled to WebAssembly. No browser code. | `rust-core/Cargo.toml` |
 | `rust-core/src/` | 18 domain modules plus the WebAssembly boundary. | `rust-core/src/lib.rs` |
 | `rust-core/assets/` | `DejaVuSans.ttf`, embedded with `include_bytes!`, and its license notice; `test/` holds an OFL OTF (CFF outlines) that the tests upload as a custom font. | `rust-core/src/text.rs` |
-| `web/public/fonts/` | The optional label fonts (OFL), fetched only when chosen; uploaded fonts live in IndexedDB (`mxm-fonts`). | `web/src/fonts.ts` |
+| `web/public/fonts/` | The optional label fonts (OFL), fetched only when chosen; uploaded fonts live in IndexedDB (`mxm-fonts`). Fonts uploaded inside a ZIP are read by `web/src/unzip.ts`. | `web/src/fonts.ts` |
 | `rust-core/tests/` | The end-to-end integration test. | `rust-core/tests/pipeline.rs` |
 | `web/` | The web application. No framework. | `web/package.json` |
 | `web/src/` | The interface, the worker pool, the video extraction (`video.ts`, `avi.ts`, `frames.ts`, `opfs.ts`), the lossless export (`export.ts`, `pngmov.ts`, `player.ts`, `imageinfo.ts`), the compressed MP4 (`lossy.ts`), the service worker (`sw.ts`) and the import of data from the old address (`migrate.ts`). | `web/src/main.ts` |

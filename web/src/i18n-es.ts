@@ -201,9 +201,14 @@ export const EXACT: Record<string, string> = {
   'Gutter (mm)': 'Separación (mm)',
   'Font (pt)': 'Fuente (pt)',
   Typeface: 'Tipografía',
-  'For the frame labels and the sheet number. Upload your own TTF or OTF: it stays in this browser.':
-    'Para las etiquetas de los fotogramas y el número de hoja. Sube tu propia TTF u OTF: se queda en este navegador.',
-  'Upload font…': 'Subir fuente…',
+  'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.':
+    'Para las etiquetas de los fotogramas y el número de hoja. Sube tus TTF u OTF, o el ZIP en que vinieron, o suéltalos aquí (también una carpeta entera): se quedan en este navegador.',
+  'Upload fonts…': 'Subir fuentes…',
+  'Select all': 'Marcar todas',
+  'Delete selected': 'Borrar las marcadas',
+  'Your fonts': 'Tus fuentes',
+  'There are no TTF or OTF files in what you chose.':
+    'No hay archivos TTF ni OTF en lo que elegiste.',
   'Remove font': 'Quitar fuente',
   'DejaVu Sans (default)': 'DejaVu Sans (predeterminada)',
   'Size (pt)': 'Tamaño (pt)',
@@ -551,6 +556,19 @@ export const TEMPLATES: [string, string][] = [
     'Fuente “{0}” añadida. Las etiquetas y el número de hoja ya la usan.',
   ],
   ['Font “{0}” removed from this browser.', 'Fuente “{0}” quitada de este navegador.'],
+  ['{#0} fonts removed from this browser.', '{#0} fuentes quitadas de este navegador.'],
+  [
+    '{#0} fonts added; “{1}” is now in use. Pick another one in Typeface.',
+    '{#0} fuentes añadidas; ahora se usa “{1}”. Elige otra en Tipografía.',
+  ],
+  ['Could not use {0}: {1}', 'No se pudo usar {0}: {1}'],
+  ['Adding {#0}/{#1}…', 'Añadiendo {#0}/{#1}…'],
+  [
+    'It is compressed with method {#0}, which this page cannot open.',
+    'Está comprimido con el método {#0}, que esta página no sabe abrir.',
+  ],
+  ['Delete selected ({#0})', 'Borrar las marcadas ({#0})'],
+  ['Your fonts ({#0})', 'Tus fuentes ({#0})'],
   ['Could not use that font: {0}', 'No se pudo usar esa fuente: {0}'],
   [
     'The font “{0}” has no glyph for these characters, so they are drawn in DejaVu Sans: {1}',
@@ -565,8 +583,8 @@ export const TEMPLATES: [string, string][] = [
     '{0} pesa {#1} MB; las fuentes para etiquetas deben pesar menos de 30 MB.',
   ],
   [
-    'The font “{0}” is not in this browser, so labels and the sheet number use DejaVu Sans. Upload it again with “Upload font…”.',
-    'La fuente “{0}” no está en este navegador, así que las etiquetas y el número de hoja usan DejaVu Sans. Vuelve a subirla con “Subir fuente…”.',
+    'The font “{0}” is not in this browser, so labels and the sheet number use DejaVu Sans. Upload it again with “Upload fonts…”.',
+    'La fuente “{0}” no está en este navegador, así que las etiquetas y el número de hoja usan DejaVu Sans. Vuelve a subirla con “Subir fuentes…”.',
   ],
   // g1-shell
   ['WebGPU · {#0} cores', 'WebGPU · {#0} núcleos'],
