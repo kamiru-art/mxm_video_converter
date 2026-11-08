@@ -1472,6 +1472,9 @@ async function runFlow(
       buttonBack: boolean;
     }>(
       step(`${FONT_UI}
+      // tras recargar, los fotogramas de la pestaña ya no están: el ejemplo otra vez
+      ui.button(/example/).click();
+      await ui.until(() => ui.toasts.some((t) => /example frames ready/.test(t)), 60000, 'the example');
       const h0 = await ui.until(previewHash, 60000, 'the preview before the drop');
       const courier = new Uint8Array(await (await fetch('/fonts/CourierPrime-Regular.ttf')).arrayBuffer());
       const pack = Uint8Array.from(atob('${PACK_B64}'), (c) => c.charCodeAt(0));
