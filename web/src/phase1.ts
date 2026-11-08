@@ -765,7 +765,7 @@ export function mountPhase1(root: HTMLElement): void {
   });
 
   // ---------- fuente de las etiquetas y del número de hoja ----------
-  // Las de la web, más las que suba el usuario (TTF u OTF, guardadas en este
+  // Las de la web, más las que suba el usuario (TTF, OTF, WOFF o WOFF2, guardadas en este
   // navegador). Un ajuste que pide una fuente que aquí no está (otro
   // navegador, un preset ajeno) la deja elegida y avisa: la hoja sale en
   // DejaVu hasta que se vuelva a subir.
@@ -774,7 +774,8 @@ export function mountPhase1(root: HTMLElement): void {
   fontSel.setAttribute('aria-label', 'Typeface');
   const fontInput = el('input', {
     type: 'file',
-    accept: '.ttf,.otf,.ttc,.zip,font/ttf,font/otf,font/collection,application/zip',
+    accept:
+      '.ttf,.otf,.ttc,.woff,.woff2,.zip,font/ttf,font/otf,font/collection,font/woff,font/woff2,application/zip',
     multiple: '',
     hidden: '',
   });
@@ -887,14 +888,14 @@ export function mountPhase1(root: HTMLElement): void {
           'ok',
         );
       // un aviso por motivo, con todos los archivos que lo comparten: una
-      // carpeta de WOFF no debe dar cincuenta avisos
+      // carpeta de fuentes rotas no debe dar cincuenta avisos
       const byReason = new Map<string, string[]>();
       for (const f of res.failed)
         byReason.set(f.reason, [...(byReason.get(f.reason) ?? []), f.name]);
       for (const [reason, names] of byReason)
         toast(`Could not use ${names.map((n) => `“${n}”`).join(', ')}: ${reason}`, 'err');
       if (!res.added.length && !res.failed.length)
-        toast('There are no TTF or OTF files in what you chose.', 'warn');
+        toast('There are no fonts in what you chose.', 'warn');
     } finally {
       // el texto original en inglés (el traductor lo pasa al idioma de la página)
       btn.textContent = 'Upload fonts…';
@@ -910,11 +911,7 @@ export function mountPhase1(root: HTMLElement): void {
   const fontDrop = el(
     'div',
     { class: 'font-drop' },
-    field(
-      'Typeface',
-      fontSel,
-      'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.',
-    ),
+    field('Typeface', fontSel, 'Upload or drop your fonts or a ZIP. They stay in this browser.'),
     el('div', { class: 'btn-row' }, fontUploadBtn, fontRemoveBtn, fontInput),
     fontManage,
   );

@@ -60,8 +60,9 @@ Between phase 1 and phase 2, you do the manual work:
 - You can add labels and a sheet number.
 - The labels and the sheet number can use another typeface: one of the
   four that come with the site (Archivo Black, IBM Plex Mono, Courier Prime,
-  PT Serif) or your own TTF or OTF files. "Upload fonts…" takes several
-  files at once, and also the ZIP a font comes in. You can also drop fonts,
+  PT Serif) or your own fonts: TTF, OTF, or the WOFF and WOFF2 web fonts.
+  "Upload fonts…" takes several files at once, and also the ZIP a font
+  comes in. You can also drop fonts,
   ZIPs or whole folders on the Typeface field. Files that are not fonts are
   skipped, and each font that cannot be used is named with the reason. Uploaded fonts stay in
   your browser and are never sent anywhere. "Your fonts" lists them, with
