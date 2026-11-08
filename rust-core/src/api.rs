@@ -17,6 +17,7 @@ use crate::scanproc::{
     MAX_IMAGE_PIXELS,
 };
 use crate::sheet::{self, FrameInput, Settings};
+use crate::text;
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::*;
@@ -111,7 +112,23 @@ pub fn marker_capacity(settings_json: &str) -> Result<JsValue, JsValue> {
 
 /// Información de layout para la interfaz (páginas, celdas, avisos).
 #[wasm_bindgen]
-pub fn compute_layout(settings_json: &str, first_w: f64, first_h: f64) -> Result<String, JsValue> {
+pub fn compute_layout(
+    settings_json: &str,
+    first_w: f64,
+    first_h: f64,
+    font: &[u8],
+) -> Result<String, JsValue> {
+    text::with_font(font, || {
+        compute_layout_inner(settings_json, first_w, first_h)
+    })
+    .map_err(err)?
+}
+
+fn compute_layout_inner(
+    settings_json: &str,
+    first_w: f64,
+    first_h: f64,
+) -> Result<String, JsValue> {
     let s = parse_settings(settings_json)?;
     let l = sheet::build_layout(&s, (first_w, first_h)).map_err(err)?;
     let mut avisos = sheet::cyanotype_size_warnings(&s);
@@ -154,10 +171,41 @@ pub fn render_sheet(
     render: bool,
     finish: &str,
     response_json: &str,
+    font: &[u8],
+) -> Result<JsValue, JsValue> {
+    text::with_font(font, || {
+        render_sheet_inner(
+            settings_json,
+            first_w,
+            first_h,
+            meta_json,
+            pixels,
+            labels_json,
+            sheet_num,
+            render,
+            finish,
+            response_json,
+        )
+    })
+    .map_err(err)?
+}
+
+fn render_sheet_inner(
+    settings_json: &str,
+    first_w: f64,
+    first_h: f64,
+    meta_json: &str,
+    pixels: &[u8],
+    labels_json: &str,
+    sheet_num: f64,
+    render: bool,
+    finish: &str,
+    response_json: &str,
 ) -> Result<JsValue, JsValue> {
     let s = parse_settings(settings_json)?;
     let l = sheet::build_layout(&s, (first_w, first_h)).map_err(err)?;
     let frames = parse_frames(meta_json, pixels)?;
+    text::take_fallbacks();
     let labels: Vec<String> =
         serde_json::from_str(labels_json).map_err(|e| err(format!("Invalid labels: {e}")))?;
     let res = sheet::render_page(&s, &l, &frames, &labels, sheet_num as i64, render);
@@ -201,6 +249,11 @@ pub fn render_sheet(
         Reflect::set(&out, &"w".into(), &JsValue::from_f64(img.w as f64)).ok();
         Reflect::set(&out, &"h".into(), &JsValue::from_f64(img.h as f64)).ok();
     }
+    // lo que esta hoja dibujó en DejaVu por faltar en la fuente elegida
+    let fell: String = text::take_fallbacks().into_iter().collect();
+    if !fell.is_empty() {
+        Reflect::set(&out, &"missing".into(), &JsValue::from_str(&fell)).ok();
+    }
     let mut record = res.record.unwrap_or(Value::Null);
     if !record.is_null() {
         sheet::scale_record_bboxes(&s, &l, &mut record);
@@ -214,9 +267,49 @@ pub fn render_sheet(
     Ok(out.into())
 }
 
+/// Comprueba que unos bytes sean una fuente que sirva para las etiquetas
+/// (TTF u OTF con letras y cifras). Error con el motivo, para la interfaz.
+#[wasm_bindgen]
+pub fn check_font(bytes: &[u8]) -> Result<(), JsValue> {
+    text::parse_font(bytes).map(|_| ()).map_err(err)
+}
+
+/// Los caracteres de `text` que la fuente no tiene, juntos en una cadena
+/// (vacía si no falta ninguno). Para avisar antes de generar.
+#[wasm_bindgen]
+pub fn missing_glyphs(font: &[u8], text: &str) -> Result<String, JsValue> {
+    text::missing_chars(font, text)
+        .map(|v| v.into_iter().collect())
+        .map_err(err)
+}
+
 /// Ensambla el layout.json v2 completo.
 #[wasm_bindgen]
 pub fn assemble_layout(
+    settings_json: &str,
+    first_w: f64,
+    first_h: f64,
+    records_json: &str,
+    timeline_json: &str,
+    video_json: &str,
+    originales_dir: &str,
+    font: &[u8],
+) -> Result<String, JsValue> {
+    text::with_font(font, || {
+        assemble_layout_inner(
+            settings_json,
+            first_w,
+            first_h,
+            records_json,
+            timeline_json,
+            video_json,
+            originales_dir,
+        )
+    })
+    .map_err(err)?
+}
+
+fn assemble_layout_inner(
     settings_json: &str,
     first_w: f64,
     first_h: f64,

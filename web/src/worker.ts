@@ -92,7 +92,8 @@ function deepFrame(
 const handlers: Handlers = {
   version: () => core.version(),
   marker_capacity: (a) => core.marker_capacity(a.settings) as number | null,
-  compute_layout: (a) => core.compute_layout(a.settings, a.firstW, a.firstH),
+  compute_layout: (a) =>
+    core.compute_layout(a.settings, a.firstW, a.firstH, a.font ?? new Uint8Array(0)),
   render_sheet: (a) => {
     const r = core.render_sheet(
       a.settings,
@@ -105,6 +106,7 @@ const handlers: Handlers = {
       a.render,
       a.finish ?? 'none',
       a.response ?? 'null',
+      a.font ?? new Uint8Array(0),
     ) as RenderSheetOutput;
     return { value: r, transfer: r.png ? [r.png.buffer] : [] };
   },
@@ -117,7 +119,13 @@ const handlers: Handlers = {
       a.timeline,
       a.video,
       a.originalesDir ?? '',
+      a.font ?? new Uint8Array(0),
     ),
+  missing_glyphs: (a) => core.missing_glyphs(a.font, a.text),
+  check_font: (a) => {
+    core.check_font(a.bytes);
+    return undefined;
+  },
   content_histogram: (a) => core.content_histogram(a.meta, a.pixels),
   effective_curve: (a) =>
     core.effective_curve(a.lut ?? 'null', a.strength ?? 100, a.adapt ?? 0, a.hist ?? 'null'),

@@ -4,6 +4,7 @@
 
 import { deviceRamGb } from './device.ts';
 import { CancelledError, throwIfCancelled } from './errors.ts';
+import { fontArg, missingGlyphsWarning } from './fonts.ts';
 import { openOutput } from './opfs.ts';
 import { poolSize, recycleIdle, run, run0 } from './pool.ts';
 import type { RgbaImage, VideoRef } from './project.ts';
@@ -366,8 +367,11 @@ async function generateSheetsInner({
   // la geometría ANTES del PDF: si el aviso dice que no, el worker 0 no se
   // queda con un PDF empezado
   const coreSettings = settingsForCore(s);
+  // la misma fuente para medir, dibujar y armar el layout; una que este
+  // navegador no tiene sale en DejaVu (la interfaz ya lo avisa)
+  const font = await fontArg(s.label_font);
   const geometry = JSON.parse(
-    await run('compute_layout', { settings: coreSettings, firstW, firstH }),
+    await run('compute_layout', { settings: coreSettings, firstW, firstH, font }),
   ) as LayoutInfo;
   // solo cuentan las hojas que se van a renderizar: un fotograma enorme en
   // una hoja no seleccionada no pesa en esta generación
@@ -400,6 +404,8 @@ async function generateSheetsInner({
     work: Promise<{ res: RenderSheetOutput; tif: Bytes | null }>;
   }
   const inflight: Pending[] = [];
+  /** Lo que alguna hoja dibujó en DejaVu por faltar en la fuente. */
+  const fellBack = new Set<string>();
 
   /** Recoge la hoja más antigua: registro, página del PDF, TIFF, PNG. El
    *  PDF lleva estado en el worker 0, así que las páginas entran en orden. */
@@ -410,6 +416,7 @@ async function generateSheetsInner({
     const pend = inflight.shift();
     if (!pend) return;
     const { res, tif } = await pend.work;
+    if (pend.selected) for (const c of res.missing ?? '') fellBack.add(c);
     const record: unknown = JSON.parse(res.record);
     if (record && typeof record === 'object') {
       const rec = record as Record<string, unknown>;
@@ -484,6 +491,7 @@ async function generateSheetsInner({
           sheetNum: pnum,
           render: selected,
           finish: 'final',
+          font,
         },
         [pixels.buffer],
       ).then(async (res) => ({
@@ -524,6 +532,7 @@ async function generateSheetsInner({
       timeline: JSON.stringify(timeline),
       video: JSON.stringify(videoMeta),
       originalesDir,
+      font,
     });
     await emit(`${safeName}_layout.json`, new TextEncoder().encode(layoutJson));
   }
@@ -548,7 +557,10 @@ async function generateSheetsInner({
     zip,
     sheetImages,
     layoutJson,
-    avisos: layoutInfo.avisos ?? [],
+    avisos: [
+      ...(layoutInfo.avisos ?? []),
+      ...(fellBack.size ? [missingGlyphsWarning(s.label_font ?? '', [...fellBack].join(''))] : []),
+    ],
     numPages,
     layoutInfo,
   };
