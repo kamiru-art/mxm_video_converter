@@ -4,7 +4,7 @@
 // porque el layout se mide con la fuente con la que luego se dibuja.
 //
 // Dos clases: las de la web (archivos en /fonts/, se piden al elegirlas) y
-// las que sube el usuario (TTF u OTF), guardadas en IndexedDB para que
+// las que sube el usuario (TTF, OTF, WOFF o WOFF2), guardadas en IndexedDB para que
 // sigan ahí al volver. El ajuste guarda sólo el id: "" (DejaVu),
 // "builtin:<archivo>" o "custom:<nombre>".
 
@@ -122,7 +122,7 @@ function sizeMessage(name: string, size: number): string {
 
 /**
  * Comprueba un archivo con el núcleo y lo guarda. Devuelve el id. Lanza con
- * el motivo si no es una fuente que sirva (WOFF, sin letras, cortado…).
+ * el motivo si no es una fuente que sirva (sin letras, cortada…).
  */
 export async function addCustomFont(file: File): Promise<string> {
   if (file.size > MAX_FONT_BYTES) throw new Error(sizeMessage(file.name, file.size));
@@ -146,15 +146,15 @@ export async function addCustomFont(file: File): Promise<string> {
 
 /** Lo que se hace con un archivo al subir en bulk, por su nombre (o su
  *  ruta dentro de un ZIP o de una carpeta). */
-export function fontFileKind(path: string): 'font' | 'web' | 'zip' | 'other' {
+export function fontFileKind(path: string): 'font' | 'zip' | 'other' {
   // lo que macOS mete en los ZIP (__MACOSX/) y deja en discos externos
   // («._Fuente.ttf») no son fuentes, aunque lo parezca su extensión
   if (/(^|\/)__MACOSX\//.test(path)) return 'other';
   const base = path.split('/').pop() ?? path;
   if (base.startsWith('.')) return 'other';
   const ext = base.toLowerCase().split('.').pop() ?? '';
-  if (ext === 'ttf' || ext === 'otf' || ext === 'ttc') return 'font';
-  if (ext === 'woff' || ext === 'woff2') return 'web';
+  // las web (WOFF, WOFF2) las descomprime el núcleo
+  if (['ttf', 'otf', 'ttc', 'woff', 'woff2'].includes(ext)) return 'font';
   if (ext === 'zip') return 'zip';
   return 'other';
 }
@@ -168,15 +168,11 @@ export interface BulkResult {
   ignored: number;
 }
 
-const WOFF_REASON =
-  'This is a WOFF web font, which cannot be drawn on the sheets. Use the TTF or OTF file of the same font.';
-
 /**
  * Sube varios archivos: fuentes sueltas, ZIP con fuentes dentro (a cualquier
  * profundidad) o lo que salga de una carpeta. Cada fuente se comprueba por
- * separado: una rota no frena a las demás. Las WOFF se cuentan como
- * fallidas, con el motivo, porque el usuario las eligió pensando que eran
- * fuentes; lo demás se ignora en silencio.
+ * separado: una rota no frena a las demás, y se cuenta como fallida con el
+ * motivo. Lo que no es fuente (readmes, imágenes) se ignora en silencio.
  */
 export async function addCustomFonts(
   files: Iterable<File>,
@@ -187,7 +183,6 @@ export async function addCustomFonts(
   const sort = (path: string, name: string, get: () => Promise<File>): void => {
     const kind = fontFileKind(path);
     if (kind === 'font') todo.push({ name, get });
-    else if (kind === 'web') out.failed.push({ name, reason: WOFF_REASON });
     else out.ignored++;
   };
   for (const f of files) {

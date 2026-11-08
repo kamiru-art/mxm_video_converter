@@ -268,7 +268,7 @@ fn render_sheet_inner(
 }
 
 /// Comprueba que unos bytes sean una fuente que sirva para las etiquetas
-/// (TTF u OTF con letras y cifras). Error con el motivo, para la interfaz.
+/// (TTF, OTF, WOFF o WOFF2 con letras y cifras). Error con el motivo, para la interfaz.
 #[wasm_bindgen]
 pub fn check_font(bytes: &[u8]) -> Result<(), JsValue> {
     text::parse_font(bytes).map(|_| ()).map_err(err)

@@ -201,19 +201,18 @@ export const EXACT: Record<string, string> = {
   'Gutter (mm)': 'Separación (mm)',
   'Font (pt)': 'Fuente (pt)',
   Typeface: 'Tipografía',
-  'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.':
-    'Para las etiquetas de los fotogramas y el número de hoja. Sube tus TTF u OTF, o el ZIP en que vinieron, o suéltalos aquí (también una carpeta entera): se quedan en este navegador.',
+  'Upload or drop your fonts or a ZIP. They stay in this browser.':
+    'Sube o suelta tus fuentes o un ZIP. Se quedan en este navegador.',
   'Upload fonts…': 'Subir fuentes…',
   'Select all': 'Marcar todas',
   'Delete selected': 'Borrar las marcadas',
   'Your fonts': 'Tus fuentes',
-  'There are no TTF or OTF files in what you chose.':
-    'No hay archivos TTF ni OTF en lo que elegiste.',
+  'There are no fonts in what you chose.': 'No hay fuentes en lo que elegiste.',
+  'This web font (WOFF) is damaged and cannot be read.':
+    'Esta fuente web (WOFF) está dañada y no se puede leer.',
   'Remove font': 'Quitar fuente',
   'DejaVu Sans (default)': 'DejaVu Sans (predeterminada)',
   'Size (pt)': 'Tamaño (pt)',
-  'This is a WOFF web font, which cannot be drawn on the sheets. Use the TTF or OTF file of the same font.':
-    'Es una fuente web WOFF, que no se puede dibujar en las hojas. Usa el archivo TTF u OTF de la misma fuente.',
   'This font has no letters or digits, so it cannot write labels.':
     'Esta fuente no tiene letras ni cifras, así que no puede escribir etiquetas.',
   'Sheet number': 'Número de hoja',
@@ -575,8 +574,12 @@ export const TEMPLATES: [string, string][] = [
     'La fuente “{0}” no tiene estos caracteres, así que salen en DejaVu Sans: {1}',
   ],
   [
-    'This file is not a font that can be read (TTF or OTF expected): {0}',
-    'Este archivo no es una fuente que se pueda leer (se espera TTF u OTF): {0}',
+    'This file is not a font that can be read: {0}',
+    'Este archivo no es una fuente que se pueda leer: {0}',
+  ],
+  [
+    'This web font says it holds {#0} MB once unpacked; fonts for labels must be under {#1} MB.',
+    'Esta fuente web dice que ocupa {#0} MB descomprimida; las fuentes para etiquetas deben pesar menos de {#1} MB.',
   ],
   [
     '{0} is {#1} MB; fonts for labels must be under 30 MB.',
