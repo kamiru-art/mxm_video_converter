@@ -210,7 +210,12 @@ async function puppeteerDriver(kind: 'chrome' | 'zen', viewport?: Viewport): Pro
       pageErrors,
       screenshot: async () => Buffer.from(await page.screenshot({ type: 'png' })),
       async open(url) {
+        // ir a la misma página con otro «#» no la recarga en Chrome; Safari
+        // sí. Para que «después de recargar» signifique lo mismo en los dos,
+        // se recarga siempre
+        const same = page.url().split('#')[0] === url.split('#')[0];
         await page.goto(url);
+        if (same) await page.reload();
       },
       title: () => page.title(),
       run: <T,>(body: string) => page.evaluate(`(async () => { ${body} })()`) as Promise<T>,
@@ -274,15 +279,19 @@ async function safariDriver(viewport?: Viewport): Promise<Driver> {
         on(async () => Buffer.from(String(await call('GET', `${s}/screenshot`)), 'base64')),
       open: (url) => on(async () => void (await call('POST', `${s}/url`, { url }))),
       title: () => on(async () => String(await call('GET', `${s}/title`))),
+      // un error dentro del paso vuelve como {__error}: se relanza, como en
+      // puppeteer, para que el informe diga qué falló y no un `undefined`
       run: <T,>(body: string) =>
-        on(
-          async () =>
-            (await call('POST', `${s}/execute/async`, {
-              script: `const done = arguments[arguments.length - 1];
+        on(async () => {
+          const v = (await call('POST', `${s}/execute/async`, {
+            script: `const done = arguments[arguments.length - 1];
           (async () => { ${body} })().then((v) => done(v), (e) => done({ __error: String(e) }));`,
-              args: [],
-            })) as T,
-        ),
+            args: [],
+          })) as { __error?: string } | null;
+          if (v && typeof v === 'object' && typeof v.__error === 'string')
+            throw new Error(v.__error);
+          return v as T;
+        }),
       async newTab() {
         const w = (await on(() => call('POST', `${s}/window/new`, { type: 'tab' }))) as {
           handle: string;
