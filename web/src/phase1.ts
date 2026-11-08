@@ -2,6 +2,16 @@
 
 import { confirmHeavyOnPhone } from './device.ts';
 import { errMsg, isCancelled } from './errors.ts';
+import {
+  addCustomFont,
+  BUILTIN_FONTS,
+  customFontId,
+  deleteCustomFont,
+  fontArg,
+  fontName,
+  listCustomFonts,
+  missingGlyphsWarning,
+} from './fonts.ts';
 import type { GenFrame, PackItem } from './gen.ts';
 import { generateSheets, packImageData, resolveCyanCurve, settingsForCore } from './gen.ts';
 import { imageInfo } from './imageinfo.ts';
@@ -753,6 +763,82 @@ export function mountPhase1(root: HTMLElement): void {
       );
   });
 
+  // ---------- fuente de las etiquetas y del número de hoja ----------
+  // Las de la web, más las que suba el usuario (TTF u OTF, guardadas en este
+  // navegador). Un ajuste que pide una fuente que aquí no está (otro
+  // navegador, un preset ajeno) la deja elegida y avisa: la hoja sale en
+  // DejaVu hasta que se vuelva a subir.
+  const fontSel = select([], s.label_font);
+  fontSel.dataset.i18n = 'names';
+  fontSel.setAttribute('aria-label', 'Typeface');
+  const fontInput = el('input', {
+    type: 'file',
+    accept: '.ttf,.otf,.ttc,font/ttf,font/otf,font/collection',
+    hidden: '',
+  });
+  const fontUploadBtn = el(
+    'button',
+    { class: 'btn ghost small', type: 'button', onclick: () => fontInput.click() },
+    'Upload font…',
+  );
+  const fontRemoveBtn = el('button', { class: 'btn ghost small', type: 'button' }, 'Remove font');
+  let fontSeq = 0;
+  /** Lo último que se avisó que faltaba en la fuente: el aviso salta al
+   *  cambiar, no en cada vista previa. */
+  let lastMissKey = '';
+  async function refreshFontList(): Promise<void> {
+    const seq = ++fontSeq;
+    const custom = await listCustomFonts();
+    if (seq !== fontSeq) return;
+    const opts: SelectOption[] = [
+      ['', 'DejaVu Sans (default)'],
+      ...BUILTIN_FONTS.map((f): SelectOption => [f.id, f.name]),
+      ...custom.map((n): SelectOption => [customFontId(n), n]),
+    ];
+    if (s.label_font && !opts.some((o) => o[0] === s.label_font))
+      opts.push([s.label_font, fontName(s.label_font)]);
+    setOptions(fontSel, opts);
+    fontSel.value = s.label_font ?? '';
+    fontRemoveBtn.hidden = !s.label_font?.startsWith('custom:');
+  }
+  fontSel.addEventListener('change', () => {
+    s.label_font = fontSel.value;
+    fontRemoveBtn.hidden = !s.label_font.startsWith('custom:');
+    persist();
+    void refreshPreview();
+  });
+  fontInput.addEventListener('change', async () => {
+    const file = fontInput.files?.[0];
+    fontInput.value = '';
+    if (!file) return;
+    fontUploadBtn.disabled = true;
+    try {
+      s.label_font = await addCustomFont(file);
+      await refreshFontList();
+      persist();
+      void refreshPreview();
+      toast(`Font “${file.name}” added. Labels and the sheet number now use it.`, 'ok');
+    } catch (e) {
+      toast(`Could not use that font: ${errMsg(e)}`, 'err');
+    } finally {
+      fontUploadBtn.disabled = false;
+    }
+  });
+  fontRemoveBtn.addEventListener('click', async () => {
+    const id = s.label_font;
+    if (!id.startsWith('custom:')) return;
+    await deleteCustomFont(id);
+    s.label_font = '';
+    await refreshFontList();
+    persist();
+    void refreshPreview();
+    toast(`Font “${fontName(id)}” removed from this browser.`, 'ok');
+  });
+  binds.push(() => {
+    void refreshFontList();
+  });
+  void refreshFontList();
+
   // ---------- presets ----------
   const presetOptions = (): SelectOption[] => [
     ['', '(choose a preset…)'],
@@ -872,6 +958,7 @@ export function mountPhase1(root: HTMLElement): void {
           settings: settingsForCore(s),
           firstW: first.w,
           firstH: first.h,
+          font: await fontArg(s.label_font),
         }),
       ) as LayoutInfo;
       if (seq !== sizeSeq) return; // llegó otra actualización mientras tanto
@@ -998,6 +1085,8 @@ export function mountPhase1(root: HTMLElement): void {
       project.layoutJson = out.layoutJson;
       project.sheetImages = out.sheetImages;
       warnBox.replaceChildren(...out.avisos.map((a) => el('li', {}, a)));
+      // lo que de verdad salió en DejaVu (la «…» de un recorte incluida)
+      for (const a of out.avisos) if (/has no glyph for/.test(a)) toast(a, 'warn', true);
       if (!out.zip) throw new Error('The ZIP was not produced.');
       const onDisk = sink.where === 'disk';
       sink = null; // terminado: nada que descartar
@@ -1128,6 +1217,7 @@ export function mountPhase1(root: HTMLElement): void {
           render: true,
           finish: ph1.previewSimulate ? 'simulate' : 'final',
           response: JSON.stringify(ph1.cyanResponse ?? null),
+          font: await fontArg(settingsPrev.label_font),
         },
         [pixels.buffer],
       );
@@ -1141,12 +1231,35 @@ export function mountPhase1(root: HTMLElement): void {
           settings: settingsForCore(settingsPrev),
           firstW: first.w,
           firstH: first.h,
+          font: await fontArg(settingsPrev.label_font),
         }),
       ) as LayoutInfo;
       pageLabel.textContent = `sheet ${ph1.previewPage + 1} / ${plan.numPages}`;
       previewInfo.textContent = `${info.landscape ? 'landscape' : 'portrait'} · grid ${info.cols}×${info.rows}${info.grid_swapped ? ' (swapped by best fit)' : ''} · ${plan.printed.length} frames on ${plan.numPages} sheet(s)`;
       void refreshSizeEstimate();
       const avisos = [...(info.avisos ?? [])];
+      const fontId = settingsPrev.label_font ?? '';
+      const fontBytesNow = await fontArg(fontId);
+      if (fontId && !fontBytesNow)
+        avisos.push(
+          `The font “${fontName(fontId)}” is not in this browser, so labels and the sheet number use DejaVu Sans. Upload it again with “Upload font…”.`,
+        );
+      // todas las etiquetas y números del proyecto, no sólo los de esta hoja
+      let missing = '';
+      if (fontBytesNow) {
+        const pnums =
+          plan.pageNumbers ?? Array.from({ length: plan.numPages }, (_, k) => s.page_num_start + k);
+        const text = [
+          ...(s.labels_on ? plan.printed.map((p) => p.label) : []),
+          ...(s.page_num_on ? pnums.map((n) => `${s.page_num_prefix}${n}`) : []),
+        ].join(' ');
+        missing = await run('missing_glyphs', { font: fontBytesNow, text });
+        if (missing) avisos.push(missingGlyphsWarning(fontId, missing));
+      }
+      // y salta, una vez por cada cambio en lo que falta
+      const missKey = missing ? `${fontId}\u0000${missing}` : '';
+      if (missKey && missKey !== lastMissKey) toast(missingGlyphsWarning(fontId, missing), 'warn');
+      lastMissKey = missKey;
       if (info.marker_capacity && plan.numPages > info.marker_capacity) {
         avisos.push(
           `${plan.numPages} sheets exceed the ${info.marker_capacity} that the markers can tell apart. Turn on "Add a QR code per frame".`,
@@ -1463,6 +1576,12 @@ export function mountPhase1(root: HTMLElement): void {
       field('Gutter (mm)', bindNum('gutter_mm', numberInput(5, { min: 0 }))),
       field('Font (pt)', bindNum('font_size_pt', numberInput(9, { min: 4 }))),
     ),
+    field(
+      'Typeface',
+      fontSel,
+      'For the frame labels and the sheet number. Upload your own TTF or OTF: it stays in this browser.',
+    ),
+    el('div', { class: 'btn-row' }, fontUploadBtn, fontRemoveBtn, fontInput),
 
     el('h3', {}, 'Sheet number'),
     el(
@@ -1471,6 +1590,7 @@ export function mountPhase1(root: HTMLElement): void {
       field('Position', bindSel('page_num_corner', select(CORNERS, s.page_num_corner))),
       field('Prefix', bindText('page_num_prefix', el('input', { type: 'text' }))),
       field('From', bindNum('page_num_start', numberInput(1, { min: 0 }), { integer: true })),
+      field('Size (pt)', bindNum('page_num_size_pt', numberInput(11, { min: 4 }))),
     ),
     field(
       'Sheet numbering',

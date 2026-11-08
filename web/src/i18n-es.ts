@@ -200,6 +200,17 @@ export const EXACT: Record<string, string> = {
   'Margin (mm)': 'Margen (mm)',
   'Gutter (mm)': 'Separación (mm)',
   'Font (pt)': 'Fuente (pt)',
+  Typeface: 'Tipografía',
+  'For the frame labels and the sheet number. Upload your own TTF or OTF: it stays in this browser.':
+    'Para las etiquetas de los fotogramas y el número de hoja. Sube tu propia TTF u OTF: se queda en este navegador.',
+  'Upload font…': 'Subir fuente…',
+  'Remove font': 'Quitar fuente',
+  'DejaVu Sans (default)': 'DejaVu Sans (predeterminada)',
+  'Size (pt)': 'Tamaño (pt)',
+  'This is a WOFF web font, which cannot be drawn on the sheets. Use the TTF or OTF file of the same font.':
+    'Es una fuente web WOFF, que no se puede dibujar en las hojas. Usa el archivo TTF u OTF de la misma fuente.',
+  'This font has no letters or digits, so it cannot write labels.':
+    'Esta fuente no tiene letras ni cifras, así que no puede escribir etiquetas.',
   'Sheet number': 'Número de hoja',
   Position: 'Posición',
   Prefix: 'Prefijo',
@@ -535,6 +546,28 @@ export const EXACT: Record<string, string> = {
 };
 
 export const TEMPLATES: [string, string][] = [
+  [
+    'Font “{0}” added. Labels and the sheet number now use it.',
+    'Fuente “{0}” añadida. Las etiquetas y el número de hoja ya la usan.',
+  ],
+  ['Font “{0}” removed from this browser.', 'Fuente “{0}” quitada de este navegador.'],
+  ['Could not use that font: {0}', 'No se pudo usar esa fuente: {0}'],
+  [
+    'The font “{0}” has no glyph for these characters, so they are drawn in DejaVu Sans: {1}',
+    'La fuente “{0}” no tiene estos caracteres, así que salen en DejaVu Sans: {1}',
+  ],
+  [
+    'This file is not a font that can be read (TTF or OTF expected): {0}',
+    'Este archivo no es una fuente que se pueda leer (se espera TTF u OTF): {0}',
+  ],
+  [
+    '{0} is {#1} MB; fonts for labels must be under 30 MB.',
+    '{0} pesa {#1} MB; las fuentes para etiquetas deben pesar menos de 30 MB.',
+  ],
+  [
+    'The font “{0}” is not in this browser, so labels and the sheet number use DejaVu Sans. Upload it again with “Upload font…”.',
+    'La fuente “{0}” no está en este navegador, así que las etiquetas y el número de hoja usan DejaVu Sans. Vuelve a subirla con “Subir fuente…”.',
+  ],
   // g1-shell
   ['WebGPU · {#0} cores', 'WebGPU · {#0} núcleos'],
   ['CPU (WebAssembly) · {#0} cores', 'CPU (WebAssembly) · {#0} núcleos'],

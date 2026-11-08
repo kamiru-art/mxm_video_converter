@@ -59,7 +59,7 @@ export interface Commands {
   version: { args: Record<string, never>; result: string };
   marker_capacity: { args: { settings: string }; result: number | null };
   compute_layout: {
-    args: { settings: string; firstW: number; firstH: number };
+    args: { settings: string; firstW: number; firstH: number; font?: Bytes };
     result: string;
   };
   render_sheet: {
@@ -74,6 +74,7 @@ export interface Commands {
       render: boolean;
       finish?: string;
       response?: string;
+      font?: Bytes;
     };
     result: RenderSheetOutput;
   };
@@ -86,9 +87,14 @@ export interface Commands {
       timeline: string;
       video: string;
       originalesDir?: string;
+      font?: Bytes;
     };
     result: string;
   };
+  /** Lanza con el motivo si los bytes no son una fuente para etiquetas. */
+  check_font: { args: { bytes: Bytes }; result: undefined };
+  /** Los caracteres de `text` que la fuente no tiene, juntos. */
+  missing_glyphs: { args: { font: Bytes; text: string }; result: string };
   content_histogram: { args: { meta: string; pixels: Bytes }; result: string };
   effective_curve: {
     args: { lut?: string; strength?: number; adapt?: number; hist?: string };

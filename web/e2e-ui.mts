@@ -32,6 +32,14 @@ import { browserFromArgs, launch, serveDist } from './e2e-browsers.mts';
 const DIST = fileURLToPath(new URL('./dist', import.meta.url));
 const ARTIFACT_DIR = fileURLToPath(new URL('../artifacts/e2e/', import.meta.url));
 const which = browserFromArgs();
+// Un OTF con contornos CFF (OFL), como vienen muchas fuentes comerciales:
+// se sube por la interfaz como la subiría alguien con su fuente de marca.
+const OTF_B64 = (
+  await readFile(
+    fileURLToPath(new URL('../rust-core/assets/test/SourceSans3-Bold.otf', import.meta.url)),
+  )
+).toString('base64');
+const OTF_NAME = 'SourceSans3-Bold.otf';
 const VIEWPORTS: Record<string, Viewport> = {
   desktop: { width: 1440, height: 900 },
   phone: { width: 390, height: 844, mobile: true },
@@ -77,6 +85,28 @@ const INSTRUMENT = `
     },
   };
   return true;
+`;
+
+/** Lo de la fuente, en la página: el desplegable, el input oculto donde se
+ *  “suelta” un archivo, y el SHA-256 de la vista previa de la hoja. */
+const FONT_UI = `
+  const view = document.getElementById('view-sheets');
+  const fontSel = view.querySelector('select[aria-label="Typeface"]');
+  const fontInput = view.querySelector('input[type=file][accept*=".otf"]');
+  const putFont = (file) => {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fontInput.files = dt.files;
+    fontInput.dispatchEvent(new Event('change'));
+  };
+  const previewHash = async () => {
+    const img = view.querySelector('img[alt="Sheet preview"]');
+    if (!img?.src) return '';
+    const buf = await (await fetch(img.src)).arrayBuffer();
+    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+  const warnings = () => [...view.querySelectorAll('.warnlist li')].map((l) => l.textContent);
 `;
 
 /** Un paso: el cuerpo corre en la página, con `ui` a mano. */
@@ -282,12 +312,83 @@ async function runFlow(
   check('window', true, `${width} px wide`);
   await screen('sheets');
 
-  // ① el ejemplo y sus hojas
-  const sheets = await driver.run<string>(
+  // ① el ejemplo, con las etiquetas y el número de hoja en una fuente subida
+  await driver.run(
     step(`
     ui.button(/example/).click();
     await ui.until(() => ui.toasts.some((t) => /example frames ready/.test(t)), 60000, 'the example');
+    return true;`),
+  );
+  const font = await driver.run<{
+    woffRefused: boolean;
+    woffKeptDefault: boolean;
+    added: boolean;
+    selected: string;
+    previewChanged: boolean;
+    cleanWarnings: boolean;
+    missingToast: string;
+    missingListed: string;
+    previewChangedAgain: boolean;
+  }>(
+    step(`${FONT_UI}
+    const h0 = await ui.until(previewHash, 60000, 'the first preview');
+    // un WOFF (lo que da una web de fuentes) se rechaza diciendo por qué
+    putFont(new File([new Uint8Array([0x77, 0x4f, 0x46, 0x46, 0, 1, 0, 0, 1, 2, 3, 4])], 'brand.woff'));
+    await ui.until(() => ui.toasts.some((t) => /Could not use that font.*WOFF/.test(t)), 15000, 'the WOFF refusal');
+    const woffKeptDefault = fontSel.value === '';
+    // el OTF de verdad
+    const otf = Uint8Array.from(atob('${OTF_B64}'), (c) => c.charCodeAt(0));
+    putFont(new File([otf], '${OTF_NAME}', { type: 'font/otf' }));
+    await ui.until(() => ui.toasts.some((t) => /Font “${OTF_NAME}” added/.test(t)), 15000, 'the font added');
+    const h1 = await ui.until(async () => { const h = await previewHash(); return h && h !== h0 ? h : null; }, 30000, 'the preview in the new font');
+    const cleanWarnings = !warnings().some((w) => /has no glyph/.test(w));
+    // un prefijo con dos signos que la fuente no tiene: el aviso salta y
+    // dice cuáles; la ñ sí la tiene, así que no puede aparecer
+    const prefix = [...view.querySelectorAll('label.field')].find((l) => l.firstChild.textContent === 'Prefix').querySelector('input');
+    prefix.value = '✂ Hoja ☂ ñ ';
+    prefix.dispatchEvent(new Event('change'));
+    const missingToast = await ui.until(() => ui.toasts.find((t) => /warn/.test(t) && /has no glyph/.test(t)), 30000, 'the missing-glyph toast');
+    const missingListed = await ui.until(() => warnings().find((w) => /has no glyph/.test(w)), 30000, 'the missing-glyph warning');
+    const h2 = await ui.until(async () => { const h = await previewHash(); return h && h !== h1 ? h : null; }, 30000, 'the preview with the prefix');
+    return {
+      woffRefused: true,
+      woffKeptDefault,
+      added: true,
+      selected: fontSel.value,
+      previewChanged: h1 !== h0,
+      cleanWarnings,
+      missingToast,
+      missingListed,
+      previewChangedAgain: !!h2,
+    };`),
+  );
+  const listsBoth = (t: string): boolean =>
+    t.includes('“✂” “☂”') && !t.includes('“ñ”') && t.includes(OTF_NAME);
+  check(
+    'a WOFF is refused and the default font stays',
+    font.woffRefused && font.woffKeptDefault,
+    'refused with the reason; DejaVu still chosen',
+  );
+  check(
+    'an uploaded CFF OTF is chosen and redraws the preview',
+    font.added &&
+      font.selected === `custom:${OTF_NAME}` &&
+      font.previewChanged &&
+      font.cleanWarnings,
+    `${font.selected}; preview changed: ${font.previewChanged}`,
+  );
+  check(
+    'missing characters pop a warning that names them',
+    listsBoth(font.missingToast) && listsBoth(font.missingListed) && font.previewChangedAgain,
+    font.missingListed,
+  );
+  await shot('sheets-font');
+
+  const sheets = await driver.run<string>(
+    step(`
+    const before = ui.toasts.filter((t) => /has no glyph/.test(t)).length;
     ui.button(/Generate sheets/).click();
+    await ui.until(() => ui.toasts.filter((t) => /warn/.test(t) && /has no glyph/.test(t)).length > before, 180000, 'the warning after generating');
     const zip = await ui.until(() => ui.downloads.find((d) => /\\.zip$/.test(d.name)), 180000, 'the sheets ZIP');
     return zip.name + ' ' + zip.blob.size + ' bytes';`),
   );
@@ -663,6 +764,12 @@ async function runFlow(
       .find(([n]) => n.endsWith('layout.json'))?.[1]
       .toString('utf8') ?? '{}',
   ) as { timeline?: { pos: number; etiqueta: string; rep: string }[]; video?: object };
+  const savedFont = (sheetLayout as { ajustes?: { label_font?: string } }).ajustes?.label_font;
+  check(
+    "the sheets' layout.json remembers the font",
+    savedFont === `custom:${OTF_NAME}`,
+    String(savedFont),
+  );
   const drawn = [...(sheetLayout.timeline ?? [])].sort((a, b) => a.pos - b.pos);
   if (drawn.length !== 6)
     throw new Error(`the sheets' layout.json has ${drawn.length} timeline positions, not 6`);
@@ -1264,6 +1371,41 @@ async function runFlow(
 
   await screen('calibration');
   await screen('help');
+
+  // la fuente subida sigue ahí al volver (IndexedDB), y quitarla la borra
+  if (tabs) {
+    await openApp(driver, port, 'sheets');
+    const kept = await driver.run<{ value: string; removeShown: boolean }>(
+      step(`${FONT_UI}
+      await ui.until(() => fontSel.value, 15000, 'the font list');
+      return { value: fontSel.value, removeShown: !ui.button(/Remove font/)?.hidden };`),
+    );
+    check(
+      'the uploaded font survives a reload',
+      kept.value === `custom:${OTF_NAME}` && kept.removeShown,
+      kept.value,
+    );
+    const removed = await driver.run<{ value: string; options: string[] }>(
+      step(`${FONT_UI}
+      ui.button(/Remove font/).click();
+      await ui.until(() => ui.toasts.some((t) => /removed from this browser/.test(t)), 15000, 'the removal');
+      return { value: fontSel.value, options: [...fontSel.options].map((o) => o.value) };`),
+    );
+    await openApp(driver, port, 'sheets');
+    const after = await driver.run<string[]>(
+      step(`${FONT_UI}
+      await new Promise((r) => setTimeout(r, 800));
+      return [...fontSel.options].map((o) => o.value);`),
+    );
+    check(
+      'removing the font brings back DejaVu and forgets the file',
+      removed.value === '' &&
+        !removed.options.includes(`custom:${OTF_NAME}`) &&
+        !after.includes(`custom:${OTF_NAME}`) &&
+        after.includes('builtin:IBMPlexMono-Regular.ttf'),
+      `after reload: ${after.join(', ')}`,
+    );
+  }
   return { checks, mov: movBytes, mp4: Buffer.from(mp4.b64, 'base64') };
 }
 

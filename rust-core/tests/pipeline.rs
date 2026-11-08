@@ -923,3 +923,88 @@ fn negative_bleed_fill_modes_and_erased_markers() {
         "erased markers: {dark_erased} dark px vs {dark_paper} with them"
     );
 }
+
+#[test]
+fn custom_bold_otf_labels_still_scan_back() {
+    // Etiquetas y número de hoja en un OTF CFF en negrita, grandes, con ñ y
+    // con nombres largos que obligan a achicar y a recortar con «…» (que la
+    // fuente tiene o toma de DejaVu). El layout se mide con la misma fuente,
+    // y el escaneo tiene que devolver los cuatro fotogramas por su nombre.
+    static OTF: &[u8] = include_bytes!("../assets/test/SourceSans3-Bold.otf");
+    let mut s = base_settings();
+    s.font_size_pt = 14.0;
+    s.page_num_size_pt = 28.0;
+    s.page_num_prefix = "Hoja ".into();
+    s.label_font = "custom:SourceSans3-Bold.otf".into();
+    let labels: Vec<String> = vec![
+        "toma_ñandú_001".into(),
+        "toma_ñandú_002".into(),
+        "una_etiqueta_larguísima_para_esta_celda_003".into(),
+        "toma_ñandú_004".into(),
+    ];
+    let frames: Vec<FrameInput> = [
+        [200u8, 60, 60],
+        [60, 180, 60],
+        [60, 60, 200],
+        [180, 160, 40],
+    ]
+    .into_iter()
+    .map(|b| synth_frame(320, 180, b).0)
+    .collect();
+
+    let dimg = {
+        let l = build_layout(&s, (16.0, 9.0)).unwrap();
+        render_page(&s, &l, &frames, &labels, 7, true)
+            .image
+            .unwrap()
+    };
+    let (l, page) = mxm_core::text::with_font(OTF, || {
+        let l = build_layout(&s, (16.0, 9.0)).unwrap();
+        let page = render_page(&s, &l, &frames, &labels, 7, true);
+        (l, page)
+    })
+    .expect("OTF válido");
+    let img = page.image.unwrap();
+    assert_eq!((img.w, img.h), (dimg.w, dimg.h));
+    assert_ne!(img.data, dimg.data, "la hoja salió igual que en DejaVu");
+
+    let mut record = page.record.unwrap();
+    record["archivo_hoja"] = json!("demo_p7.png");
+    let layout = build_layout_json(&s, &l, &[record], json!([]), json!({}), None);
+    assert_eq!(
+        layout["ajustes"]["label_font"],
+        json!("custom:SourceSans3-Bold.otf"),
+        "el snapshot debe recordar la fuente"
+    );
+    // el escaneo no necesita la fuente: todo va en el layout
+    let scan = simulate_scan(&img, 1.25, 7);
+    let out = process_scan(
+        DynImg::U8(scan),
+        "scan7.png",
+        &layout,
+        &ScanOptions::default(),
+        &HashMap::new(),
+    );
+    assert_eq!(out.result["ok"], json!(true), "resultado: {}", out.result);
+    assert_eq!(out.result["hoja_numero"], json!(7), "{}", out.result);
+    let mut got: Vec<&str> = out.frames.iter().map(|(n, _)| n.as_str()).collect();
+    got.sort();
+    let mut want: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    want.sort();
+    assert_eq!(got, want);
+
+    // un prefijo con signos que la fuente no tiene: la hoja sale (en DejaVu
+    // esos dos) y el núcleo dice cuáles fueron, para el aviso
+    use mxm_core::text::{missing_chars, take_fallbacks, with_font};
+    s.page_num_prefix = "✂ Hoja ☂ ñ ".into();
+    assert_eq!(
+        missing_chars(OTF, &s.page_num_prefix).unwrap(),
+        vec!['✂', '☂']
+    );
+    let fell = with_font(OTF, || {
+        render_page(&s, &l, &frames, &labels, 7, true);
+        take_fallbacks()
+    })
+    .unwrap();
+    assert_eq!(fell, vec!['✂', '☂']);
+}

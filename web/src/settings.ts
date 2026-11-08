@@ -74,6 +74,7 @@ export function defaultSettings(): Settings {
     leading_zeros: 3,
     start_index: 1,
     font_size_pt: 9,
+    label_font: '',
     label_gap_mm: 1.5,
     label_color: '#000000',
     page_num_on: true,

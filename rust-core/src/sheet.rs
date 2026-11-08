@@ -193,6 +193,12 @@ pub struct Settings {
     pub start_index: i64,
     #[serde(default)]
     pub font_path: Option<String>, // ignorado (fuente incrustada)
+    /// Fuente de las etiquetas y del número de hoja: "" (DejaVu, la
+    /// incrustada), el id de una de la web ("builtin:…") o el nombre de una
+    /// subida ("custom:…"). Sólo se guarda en el snapshot: los bytes los
+    /// manda la web con cada llamada (`text::with_font`).
+    #[serde(default)]
+    pub label_font: String,
     #[serde(default = "d_font_pt")]
     pub font_size_pt: f64,
     #[serde(default = "d_label_gap")]

@@ -36,6 +36,8 @@ export interface Settings {
   leading_zeros: number;
   start_index: number;
   font_size_pt: number;
+  /** "" (DejaVu), "builtin:<archivo>" o "custom:<nombre>" (fonts.ts). */
+  label_font: string;
   label_gap_mm: number;
   label_color: string;
   page_num_on: boolean;
@@ -215,6 +217,8 @@ export interface RenderSheetOutput {
   record: string;
   page_w: number;
   page_h: number;
+  /** Caracteres que esta hoja dibujó en DejaVu por faltar en la fuente. */
+  missing?: string;
 }
 
 // ── calibración: perfiles guardados ─────────────────────────────

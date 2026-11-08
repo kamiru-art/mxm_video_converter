@@ -58,6 +58,12 @@ Between phase 1 and phase 2, you do the manual work:
 - You can set the grid, the paper size and the resolution in dots per inch.
 - The application selects the page orientation that fits best.
 - You can add labels and a sheet number.
+- The labels and the sheet number can use another typeface: one of the
+  four that come with the site (Archivo Black, IBM Plex Mono, Courier Prime,
+  PT Serif) or your own TTF or OTF file. An uploaded font stays in your
+  browser and is never sent anywhere. If the font lacks a character that a
+  label or the sheet number needs, a warning names each missing character,
+  and the sheet draws those characters in DejaVu Sans.
 - You can select which frames and which sheets to print.
 - You can write the sheets as PNG, as TIFF, or as a PDF that is ready to
   print. If a frame has 16 bits for each channel, the sheets are 16-bit too,
@@ -283,3 +289,6 @@ free and must keep the same license. Refer to [LICENSE](LICENSE).
 
 The core embeds the DejaVu Sans font. That font has its own license. Refer to
 [rust-core/assets/DejaVuSans-LICENSE.txt](rust-core/assets/DejaVuSans-LICENSE.txt).
+The four optional fonts in `web/public/fonts/` and the test font in
+`rust-core/assets/test/` are under the SIL Open Font License; each license is
+next to its font.
