@@ -201,10 +201,9 @@ export const EXACT: Record<string, string> = {
   'Gutter (mm)': 'Separación (mm)',
   'Font (pt)': 'Fuente (pt)',
   Typeface: 'Tipografía',
-  'For the frame labels and the sheet number. Upload your own TTF or OTF, one by one or a whole folder: they stay in this browser.':
-    'Para las etiquetas de los fotogramas y el número de hoja. Sube tus TTF u OTF, sueltas o una carpeta entera: se quedan en este navegador.',
+  'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.':
+    'Para las etiquetas de los fotogramas y el número de hoja. Sube tus TTF u OTF, o el ZIP en que vinieron, o suéltalos aquí (también una carpeta entera): se quedan en este navegador.',
   'Upload fonts…': 'Subir fuentes…',
-  'Upload folder…': 'Subir carpeta…',
   'Select all': 'Marcar todas',
   'Delete selected': 'Borrar las marcadas',
   'Your fonts': 'Tus fuentes',
@@ -564,6 +563,10 @@ export const TEMPLATES: [string, string][] = [
   ],
   ['Could not use {0}: {1}', 'No se pudo usar {0}: {1}'],
   ['Adding {#0}/{#1}…', 'Añadiendo {#0}/{#1}…'],
+  [
+    'It is compressed with method {#0}, which this page cannot open.',
+    'Está comprimido con el método {#0}, que esta página no sabe abrir.',
+  ],
   ['Delete selected ({#0})', 'Borrar las marcadas ({#0})'],
   ['Your fonts ({#0})', 'Tus fuentes ({#0})'],
   ['Could not use that font: {0}', 'No se pudo usar esa fuente: {0}'],

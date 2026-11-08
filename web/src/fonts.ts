@@ -11,6 +11,7 @@
 import { errMsg } from './errors.ts';
 import { run } from './pool.ts';
 import type { Bytes } from './types.ts';
+import { zipEntries } from './unzip.ts';
 
 export interface BuiltinFont {
   id: string;
@@ -115,15 +116,16 @@ export function fontName(id: string): string {
   return BUILTIN_FONTS.find((f) => f.id === id)?.name ?? id;
 }
 
+function sizeMessage(name: string, size: number): string {
+  return `${name} is ${Math.round(size / 1048576)} MB; fonts for labels must be under 30 MB.`;
+}
+
 /**
  * Comprueba un archivo con el núcleo y lo guarda. Devuelve el id. Lanza con
  * el motivo si no es una fuente que sirva (WOFF, sin letras, cortado…).
  */
 export async function addCustomFont(file: File): Promise<string> {
-  if (file.size > MAX_FONT_BYTES)
-    throw new Error(
-      `${file.name} is ${Math.round(file.size / 1048576)} MB; fonts for labels must be under 30 MB.`,
-    );
+  if (file.size > MAX_FONT_BYTES) throw new Error(sizeMessage(file.name, file.size));
   const bytes = new Uint8Array(await file.arrayBuffer());
   await run('check_font', { bytes: bytes.slice() });
   const name = file.name;
@@ -142,56 +144,81 @@ export async function addCustomFont(file: File): Promise<string> {
   return id;
 }
 
-/** Lo que se hace con un archivo al subir en bulk, por su extensión. */
-export function fontFileKind(name: string): 'font' | 'web' | 'other' {
-  const base = name.split('/').pop() ?? name;
-  // los «._Fuente.ttf» que macOS deja en discos externos no son fuentes
-  if (base.startsWith('._') || base.startsWith('.')) return 'other';
+/** Lo que se hace con un archivo al subir en bulk, por su nombre (o su
+ *  ruta dentro de un ZIP o de una carpeta). */
+export function fontFileKind(path: string): 'font' | 'web' | 'zip' | 'other' {
+  // lo que macOS mete en los ZIP (__MACOSX/) y deja en discos externos
+  // («._Fuente.ttf») no son fuentes, aunque lo parezca su extensión
+  if (/(^|\/)__MACOSX\//.test(path)) return 'other';
+  const base = path.split('/').pop() ?? path;
+  if (base.startsWith('.')) return 'other';
   const ext = base.toLowerCase().split('.').pop() ?? '';
   if (ext === 'ttf' || ext === 'otf' || ext === 'ttc') return 'font';
   if (ext === 'woff' || ext === 'woff2') return 'web';
+  if (ext === 'zip') return 'zip';
   return 'other';
 }
 
 export interface BulkResult {
   /** Ids de las que entraron, en el orden de los archivos. */
   added: string[];
-  /** Las que eran fuente y no sirvieron, con el motivo. */
+  /** Las que eran fuente (o ZIP) y no sirvieron, con el motivo. */
   failed: { name: string; reason: string }[];
-  /** Archivos que no son fuentes (en una carpeta: textos, imágenes…). */
+  /** Archivos que no son fuentes (en una carpeta o un ZIP: textos, imágenes…). */
   ignored: number;
 }
 
+const WOFF_REASON =
+  'This is a WOFF web font, which cannot be drawn on the sheets. Use the TTF or OTF file of the same font.';
+
 /**
- * Sube varios archivos (o el contenido de una carpeta). Cada uno se
- * comprueba por separado: uno roto no frena a los demás. Las WOFF se
- * cuentan como fallidas, con el motivo, porque el usuario las eligió
- * pensando que eran fuentes; lo demás se ignora en silencio.
+ * Sube varios archivos: fuentes sueltas, ZIP con fuentes dentro (a cualquier
+ * profundidad) o lo que salga de una carpeta. Cada fuente se comprueba por
+ * separado: una rota no frena a las demás. Las WOFF se cuentan como
+ * fallidas, con el motivo, porque el usuario las eligió pensando que eran
+ * fuentes; lo demás se ignora en silencio.
  */
 export async function addCustomFonts(
   files: Iterable<File>,
   onProgress?: (done: number, total: number) => void,
 ): Promise<BulkResult> {
   const out: BulkResult = { added: [], failed: [], ignored: 0 };
-  const todo: File[] = [];
-  for (const f of files) {
-    const kind = fontFileKind(f.name);
-    if (kind === 'font') todo.push(f);
-    else if (kind === 'web')
-      out.failed.push({
-        name: f.name,
-        reason:
-          'This is a WOFF web font, which cannot be drawn on the sheets. Use the TTF or OTF file of the same font.',
-      });
+  const todo: { name: string; get: () => Promise<File> }[] = [];
+  const sort = (path: string, name: string, get: () => Promise<File>): void => {
+    const kind = fontFileKind(path);
+    if (kind === 'font') todo.push({ name, get });
+    else if (kind === 'web') out.failed.push({ name, reason: WOFF_REASON });
     else out.ignored++;
-  }
-  for (const [i, f] of todo.entries()) {
-    onProgress?.(i, todo.length);
+  };
+  for (const f of files) {
+    if (fontFileKind(f.name) !== 'zip') {
+      sort(f.name, f.name, async () => f);
+      continue;
+    }
     try {
-      const id = await addCustomFont(f);
-      if (!out.added.includes(id)) out.added.push(id);
+      // en orden de ruta, no en el que el ZIP las guardó: la primera que
+      // entra es la que queda elegida, y así es siempre la misma
+      const entries = zipEntries(new Uint8Array(await f.arrayBuffer())).sort((a, b) =>
+        a.path.localeCompare(b.path, undefined, { numeric: true }),
+      );
+      for (const e of entries) {
+        const base = e.path.split('/').pop() ?? e.path;
+        sort(e.path, base, async () => {
+          if (e.size > MAX_FONT_BYTES) throw new Error(sizeMessage(base, e.size));
+          return new File([await e.read()], base);
+        });
+      }
     } catch (e) {
       out.failed.push({ name: f.name, reason: errMsg(e) });
+    }
+  }
+  for (const [i, { name, get }] of todo.entries()) {
+    onProgress?.(i, todo.length);
+    try {
+      const id = await addCustomFont(await get());
+      if (!out.added.includes(id)) out.added.push(id);
+    } catch (e) {
+      out.failed.push({ name, reason: errMsg(e) });
     }
   }
   onProgress?.(todo.length, todo.length);

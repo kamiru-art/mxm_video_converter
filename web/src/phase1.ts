@@ -42,6 +42,7 @@ import {
   check,
   context2d,
   download,
+  droppedFiles,
   dropzone,
   el,
   etaClock,
@@ -773,26 +774,14 @@ export function mountPhase1(root: HTMLElement): void {
   fontSel.setAttribute('aria-label', 'Typeface');
   const fontInput = el('input', {
     type: 'file',
-    accept: '.ttf,.otf,.ttc,font/ttf,font/otf,font/collection',
+    accept: '.ttf,.otf,.ttc,.zip,font/ttf,font/otf,font/collection,application/zip',
     multiple: '',
-    hidden: '',
-  });
-  // una carpeta entera (con subcarpetas): lo que no es fuente se ignora
-  const fontDirInput = el('input', {
-    type: 'file',
-    webkitdirectory: '',
-    'data-role': 'font-folder',
     hidden: '',
   });
   const fontUploadBtn = el(
     'button',
     { class: 'btn ghost small', type: 'button', onclick: () => fontInput.click() },
     'Upload fonts…',
-  );
-  const fontDirBtn = el(
-    'button',
-    { class: 'btn ghost small', type: 'button', onclick: () => fontDirInput.click() },
-    'Upload folder…',
   );
   const fontRemoveBtn = el('button', { class: 'btn ghost small', type: 'button' }, 'Remove font');
   // las subidas, con casillas para borrar varias de una vez
@@ -874,11 +863,10 @@ export function mountPhase1(root: HTMLElement): void {
     persist();
     void refreshPreview();
   });
-  async function uploadFonts(files: File[], btn: HTMLButtonElement): Promise<void> {
-    if (!files.length) return;
-    // el texto original en inglés (el traductor lo pasa al idioma de la página)
-    const label = btn === fontDirBtn ? 'Upload folder…' : 'Upload fonts…';
-    fontUploadBtn.disabled = fontDirBtn.disabled = true;
+  async function uploadFonts(files: File[]): Promise<void> {
+    if (!files.length || fontUploadBtn.disabled) return;
+    const btn = fontUploadBtn;
+    fontUploadBtn.disabled = true;
     try {
       const res = await addCustomFonts(files, (done, total) => {
         if (total > 1) btn.textContent = `Adding ${done}/${total}…`;
@@ -908,19 +896,43 @@ export function mountPhase1(root: HTMLElement): void {
       if (!res.added.length && !res.failed.length)
         toast('There are no TTF or OTF files in what you chose.', 'warn');
     } finally {
-      btn.textContent = label;
-      fontUploadBtn.disabled = fontDirBtn.disabled = false;
+      // el texto original en inglés (el traductor lo pasa al idioma de la página)
+      btn.textContent = 'Upload fonts…';
+      fontUploadBtn.disabled = false;
     }
   }
   fontInput.addEventListener('change', () => {
     const files = [...(fontInput.files ?? [])];
     fontInput.value = '';
-    void uploadFonts(files, fontUploadBtn);
+    void uploadFonts(files);
   });
-  fontDirInput.addEventListener('change', () => {
-    const files = [...(fontDirInput.files ?? [])];
-    fontDirInput.value = '';
-    void uploadFonts(files, fontDirBtn);
+  // soltar sobre la tipografía: fuentes, ZIP o carpetas enteras
+  const fontDrop = el(
+    'div',
+    { class: 'font-drop' },
+    field(
+      'Typeface',
+      fontSel,
+      'For the frame labels and the sheet number. Upload your own TTF or OTF files, or the ZIP they came in, or drop them here (a whole folder too): they stay in this browser.',
+    ),
+    el('div', { class: 'btn-row' }, fontUploadBtn, fontRemoveBtn, fontInput),
+    fontManage,
+  );
+  fontDrop.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    fontDrop.classList.add('over');
+  });
+  fontDrop.addEventListener('dragleave', (e) => {
+    if (!fontDrop.contains(e.relatedTarget as Node | null)) fontDrop.classList.remove('over');
+  });
+  fontDrop.addEventListener('drop', (e) => {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    fontDrop.classList.remove('over');
+    droppedFiles(e).then(uploadFonts, (err: unknown) =>
+      toast(`Could not read that folder: ${errMsg(err)}`, 'err'),
+    );
   });
   async function dropFonts(ids: string[]): Promise<void> {
     if (!ids.length) return;
@@ -1688,21 +1700,7 @@ export function mountPhase1(root: HTMLElement): void {
       field('Gutter (mm)', bindNum('gutter_mm', numberInput(5, { min: 0 }))),
       field('Font (pt)', bindNum('font_size_pt', numberInput(9, { min: 4 }))),
     ),
-    field(
-      'Typeface',
-      fontSel,
-      'For the frame labels and the sheet number. Upload your own TTF or OTF, one by one or a whole folder: they stay in this browser.',
-    ),
-    el(
-      'div',
-      { class: 'btn-row' },
-      fontUploadBtn,
-      fontDirBtn,
-      fontRemoveBtn,
-      fontInput,
-      fontDirInput,
-    ),
-    fontManage,
+    fontDrop,
 
     el('h3', {}, 'Sheet number'),
     el(
